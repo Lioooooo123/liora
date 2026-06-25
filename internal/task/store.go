@@ -8,15 +8,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
 type Repository struct {
-	db *sql.DB
+	db            *sql.DB
+	subscribersMu sync.Mutex
+	subscribers   map[string][]chan struct{}
 }
 
 func NewRepository(db *sql.DB) *Repository {
-	return &Repository{db: db}
+	return &Repository{db: db, subscribers: map[string][]chan struct{}{}}
 }
 
 func (r *Repository) Create(ctx context.Context, request CreateRequest) (Task, error) {
@@ -127,7 +130,54 @@ func (r *Repository) AppendEvent(ctx context.Context, taskID string, eventType E
 		INSERT INTO task_events (id, task_id, type, payload_json, created_at)
 		VALUES (?, ?, ?, ?, ?)
 	`, newID("evt"), taskID, string(eventType), string(payloadBytes), formatTime(now))
-	return err
+	if err != nil {
+		return err
+	}
+	r.notifyEventSubscribers(taskID)
+	return nil
+}
+
+func (r *Repository) SubscribeEvents(ctx context.Context, taskID string) (<-chan struct{}, func()) {
+	ch := make(chan struct{})
+	r.subscribersMu.Lock()
+	r.subscribers[taskID] = append(r.subscribers[taskID], ch)
+	r.subscribersMu.Unlock()
+	stop := context.AfterFunc(ctx, func() {
+		r.removeEventSubscriber(taskID, ch)
+	})
+	unsubscribe := func() {
+		if stop() {
+			r.removeEventSubscriber(taskID, ch)
+		}
+	}
+	return ch, unsubscribe
+}
+
+func (r *Repository) notifyEventSubscribers(taskID string) {
+	r.subscribersMu.Lock()
+	subscribers := r.subscribers[taskID]
+	delete(r.subscribers, taskID)
+	r.subscribersMu.Unlock()
+	for _, ch := range subscribers {
+		close(ch)
+	}
+}
+
+func (r *Repository) removeEventSubscriber(taskID string, ch chan struct{}) {
+	r.subscribersMu.Lock()
+	defer r.subscribersMu.Unlock()
+	subscribers := r.subscribers[taskID]
+	for i, subscriber := range subscribers {
+		if subscriber == ch {
+			subscribers = append(subscribers[:i], subscribers[i+1:]...)
+			break
+		}
+	}
+	if len(subscribers) == 0 {
+		delete(r.subscribers, taskID)
+		return
+	}
+	r.subscribers[taskID] = subscribers
 }
 
 func (r *Repository) Events(ctx context.Context, taskID string, limit int) ([]Event, error) {

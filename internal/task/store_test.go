@@ -1,8 +1,10 @@
 package task
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Lioooooo123/liora/internal/store"
 )
@@ -94,5 +96,37 @@ func TestRepositoryCancelsTask(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Type != EventCancelled || !strings.Contains(events[0].Payload, "user requested") {
 		t.Fatalf("unexpected cancel events %#v", events)
+	}
+}
+
+func TestRepositoryNotifiesSubscribersWhenEventIsAppended(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	repo := NewRepository(db)
+	created, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "stream events",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	notification, unsubscribe := repo.SubscribeEvents(ctx, created.ID)
+	defer unsubscribe()
+
+	if err := repo.AppendEvent(t.Context(), created.ID, EventSummary, EventPayload{Message: "ready"}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-notification:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("subscriber was not notified after appending an event")
 	}
 }

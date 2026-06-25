@@ -54,3 +54,9 @@
 - 本地 sandbox 的 shell 执行从 `exec.CommandContext` 改为显式 `Start/Wait`，并在 Unix 平台为每条命令创建独立 process group。
 - context 取消或超时时会 `SIGKILL` 整个 process group，避免 `sh -c` 下的后台子进程继续运行并污染 workspace。
 - 非 Unix 平台暂时回退为杀主进程；当前产品优先面向 macOS，本阶段先保证 mac 本地体验可靠。
+
+## 2026-06-25 Event Stream Notification
+
+- `Repository.AppendEvent` 新增同进程内存通知，SSE 事件流优先等待通知，不再每 100ms 固定轮询 SQLite。
+- 通知订阅是一次性的 channel，并提供 unsubscribe，避免事件流长连接在高频事件下堆积 goroutine。
+- 保留 5 秒 fallback 轮询，原因是未来可能出现另一个进程直接写同一个 SQLite DB；这类跨进程写入不会触发当前进程内存通知。

@@ -47,7 +47,7 @@ type server struct {
 	running   map[string]context.CancelFunc
 }
 
-const eventStreamPollInterval = 100 * time.Millisecond
+const eventStreamFallbackInterval = 5 * time.Second
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -268,8 +268,6 @@ func (s *server) writeEventStream(w http.ResponseWriter, r *http.Request, taskID
 	w.Header().Set("X-Accel-Buffering", "no")
 	flusher, _ := w.(http.Flusher)
 	sent := map[string]bool{}
-	ticker := time.NewTicker(eventStreamPollInterval)
-	defer ticker.Stop()
 	for {
 		done, err := s.writeAvailableEvents(r.Context(), w, flusher, taskID, sent)
 		if err != nil {
@@ -282,10 +280,18 @@ func (s *server) writeEventStream(w http.ResponseWriter, r *http.Request, taskID
 		if done {
 			return
 		}
+		notification, unsubscribe := s.repo.SubscribeEvents(r.Context(), taskID)
+		timer := time.NewTimer(eventStreamFallbackInterval)
 		select {
 		case <-r.Context().Done():
+			timer.Stop()
+			unsubscribe()
 			return
-		case <-ticker.C:
+		case <-notification:
+			timer.Stop()
+			unsubscribe()
+		case <-timer.C:
+			unsubscribe()
 		}
 	}
 }
