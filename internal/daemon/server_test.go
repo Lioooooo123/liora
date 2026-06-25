@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Lioooooo123/liora/internal/apply"
 	"github.com/Lioooooo123/liora/internal/llm"
@@ -134,6 +135,61 @@ func TestServerServesDiffAndAppliesPatch(t *testing.T) {
 	}
 	if !strings.Contains(string(applied), "notes.txt") {
 		t.Fatalf("unexpected apply response %s", string(applied))
+	}
+}
+
+func TestEventStreamWaitsForNewEventsUntilTaskCompletes(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	task, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "slow task",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(NewServer(Config{Repository: repo}))
+	defer server.Close()
+
+	done := make(chan string, 1)
+	go func() {
+		resp, err := http.Get(server.URL + "/v1/tasks/" + task.ID + "/events/stream")
+		if err != nil {
+			done <- err.Error()
+			return
+		}
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			done <- err.Error()
+			return
+		}
+		done <- string(data)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	if err := repo.AppendEvent(t.Context(), task.ID, taskpkg.EventSummary, taskpkg.EventPayload{Message: "later"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), task.ID, taskpkg.StatusCompleted); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), task.ID, taskpkg.EventCompleted, taskpkg.EventPayload{Status: string(taskpkg.StatusCompleted)}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case body := <-done:
+		if !strings.Contains(body, "event: task.summary") || !strings.Contains(body, "later") || !strings.Contains(body, "event: task.completed") {
+			t.Fatalf("stream did not include later events:\n%s", body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("stream did not finish after task completion")
 	}
 }
 

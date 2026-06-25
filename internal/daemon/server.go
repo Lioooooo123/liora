@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Lioooooo123/liora/internal/apply"
 	taskpkg "github.com/Lioooooo123/liora/internal/task"
@@ -31,6 +32,8 @@ type server struct {
 	repo   *taskpkg.Repository
 	runner *taskpkg.Runner
 }
+
+const eventStreamPollInterval = 100 * time.Millisecond
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -187,21 +190,60 @@ func (s *server) handleTaskApply(w http.ResponseWriter, r *http.Request, taskID 
 }
 
 func (s *server) writeEventStream(w http.ResponseWriter, r *http.Request, taskID string) {
-	events, err := s.repo.Events(r.Context(), taskID, 0)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher, _ := w.(http.Flusher)
+	sent := map[string]bool{}
+	ticker := time.NewTicker(eventStreamPollInterval)
+	defer ticker.Stop()
+	for {
+		done, err := s.writeAvailableEvents(r.Context(), w, flusher, taskID, sent)
+		if err != nil {
+			fmt.Fprintf(w, "event: task.error\ndata: %s\n\n", quoteSSEData(err.Error()))
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return
+		}
+		if done {
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *server) writeAvailableEvents(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, taskID string, sent map[string]bool) (bool, error) {
+	events, err := s.repo.Events(ctx, taskID, 0)
+	if err != nil {
+		return false, err
+	}
+	done := false
 	for _, event := range events {
+		if sent[event.ID] {
+			continue
+		}
+		sent[event.ID] = true
 		fmt.Fprintf(w, "event: %s\n", event.Type)
 		fmt.Fprintf(w, "id: %s\n", event.ID)
 		fmt.Fprintf(w, "data: %s\n\n", event.Payload)
+		if event.Type == taskpkg.EventCompleted || event.Type == taskpkg.EventCancelled || event.Type == taskpkg.EventError {
+			done = true
+		}
 	}
-	if flusher, ok := w.(http.Flusher); ok {
+	if flusher != nil {
 		flusher.Flush()
 	}
+	return done, nil
+}
+
+func quoteSSEData(value string) string {
+	data, _ := json.Marshal(map[string]string{"message": value})
+	return string(data)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
