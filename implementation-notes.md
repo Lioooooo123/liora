@@ -204,3 +204,8 @@
 
 - `scripts/coding-eval.sh` 现在启用 `LIORA_PERMISSION=prompt`，并新增危险 shell 的 approve/deny 两条分支，验证 `permission.requested`、`permission.approved`、`permission.denied` 和对应任务终态。
 - patch-first 写文件仍不触发审批，危险 shell 仍触发审批；这符合当前产品取舍：默认安全写入减少打扰，但高风险外部动作需要用户确认。
+
+## 2026-06-26 Multi-file Eval Coverage
+
+- `scripts/coding-eval.sh` 新增 multi-file natural task，fake planner 输出两个 `write` 和一个 `diff`，验证 patch mode 下真实 workspace 不提前出现文件。
+- eval 会确认 diff 和 apply result 同时包含 `config/settings.txt` 与 `docs/guide.txt`，并在 apply 后校验两个文件内容。这补齐了单文件替换之外的基础 coding task 形态。

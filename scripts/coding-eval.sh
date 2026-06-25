@@ -67,7 +67,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length).decode()
-        if "old" in raw and "new" in raw:
+        if "multi-file" in raw:
+            content = "write config/settings.txt enabled\nwrite docs/guide.txt ready\ndiff"
+        elif "old" in raw and "new" in raw:
             content = "read app.txt\nreplace app.txt old new\ndiff"
         elif "目录" in raw or "folder" in raw:
             content = "list ."
@@ -153,6 +155,37 @@ printf '%s' "$TIMELINE_JSON" | grep -q '把 app.txt'
 printf '%s' "$TIMELINE_JSON" | grep -q 'tool_result'
 printf '%s' "$TIMELINE_JSON" | grep -q 'diff'
 
+MULTI_BODY="$(python3 - "$WORKSPACE" <<'PY'
+import json
+import sys
+print(json.dumps({
+    "workspace": sys.argv[1],
+    "prompt": "multi-file: create config and guide files",
+    "natural": True,
+    "run_async": True,
+}))
+PY
+)"
+MULTI_JSON="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks" -H 'Content-Type: application/json' -d "$MULTI_BODY")"
+MULTI_TASK_ID="$(printf '%s' "$MULTI_JSON" | json_get task.id)"
+MULTI_STREAM_BODY="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks/$MULTI_TASK_ID/events/stream")"
+printf '%s' "$MULTI_STREAM_BODY" | grep -q 'event: task.diff'
+if [[ -e "$WORKSPACE/config/settings.txt" || -e "$WORKSPACE/docs/guide.txt" ]]; then
+  echo "multi-file patch mode mutated workspace before apply" >&2
+  exit 1
+fi
+MULTI_DIFF_JSON="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks/$MULTI_TASK_ID/diff")"
+printf '%s' "$MULTI_DIFF_JSON" | grep -q 'config/settings.txt'
+printf '%s' "$MULTI_DIFF_JSON" | grep -q 'docs/guide.txt'
+MULTI_PATCH_VALUE="$(printf '%s' "$MULTI_DIFF_JSON" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["diff"]))')"
+MULTI_APPLY_JSON="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks/$MULTI_TASK_ID/apply" \
+  -H 'Content-Type: application/json' \
+  -d "$(printf '{"patch":%s}' "$MULTI_PATCH_VALUE")")"
+printf '%s' "$MULTI_APPLY_JSON" | grep -q 'config/settings.txt'
+printf '%s' "$MULTI_APPLY_JSON" | grep -q 'docs/guide.txt'
+grep -q '^enabled$' "$WORKSPACE/config/settings.txt"
+grep -q '^ready$' "$WORKSPACE/docs/guide.txt"
+
 APPROVE_BODY="$(python3 - "$WORKSPACE" <<'PY'
 import json
 import sys
@@ -218,4 +251,4 @@ curl -fsS "http://$DAEMON_ADDR/v1/tasks/$CANCEL_TASK_ID/cancel" \
   -d '{"reason":"eval stop"}' >/dev/null
 curl -fsS "http://$DAEMON_ADDR/v1/tasks/$CANCEL_TASK_ID/events/stream" | grep -q 'event: task.cancelled'
 
-echo "coding eval ok: task=$TASK_ID session=$SESSION_ID approve=$APPROVE_TASK_ID deny=$DENY_TASK_ID cancel=$CANCEL_TASK_ID"
+echo "coding eval ok: task=$TASK_ID session=$SESSION_ID multi=$MULTI_TASK_ID approve=$APPROVE_TASK_ID deny=$DENY_TASK_ID cancel=$CANCEL_TASK_ID"

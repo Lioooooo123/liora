@@ -58,7 +58,7 @@ Liora v0.1 是本地 Mac 上的轻量 agent 工坊。
 - `LIORA_HOME=$(mktemp -d) LIORA_DAEMON_ADDR=127.0.0.1:19089 ./scripts/daemon-smoke.sh "$PWD"` 通过。
 - `LIORA_TUI_SMOKE_DAEMON_ADDR=127.0.0.1:19090 LIORA_TUI_SMOKE_LLM_ADDR=127.0.0.1:19091 ./scripts/tui-smoke.sh "$PWD"` 通过。
 - `LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scripts/coding-eval.sh` 通过。
-- smoke、eval 和 CLI 测试覆盖至少一个 natural coding task、一个 patch-mode task、一个 apply API 调用、一个 permission approve/deny task、一个 running cancel task、一个 SSE 事件流、一个 daemon-backed TUI timeline、一个默认 embedded-daemon TUI timeline 和一个 TUI running cancel。
+- smoke、eval 和 CLI 测试覆盖至少一个 natural coding task、一个 multi-file patch task、一个 apply API 调用、一个 permission approve/deny task、一个 running cancel task、一个 SSE 事件流、一个 daemon-backed TUI timeline、一个默认 embedded-daemon TUI timeline 和一个 TUI running cancel。
 - `implementation-notes.md` 已记录所有重要技术取舍和后续风险。
 - `git status --short --branch` 显示本地分支和 `origin/main` 同步且无未提交改动。
 
