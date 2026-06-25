@@ -48,3 +48,9 @@
 - daemon 新增运行中任务注册表，只保存当前进程内 `run_async` 任务的 cancel func；`/cancel` 先落库 `cancelled`，再触发运行中 context 取消。
 - runner 在发现 context 已取消且任务状态已经是 `cancelled` 时，不再把终态覆盖为 `failed` 或 `completed`。
 - 这个设计先解决本地 MVP 最重要的“能停住当前任务”；daemon 重启后无法恢复旧进程的 cancel func，因此重启前启动的任务只能做状态层取消。
+
+## 2026-06-25 Process Group Cancellation
+
+- 本地 sandbox 的 shell 执行从 `exec.CommandContext` 改为显式 `Start/Wait`，并在 Unix 平台为每条命令创建独立 process group。
+- context 取消或超时时会 `SIGKILL` 整个 process group，避免 `sh -c` 下的后台子进程继续运行并污染 workspace。
+- 非 Unix 平台暂时回退为杀主进程；当前产品优先面向 macOS，本阶段先保证 mac 本地体验可靠。

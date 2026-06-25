@@ -2,8 +2,11 @@ package sandbox
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLocalExecutorRunsInsideWorkspace(t *testing.T) {
@@ -58,5 +61,35 @@ func TestDockerExecutorReportsMissingDocker(t *testing.T) {
 	_, err := executor.Run(context.Background(), t.TempDir(), "echo hello")
 	if err == nil || !strings.Contains(err.Error(), "docker executable not found") {
 		t.Fatalf("expected missing docker error, got %v", err)
+	}
+}
+
+func TestLocalExecutorCancelStopsChildProcesses(t *testing.T) {
+	workspace := t.TempDir()
+	marker := filepath.Join(workspace, "child-survived")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := LocalExecutor{}.Run(ctx, workspace, "(sleep 1; touch child-survived) & wait")
+		done <- err
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected cancelled shell command to return an error")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancelled shell command did not return")
+	}
+
+	time.Sleep(1500 * time.Millisecond)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("cancelled shell command left a child process running")
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
 	}
 }

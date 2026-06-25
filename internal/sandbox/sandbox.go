@@ -114,15 +114,29 @@ func runCommand(parent context.Context, dir string, name string, args []string) 
 	}
 	ctx, cancel := context.WithTimeout(parent, defaultTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.Command(name, args...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
+	configureCommandProcessGroup(cmd)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return tools.ShellResult{ExitCode: -1}, err
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	var err error
+	select {
+	case err = <-done:
+	case <-ctx.Done():
+		killCommandProcessGroup(cmd)
+		err = <-done
+	}
 	exitCode := -1
 	if cmd.ProcessState != nil {
 		exitCode = cmd.ProcessState.ExitCode()
