@@ -131,11 +131,16 @@ func runCommand(parent context.Context, dir string, name string, args []string) 
 		done <- cmd.Wait()
 	}()
 	var err error
+	cancelled := false
 	select {
 	case err = <-done:
 	case <-ctx.Done():
+		cancelled = true
 		killCommandProcessGroup(cmd)
 		err = <-done
+	}
+	if cancelled {
+		killCommandProcessGroup(cmd)
 	}
 	exitCode := -1
 	if cmd.ProcessState != nil {

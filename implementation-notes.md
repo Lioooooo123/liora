@@ -209,3 +209,14 @@
 
 - `scripts/coding-eval.sh` 新增 multi-file natural task，fake planner 输出两个 `write` 和一个 `diff`，验证 patch mode 下真实 workspace 不提前出现文件。
 - eval 会确认 diff 和 apply result 同时包含 `config/settings.txt` 与 `docs/guide.txt`，并在 apply 后校验两个文件内容。这补齐了单文件替换之外的基础 coding task 形态。
+
+## 2026-06-26 Large Output Eval Coverage
+
+- `scripts/coding-eval.sh` 新增大输出 shell task，输出超过当前 `maxShellOutputBytes`，验证 daemon SSE 的 `tool.result` payload 中已经包含 `truncated` 标记。
+- 脚本断言使用 shell 字符串匹配而不是 `printf | grep -q`，避免 `set -o pipefail` 下 grep 提前退出导致 broken pipe。这个 case 用来防止大 stdout/stderr 再次拖垮事件流或 TUI。
+
+## 2026-06-26 Sandbox Cancel Cleanup
+
+- 全量测试暴露 `TestLocalExecutorCancelStopsChildProcesses` 偶发失败：只按 process group 发送一次 `SIGKILL` 时，shell 后台子进程仍可能存活并继续写 workspace。
+- Unix 本地 executor 取消时现在先递归收集并杀掉当前命令的 descendant pids，再杀 process group；`cmd.Wait()` 返回后再补一次清理。这样覆盖 shell 子进程不完全留在同一 process group 的情况。
+- 该实现依赖 Unix `pgrep -P` 做 descendant discovery；macOS 本地优先满足，非 Unix 仍保留原主进程 kill fallback。

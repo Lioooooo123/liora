@@ -186,6 +186,24 @@ printf '%s' "$MULTI_APPLY_JSON" | grep -q 'docs/guide.txt'
 grep -q '^enabled$' "$WORKSPACE/config/settings.txt"
 grep -q '^ready$' "$WORKSPACE/docs/guide.txt"
 
+BIG_OUTPUT_BODY="$(python3 - "$WORKSPACE" <<'PY'
+import json
+import sys
+print(json.dumps({
+    "workspace": sys.argv[1],
+    "prompt": "run python3 -c 'print(\"x\" * 600000)'",
+    "natural": False,
+    "run_async": True,
+}))
+PY
+)"
+BIG_OUTPUT_JSON="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks" -H 'Content-Type: application/json' -d "$BIG_OUTPUT_BODY")"
+BIG_OUTPUT_TASK_ID="$(printf '%s' "$BIG_OUTPUT_JSON" | json_get task.id)"
+BIG_OUTPUT_STREAM="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks/$BIG_OUTPUT_TASK_ID/events/stream")"
+[[ "$BIG_OUTPUT_STREAM" == *"event: tool.result"* ]]
+[[ "$BIG_OUTPUT_STREAM" == *"truncated"* ]]
+[[ "$BIG_OUTPUT_STREAM" == *"event: task.completed"* ]]
+
 APPROVE_BODY="$(python3 - "$WORKSPACE" <<'PY'
 import json
 import sys
@@ -251,4 +269,4 @@ curl -fsS "http://$DAEMON_ADDR/v1/tasks/$CANCEL_TASK_ID/cancel" \
   -d '{"reason":"eval stop"}' >/dev/null
 curl -fsS "http://$DAEMON_ADDR/v1/tasks/$CANCEL_TASK_ID/events/stream" | grep -q 'event: task.cancelled'
 
-echo "coding eval ok: task=$TASK_ID session=$SESSION_ID multi=$MULTI_TASK_ID approve=$APPROVE_TASK_ID deny=$DENY_TASK_ID cancel=$CANCEL_TASK_ID"
+echo "coding eval ok: task=$TASK_ID session=$SESSION_ID multi=$MULTI_TASK_ID big_output=$BIG_OUTPUT_TASK_ID approve=$APPROVE_TASK_ID deny=$DENY_TASK_ID cancel=$CANCEL_TASK_ID"
