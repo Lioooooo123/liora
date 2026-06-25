@@ -285,6 +285,7 @@ curl -s http://127.0.0.1:18080/v1/tasks \
 ```sh
 curl http://127.0.0.1:18080/v1/tasks/<task-id>/events
 curl http://127.0.0.1:18080/v1/tasks/<task-id>/events/stream
+curl http://127.0.0.1:18080/v1/tasks/<task-id>/diff
 ```
 
 ### Sandbox 配置
@@ -308,6 +309,16 @@ liora -daemon -daemon-addr 127.0.0.1:18080
 
 Docker executor 会把 workspace 挂载到容器 `/workspace`，使用 `--rm`、`--network none`、内存和 CPU 限制运行 `run` 工具。文件读写工具仍由 Liora 的 workspace guard 负责限制路径；后续版本会把更多文件变更也迁移到 sandbox apply 流程。
 
+应用 patch 到任务 workspace：
+
+```sh
+curl http://127.0.0.1:18080/v1/tasks/<task-id>/apply \
+  -H 'Content-Type: application/json' \
+  -d '{"patch":"--- a/file.txt\n+++ b/file.txt\n@@ -0,0 +1 @@\n+hello\n"}'
+```
+
+`/apply` 会校验 patch 路径不能越过 workspace，并写入 `task.patch_applied` 事件。
+
 当前 v0.1 API：
 
 ```text
@@ -317,6 +328,8 @@ GET  /v1/tasks
 GET  /v1/tasks/{id}
 GET  /v1/tasks/{id}/events
 GET  /v1/tasks/{id}/events/stream
+GET  /v1/tasks/{id}/diff
+POST /v1/tasks/{id}/apply
 ```
 
 ## 测试
@@ -361,7 +374,7 @@ go test ./...
 - `list`、`tree`、`glob` 是安全目录查看工具；Planner 会优先用它们处理“看看文件夹里有什么”或“找文件”这类请求。
 - TUI 是轻量 Go 实现，借鉴 Kimi Code CLI 的信息结构，使用 Lip Gloss 做样式，不复用原 TypeScript/pi-tui 组件。
 - Shell 命令可通过 `LIORA_SANDBOX=docker` 进入 Docker；默认 local 方便无 Docker 环境开发。
-- 文件工具已经做 workspace 路径限制；Docker 版本仍需要补危险命令审批、产物 apply 和更完整的资源隔离策略。
+- 文件工具已经做 workspace 路径限制；daemon 已提供显式 patch apply API，但 Docker 版本仍需要补危险命令审批、默认确认流和更完整的资源隔离策略。
 - Trace 当前支持内存记录和 JSONL 落盘；任务和记忆已经进入本地 SQLite。
 
 ## 下一步
@@ -369,5 +382,6 @@ go test ./...
 - 将 Docker sandbox 从可配置能力升级为任务默认执行策略。
 - 将 daemon SSE 扩展成实时事件订阅。
 - 将 task event 和 tool call 事件进一步结构化。
+- 把文件写入默认改造成 sandbox 产出 patch、用户确认后 apply。
 - 建立一组 coding task eval case，支持回归评测。
 - 增加执行失败后的 Replan 能力。

@@ -25,6 +25,7 @@ const (
 	EventSummary     EventType = "task.summary"
 	EventDiff        EventType = "task.diff"
 	EventSandboxRun  EventType = "sandbox.run"
+	EventPatchApply  EventType = "task.patch_applied"
 	EventError       EventType = "task.error"
 	EventCompleted   EventType = "task.completed"
 	EventCancelled   EventType = "task.cancelled"

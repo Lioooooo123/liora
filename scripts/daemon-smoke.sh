@@ -30,4 +30,22 @@ fi
 
 curl -fsS "http://$ADDR/v1/tasks/$TASK_ID/events" >/dev/null
 curl -fsS "http://$ADDR/v1/tasks/$TASK_ID/events/stream" | grep -q 'event: sandbox.run'
-echo "daemon smoke ok: $TASK_ID"
+
+APPLY_WORKSPACE="$(mktemp -d)"
+APPLY_TASK_JSON="$(
+  curl -fsS "http://$ADDR/v1/tasks" \
+    -H 'Content-Type: application/json' \
+    -d "{\"workspace\":\"$APPLY_WORKSPACE\",\"prompt\":\"manual patch\",\"natural\":false,\"run_async\":true}"
+)"
+APPLY_TASK_ID="$(printf '%s' "$APPLY_TASK_JSON" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+PATCH='--- a/smoke.txt
++++ b/smoke.txt
+@@ -0,0 +1 @@
++ok
+'
+curl -fsS "http://$ADDR/v1/tasks/$APPLY_TASK_ID/diff" >/dev/null 2>&1 || true
+curl -fsS "http://$ADDR/v1/tasks/$APPLY_TASK_ID/apply" \
+  -H 'Content-Type: application/json' \
+  -d "$(printf '{"patch":%s}' "$(printf '%s' "$PATCH" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")" >/dev/null
+grep -q '^ok$' "$APPLY_WORKSPACE/smoke.txt"
+echo "daemon smoke ok: $TASK_ID apply=$APPLY_TASK_ID"

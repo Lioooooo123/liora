@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Lioooooo123/liora/internal/apply"
 	"github.com/Lioooooo123/liora/internal/llm"
 	"github.com/Lioooooo123/liora/internal/store"
 	taskpkg "github.com/Lioooooo123/liora/internal/task"
@@ -77,6 +78,62 @@ func TestServerCreatesTaskAndServesEvents(t *testing.T) {
 	}
 	if !strings.Contains(sse.String(), "event: task.completed") {
 		t.Fatalf("expected completed SSE event, got:\n%s", sse.String())
+	}
+}
+
+func TestServerServesDiffAndAppliesPatch(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	task, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: workspace,
+		Prompt:    "patch notes",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch, err := apply.CreatePatch(workspace, []apply.FileChange{{Path: "notes.txt", Before: "", After: "hello\n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), task.ID, taskpkg.EventDiff, taskpkg.EventPayload{Diff: patch}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(NewServer(Config{Repository: repo}))
+	defer server.Close()
+	resp, err := http.Get(server.URL + "/v1/tasks/" + task.ID + "/diff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "+++ b/notes.txt") {
+		t.Fatalf("unexpected diff response %s", string(data))
+	}
+
+	resp, err = http.Post(server.URL+"/v1/tasks/"+task.ID+"/apply", "application/json", strings.NewReader(`{"patch":`+quote(patch)+`}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected apply status %d", resp.StatusCode)
+	}
+	applied, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(applied), "notes.txt") {
+		t.Fatalf("unexpected apply response %s", string(applied))
 	}
 }
 

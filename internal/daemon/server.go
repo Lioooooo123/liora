@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Lioooooo123/liora/internal/apply"
 	taskpkg "github.com/Lioooooo123/liora/internal/task"
 )
 
@@ -114,11 +115,75 @@ func (s *server) handleTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, events)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "diff" {
+		s.handleTaskDiff(w, r, taskID)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "apply" {
+		s.handleTaskApply(w, r, taskID)
+		return
+	}
 	if len(parts) == 3 && parts[1] == "events" && parts[2] == "stream" {
 		s.writeEventStream(w, r, taskID)
 		return
 	}
 	writeError(w, http.StatusNotFound, fmt.Errorf("unknown task route %q", r.URL.Path))
+}
+
+func (s *server) handleTaskDiff(w http.ResponseWriter, r *http.Request, taskID string) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		return
+	}
+	events, err := s.repo.Events(r.Context(), taskID, 0)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type != taskpkg.EventDiff {
+			continue
+		}
+		var payload taskpkg.EventPayload
+		if err := json.Unmarshal([]byte(events[i].Payload), &payload); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"diff": payload.Diff})
+		return
+	}
+	writeError(w, http.StatusNotFound, errors.New("task has no diff"))
+}
+
+func (s *server) handleTaskApply(w http.ResponseWriter, r *http.Request, taskID string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		return
+	}
+	var request struct {
+		Patch string `json:"patch"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	task, err := s.repo.Get(r.Context(), taskID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	result, err := apply.ApplyUnifiedPatch(task.Workspace, request.Patch)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	_ = s.repo.AppendEvent(r.Context(), taskID, taskpkg.EventPatchApply, taskpkg.EventPayload{
+		Message: "applied patch to " + strings.Join(result.Files, ", "),
+		Diff:    request.Patch,
+	})
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *server) writeEventStream(w http.ResponseWriter, r *http.Request, taskID string) {
