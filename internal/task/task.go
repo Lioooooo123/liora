@@ -45,6 +45,7 @@ type Task struct {
 }
 
 type Event struct {
+	Seq       int64     `json:"seq"`
 	ID        string    `json:"id"`
 	TaskID    string    `json:"task_id"`
 	Type      EventType `json:"type"`

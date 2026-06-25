@@ -184,13 +184,24 @@ func (r *Repository) Events(ctx context.Context, taskID string, limit int) ([]Ev
 	if limit <= 0 || limit > 1000 {
 		limit = 1000
 	}
+	return r.eventsAfter(ctx, taskID, 0, limit)
+}
+
+func (r *Repository) EventsAfter(ctx context.Context, taskID string, afterSeq int64, limit int) ([]Event, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+	return r.eventsAfter(ctx, taskID, afterSeq, limit)
+}
+
+func (r *Repository) eventsAfter(ctx context.Context, taskID string, afterSeq int64, limit int) ([]Event, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, task_id, type, payload_json, created_at
+		SELECT rowid, id, task_id, type, payload_json, created_at
 		FROM task_events
-		WHERE task_id = ?
-		ORDER BY created_at ASC, id ASC
+		WHERE task_id = ? AND rowid > ?
+		ORDER BY rowid ASC
 		LIMIT ?
-	`, taskID, limit)
+	`, taskID, afterSeq, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +211,7 @@ func (r *Repository) Events(ctx context.Context, taskID string, limit int) ([]Ev
 	for rows.Next() {
 		var event Event
 		var createdAt string
-		if err := rows.Scan(&event.ID, &event.TaskID, &event.Type, &event.Payload, &createdAt); err != nil {
+		if err := rows.Scan(&event.Seq, &event.ID, &event.TaskID, &event.Type, &event.Payload, &createdAt); err != nil {
 			return nil, err
 		}
 		event.CreatedAt = parseTime(createdAt)

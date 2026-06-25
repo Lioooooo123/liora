@@ -72,3 +72,15 @@
 - runtime 新增 `SubmitOptions`，允许调用方注入 recorder 和 plan hook；原 `Submit` / `SubmitWithRecorder` 保持兼容。
 - natural task 现在会在 planner 产出步骤后立刻写 `task.plan_ready`，随后工具事件通过同一个实时 recorder 落库。
 - 这样 daemon/SSE 客户端可以按顺序看到 planning、plan ready、tool call/result，而不是等自然语言任务全部结束后一次性刷新。
+
+## 2026-06-25 Incremental Event Cursor
+
+- task event 对外新增 `seq` 字段，当前实现使用 SQLite `rowid` 作为单库内递增游标，避免为旧数据库重建 `task_events` 表。
+- 新增 `EventsAfter(taskID, afterSeq, limit)`，SSE 事件流用 `lastSeq` 增量读取，不再每次唤醒扫描该任务全部历史事件。
+- 这个选择提升长任务事件流性能，但 `seq` 只保证当前 SQLite 数据库内稳定递增；如果未来做跨库同步，需要引入显式全局 event sequence。
+
+## 2026-06-25 MVP Exit Benchmark
+
+- 新增 `docs/mvp-exit-benchmark.md`，把当前长期目标收敛为 v0.1 能力底座验收标准。
+- 结束标准强调任务能力、实时事件、SQLite 持久化、patch/apply、cancel、sandbox 基线和可验证 smoke；精致 Mac App、角色系统、白板完整形态和 Docker 默认化进入 v0.2+。
+- 后续是否结束当前目标，应按该文档逐项验收，而不是继续做开放式优化。

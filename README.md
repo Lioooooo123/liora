@@ -28,6 +28,10 @@ Liora 是一个可运行的最小 Coding Agent MVP，用于验证“工具调用
 - 可接入 DeepSeek、OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 和 Gemini generateContent 做自然语言规划。
 - 提供基于 Lip Gloss 样式的轻量终端界面，展示 workspace、model、plan、tools、summary 和 diff。
 
+## MVP 结束基准
+
+当前长期目标按 [Liora MVP Exit Benchmark](docs/mvp-exit-benchmark.md) 验收。v0.1 的结束点是本地能力底座可靠可用：任务、事件流、SQLite 持久化、patch/apply、cancel、sandbox 基线和 smoke 验证达标；精致 Mac App、白板和角色系统进入 v0.2+。
+
 ## 支持的步骤
 
 每行一个步骤：

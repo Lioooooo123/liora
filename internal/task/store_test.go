@@ -130,3 +130,41 @@ func TestRepositoryNotifiesSubscribersWhenEventIsAppended(t *testing.T) {
 		t.Fatal("subscriber was not notified after appending an event")
 	}
 }
+
+func TestRepositoryReadsEventsAfterSequence(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	repo := NewRepository(db)
+	created, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "stream incrementally",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), created.ID, EventPlanning, EventPayload{Message: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	firstBatch, err := repo.EventsAfter(t.Context(), created.ID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(firstBatch) != 1 || firstBatch[0].Seq == 0 {
+		t.Fatalf("unexpected first batch %#v", firstBatch)
+	}
+	if err := repo.AppendEvent(t.Context(), created.ID, EventSummary, EventPayload{Message: "two"}); err != nil {
+		t.Fatal(err)
+	}
+	secondBatch, err := repo.EventsAfter(t.Context(), created.ID, firstBatch[0].Seq, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secondBatch) != 1 || secondBatch[0].Type != EventSummary || secondBatch[0].Seq <= firstBatch[0].Seq {
+		t.Fatalf("unexpected second batch %#v after %#v", secondBatch, firstBatch)
+	}
+}

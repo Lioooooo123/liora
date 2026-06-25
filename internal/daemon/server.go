@@ -267,9 +267,9 @@ func (s *server) writeEventStream(w http.ResponseWriter, r *http.Request, taskID
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	flusher, _ := w.(http.Flusher)
-	sent := map[string]bool{}
+	var lastSeq int64
 	for {
-		done, err := s.writeAvailableEvents(r.Context(), w, flusher, taskID, sent)
+		done, nextSeq, err := s.writeAvailableEvents(r.Context(), w, flusher, taskID, lastSeq)
 		if err != nil {
 			fmt.Fprintf(w, "event: task.error\ndata: %s\n\n", quoteSSEData(err.Error()))
 			if flusher != nil {
@@ -280,6 +280,7 @@ func (s *server) writeEventStream(w http.ResponseWriter, r *http.Request, taskID
 		if done {
 			return
 		}
+		lastSeq = nextSeq
 		notification, unsubscribe := s.repo.SubscribeEvents(r.Context(), taskID)
 		timer := time.NewTimer(eventStreamFallbackInterval)
 		select {
@@ -296,17 +297,15 @@ func (s *server) writeEventStream(w http.ResponseWriter, r *http.Request, taskID
 	}
 }
 
-func (s *server) writeAvailableEvents(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, taskID string, sent map[string]bool) (bool, error) {
-	events, err := s.repo.Events(ctx, taskID, 0)
+func (s *server) writeAvailableEvents(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, taskID string, afterSeq int64) (bool, int64, error) {
+	events, err := s.repo.EventsAfter(ctx, taskID, afterSeq, 0)
 	if err != nil {
-		return false, err
+		return false, afterSeq, err
 	}
 	done := false
+	lastSeq := afterSeq
 	for _, event := range events {
-		if sent[event.ID] {
-			continue
-		}
-		sent[event.ID] = true
+		lastSeq = event.Seq
 		fmt.Fprintf(w, "event: %s\n", event.Type)
 		fmt.Fprintf(w, "id: %s\n", event.ID)
 		fmt.Fprintf(w, "data: %s\n\n", event.Payload)
@@ -317,7 +316,7 @@ func (s *server) writeAvailableEvents(ctx context.Context, w http.ResponseWriter
 	if flusher != nil {
 		flusher.Flush()
 	}
-	return done, nil
+	return done, lastSeq, nil
 }
 
 func quoteSSEData(value string) string {
