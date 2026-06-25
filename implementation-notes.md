@@ -163,3 +163,9 @@
 - timeline 当前包含 user message、assistant summary、tool call/result、diff、approval、status。它是按需投影，不新增 materialized transcript 表，因此兼容现有 SQLite 数据并避免迁移复杂度。
 - `internal/daemonclient` 新增 `SessionTimeline`，daemon-backed TUI 新增 `/timeline`/`/transcript`。未来 Mac 客户端应优先消费 timeline，而不是自己合并 messages/tasks/events。
 - 当前 timeline 适合渲染和恢复，不适合全文搜索、长期摘要和 compaction；这些能力后续应落到独立 transcript/search 表。
+
+## 2026-06-26 Daemon TUI Smoke
+
+- 新增 `scripts/tui-smoke.sh`，用 Python 标准库启动临时 fake Chat Completions server，再启动 Core Daemon 和 `-tui-daemon` 入口。
+- smoke 覆盖两条用户入口：自然语言请求的 streaming 输出 + `/timeline`，以及 script task 运行中 `/cancel`。
+- 这个 smoke 不依赖真实 LLM API key，适合发布前和本地回归；它补足了 `daemon-smoke.sh` 只验证 HTTP API、不验证 TUI 输入/输出链路的问题。

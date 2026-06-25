@@ -18,3 +18,16 @@ func TestDaemonSmokeScriptCoversDaemonAPI(t *testing.T) {
 		}
 	}
 }
+
+func TestTUISmokeScriptCoversDaemonBackedTUI(t *testing.T) {
+	data, err := os.ReadFile("tui-smoke.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{"-tui-daemon", "Timeline session_", "tool.result", "/timeline", "/cancel", "Cancelled task", "Fake", "chat"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected tui smoke script to contain %q, got:\n%s", want, content)
+		}
+	}
+}

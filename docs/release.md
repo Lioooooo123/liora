@@ -29,6 +29,16 @@ LIORA_VERSION=v0.1.0 GOOS=darwin GOARCH=arm64 ./scripts/package-release.sh
 
 这个 smoke 会解包到临时目录，运行包内 `install.sh`，再执行安装后的 `liora -version`。
 
+验证 daemon-backed TUI 主链路：
+
+```sh
+LIORA_TUI_SMOKE_DAEMON_ADDR=127.0.0.1:19090 \
+LIORA_TUI_SMOKE_LLM_ADDR=127.0.0.1:19091 \
+./scripts/tui-smoke.sh "$PWD"
+```
+
+这个 smoke 会启动临时 fake LLM、Core Daemon 和 `-tui-daemon` 交互入口，覆盖 streaming 输出、`/timeline` 和运行中 `/cancel`。
+
 ## 用户安装
 
 用户拿到 tarball 后执行：

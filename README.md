@@ -418,7 +418,9 @@ GET  /v1/sessions/{id}/timeline
 ## 测试
 
 ```sh
-go test ./...
+GOTOOLCHAIN=local go test -count=1 ./...
+LIORA_HOME=$(mktemp -d) LIORA_DAEMON_ADDR=127.0.0.1:19089 ./scripts/daemon-smoke.sh "$PWD"
+LIORA_TUI_SMOKE_DAEMON_ADDR=127.0.0.1:19090 LIORA_TUI_SMOKE_LLM_ADDR=127.0.0.1:19091 ./scripts/tui-smoke.sh "$PWD"
 ```
 
 ## 架构分层
