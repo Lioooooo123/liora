@@ -90,3 +90,9 @@
 - TUI 在展示 diff 后新增 `Next` 区块，提示用户先 review diff，再通过 daemon API apply 或 cancel。
 - 这不是完整桌面确认 UI，只是 v0.1 的最低可用引导；真正的按钮式 apply/cancel 应由未来 Mac 客户端消费 daemon API 实现。
 - README 中过期的“SSE 后续扩展实时订阅”描述已改为当前真实状态：同进程通知 + 增量游标 + 低频 fallback。
+
+## 2026-06-25 Release Packaging
+
+- 新增 `scripts/package-release.sh`，产物为 `dist/liora_<version>_<goos>_<goarch>.tar.gz`，包含 `bin/liora`、`install.sh`、README 和 MVP benchmark。
+- CLI 新增 `-version`，打包时通过 `-ldflags "-X main.version=<version>"` 注入版本，方便发布包 smoke 和用户快速确认安装结果。
+- 新增 `scripts/release-smoke.sh`，会解包发布包、安装到临时目录并运行 `liora -version`。这个 smoke 只验证包可安装可启动，不验证用户自己的 LLM API key。

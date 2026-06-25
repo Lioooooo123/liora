@@ -22,6 +22,8 @@ import (
 	"github.com/Lioooooo123/liora/internal/tui"
 )
 
+var version = "dev"
+
 func main() {
 	if err := config.LoadDefaultEnv(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -39,7 +41,12 @@ func main() {
 	llmAPIKey := flag.String("llm-api-key", getenvAny("LIORA_LLM_API_KEY", "OPENAI_API_KEY", ""), "LLM API key")
 	llmModel := flag.String("llm-model", getenvAny("LIORA_LLM_MODEL", "OPENAI_MODEL", ""), "LLM model name")
 	traceOut := flag.String("trace-out", "", "write trace events to a JSONL file")
+	versionFlag := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *versionFlag {
+		fmt.Println("liora " + version)
+		return
+	}
 
 	steps := *prompt
 	if steps == "" && flag.NArg() > 0 {

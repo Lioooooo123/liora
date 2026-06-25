@@ -73,6 +73,26 @@ func TestCLINaturalModeUsesLLMPlan(t *testing.T) {
 	}
 }
 
+func TestCLIVersionFlagPrintsBuildVersion(t *testing.T) {
+	packageDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "liora")
+	build := exec.Command("go", "build", "-ldflags", "-X main.version=test-release", "-o", binary, packageDir)
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %v\n%s", err, string(output))
+	}
+
+	output, err := exec.Command(binary, "-version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("version command failed: %v\n%s", err, string(output))
+	}
+	if !strings.Contains(string(output), "test-release") {
+		t.Fatalf("expected version output to contain build version, got:\n%s", string(output))
+	}
+}
+
 func TestCLINaturalModeUsesAnthropicProvider(t *testing.T) {
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "app.txt"), []byte("hello old agent\n"), 0o600); err != nil {

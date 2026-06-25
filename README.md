@@ -90,6 +90,22 @@ cd /path/to/project
 liora
 ```
 
+## 打包给别人试用
+
+构建可分发 tarball：
+
+```sh
+LIORA_VERSION=v0.1.0 ./scripts/package-release.sh
+```
+
+验证发布包可以安装并运行：
+
+```sh
+./scripts/release-smoke.sh dist/liora_v0.1.0_$(go env GOOS)_$(go env GOARCH).tar.gz
+```
+
+更多说明见 [Release Packaging](docs/release.md)。
+
 ## 脚本模式
 
 ```sh
