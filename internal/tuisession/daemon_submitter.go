@@ -19,6 +19,7 @@ type DaemonSubmitter struct {
 	workspace     string
 	natural       bool
 	mu            sync.Mutex
+	sessionID     string
 	currentTaskID string
 	lastTaskID    string
 	lastDiff      string
@@ -39,12 +40,14 @@ func (s *DaemonSubmitter) SubmitStream(ctx context.Context, input string, onEven
 	created, err := s.client.CreateTask(ctx, taskpkg.CreateRequest{
 		Workspace: s.workspace,
 		Prompt:    input,
+		SessionID: s.currentSessionID(),
 		Natural:   s.natural,
 		RunAsync:  true,
 	})
 	if err != nil {
 		return tui.TurnResult{}, err
 	}
+	s.rememberSession(created.Task.SessionID)
 	s.setCurrentTask(created.Task.ID)
 	defer s.clearCurrentTask(created.Task.ID)
 	streamCtx, cancelStream := context.WithCancel(ctx)
@@ -131,9 +134,19 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		return s.applyLast(ctx)
 	case "/tasks":
 		return s.listTasks(ctx)
+	case "/sessions":
+		return s.listSessions(ctx)
+	case "/session":
+		return s.showSession(ctx)
 	case "/last":
 		return s.replayLastTask(ctx)
 	default:
+		if strings.HasPrefix(line, "/resume-session ") {
+			return s.resumeSession(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/resume-session ")))
+		}
+		if line == "/resume-session" {
+			return "Usage: /resume-session <session_id>", true, nil
+		}
 		if strings.HasPrefix(line, "/resume ") {
 			return s.replayTask(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/resume ")))
 		}
@@ -142,6 +155,78 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		}
 		return "", false, nil
 	}
+}
+
+func (s *DaemonSubmitter) listSessions(ctx context.Context) (string, bool, error) {
+	sessions, err := s.client.ListSessions(ctx, 10)
+	if err != nil {
+		return "", true, err
+	}
+	if len(sessions) == 0 {
+		return "No daemon sessions found.", true, nil
+	}
+	current := s.currentSessionID()
+	var lines []string
+	for _, session := range sessions {
+		marker := " "
+		if session.ID == current {
+			marker = "*"
+		}
+		lines = append(lines, fmt.Sprintf("%s %s %s (%s)", marker, session.ID, session.Title, formatTaskTime(session.UpdatedAt)))
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) showSession(ctx context.Context) (string, bool, error) {
+	sessionID := s.currentSessionID()
+	if sessionID == "" {
+		return "No current daemon session.", true, nil
+	}
+	return s.resumeSession(ctx, sessionID)
+}
+
+func (s *DaemonSubmitter) resumeSession(ctx context.Context, sessionID string) (string, bool, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return "Usage: /resume-session <session_id>", true, nil
+	}
+	session, err := s.client.GetSession(ctx, sessionID)
+	if err != nil {
+		return "", true, err
+	}
+	messages, err := s.client.SessionMessages(ctx, sessionID, 20)
+	if err != nil {
+		return "", true, err
+	}
+	tasks, err := s.client.SessionTasks(ctx, sessionID, 10)
+	if err != nil {
+		return "", true, err
+	}
+	s.rememberSession(session.ID)
+	if session.LastTaskID != "" {
+		s.rememberTask(session.LastTaskID)
+	}
+	var lines []string
+	lines = append(lines, fmt.Sprintf("Session %s", session.ID))
+	lines = append(lines, "Title: "+session.Title)
+	lines = append(lines, "Workspace: "+session.Workspace)
+	if len(messages) == 0 {
+		lines = append(lines, "Messages: none")
+	} else {
+		lines = append(lines, "Messages:")
+		for _, message := range messages {
+			lines = append(lines, fmt.Sprintf("- %s: %s", message.Role, firstLine(message.Content)))
+		}
+	}
+	if len(tasks) == 0 {
+		lines = append(lines, "Tasks: none")
+	} else {
+		lines = append(lines, "Tasks:")
+		for _, task := range tasks {
+			lines = append(lines, fmt.Sprintf("- %s [%s] %s", task.ID, task.Status, task.Title))
+		}
+	}
+	return strings.Join(lines, "\n"), true, nil
 }
 
 func (s *DaemonSubmitter) cancelCurrent(ctx context.Context) (string, bool, error) {
@@ -246,6 +331,22 @@ func (s *DaemonSubmitter) setCurrentTask(taskID string) {
 	s.currentTaskID = taskID
 	s.lastTaskID = taskID
 	s.lastDiff = ""
+}
+
+func (s *DaemonSubmitter) rememberSession(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionID = sessionID
+}
+
+func (s *DaemonSubmitter) currentSessionID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessionID
 }
 
 func (s *DaemonSubmitter) rememberTask(taskID string) {

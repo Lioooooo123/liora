@@ -28,6 +28,9 @@ func TestRepositoryCreatesListsAndReadsTaskEvents(t *testing.T) {
 	if created.ID == "" || created.Status != StatusDraft || !strings.Contains(created.Title, "看看目录") {
 		t.Fatalf("unexpected created task %#v", created)
 	}
+	if created.SessionID == "" {
+		t.Fatalf("expected task session id, got %#v", created)
+	}
 
 	if err := repo.AppendEvent(t.Context(), created.ID, EventPlanReady, EventPayload{Steps: "list ."}); err != nil {
 		t.Fatal(err)
@@ -61,6 +64,59 @@ func TestRepositoryCreatesListsAndReadsTaskEvents(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Type != EventPlanReady || !strings.Contains(events[0].Payload, "list .") {
 		t.Fatalf("unexpected events %#v", events)
+	}
+}
+
+func TestRepositoryCreatesAndReusesSessionTranscript(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	repo := NewRepository(db)
+	first, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "first thought",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "second thought",
+		SessionID: first.SessionID,
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.SessionID != first.SessionID {
+		t.Fatalf("expected reused session %q, got %q", first.SessionID, second.SessionID)
+	}
+
+	session, err := repo.GetSession(t.Context(), first.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.LastTaskID != second.ID || session.Workspace != workspace {
+		t.Fatalf("unexpected session %#v", session)
+	}
+	messages, err := repo.Messages(t.Context(), first.SessionID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[0].Content != "first thought" || messages[1].TaskID != second.ID {
+		t.Fatalf("unexpected messages %#v", messages)
+	}
+	tasks, err := repo.ListBySession(t.Context(), first.SessionID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 2 || tasks[0].ID != second.ID || tasks[1].ID != first.ID {
+		t.Fatalf("unexpected session tasks %#v", tasks)
 	}
 }
 

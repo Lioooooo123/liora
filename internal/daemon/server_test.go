@@ -144,6 +144,82 @@ func TestServerServesCapabilities(t *testing.T) {
 	}
 }
 
+func TestServerServesSessionTranscript(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	server := httptest.NewServer(NewServer(Config{Repository: repo}))
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/v1/tasks", "application/json", strings.NewReader(`{"workspace":`+quote(workspace)+`,"prompt":"first","natural":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("unexpected create status %d", resp.StatusCode)
+	}
+	var first taskpkg.CreateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Task.SessionID == "" {
+		t.Fatalf("expected session id in task %#v", first.Task)
+	}
+
+	resp, err = http.Post(server.URL+"/v1/tasks", "application/json", strings.NewReader(`{"workspace":`+quote(workspace)+`,"prompt":"second","session_id":`+quote(first.Task.SessionID)+`,"natural":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("unexpected second create status %d", resp.StatusCode)
+	}
+
+	resp, err = http.Get(server.URL + "/v1/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var sessions []taskpkg.Session
+	if err := json.NewDecoder(resp.Body).Decode(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != first.Task.SessionID {
+		t.Fatalf("unexpected sessions %#v", sessions)
+	}
+
+	resp, err = http.Get(server.URL + "/v1/sessions/" + first.Task.SessionID + "/messages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var messages []taskpkg.Message
+	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[0].Content != "first" || messages[1].Content != "second" {
+		t.Fatalf("unexpected messages %#v", messages)
+	}
+
+	resp, err = http.Get(server.URL + "/v1/sessions/" + first.Task.SessionID + "/tasks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var tasks []taskpkg.Task
+	if err := json.NewDecoder(resp.Body).Decode(&tasks); err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 2 || tasks[0].SessionID != first.Task.SessionID {
+		t.Fatalf("unexpected session tasks %#v", tasks)
+	}
+}
+
 func TestServerServesDiffAndAppliesPatch(t *testing.T) {
 	workspace := t.TempDir()
 	db, err := store.New(t.TempDir()).OpenDB()

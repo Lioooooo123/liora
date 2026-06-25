@@ -234,6 +234,58 @@ func TestDaemonSubmitterListsAndReplaysTasks(t *testing.T) {
 	}
 }
 
+func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
+	root := t.TempDir()
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "list ."}))
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Runner: runner}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+
+	if _, err := submitter.SubmitStream(t.Context(), "first prompt", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := submitter.SubmitStream(t.Context(), "second prompt", nil); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := repo.ListSessions(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected one reused session, got %#v", sessions)
+	}
+	sessionID := sessions[0].ID
+
+	sessionsOutput, handled, err := submitter.HandleCommand(t.Context(), "/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(sessionsOutput, sessionID) || !strings.Contains(sessionsOutput, "* "+sessionID) {
+		t.Fatalf("unexpected /sessions output handled=%v output=%q", handled, sessionsOutput)
+	}
+
+	sessionOutput, handled, err := submitter.HandleCommand(t.Context(), "/session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Session " + sessionID, "first prompt", "second prompt", "Tasks:"} {
+		if !handled || !strings.Contains(sessionOutput, want) {
+			t.Fatalf("expected /session output to contain %q handled=%v output=%q", want, handled, sessionOutput)
+		}
+	}
+
+	fresh := newTestSubmitter(t, server.URL, root, true)
+	resumeOutput, handled, err := fresh.HandleCommand(t.Context(), "/resume-session "+sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(resumeOutput, "Session "+sessionID) || !strings.Contains(resumeOutput, "second prompt") {
+		t.Fatalf("unexpected /resume-session output handled=%v output=%q", handled, resumeOutput)
+	}
+}
+
 func findOnlyTaskID(t *testing.T, repo *taskpkg.Repository) string {
 	t.Helper()
 	tasks, err := repo.List(t.Context(), 10)

@@ -87,6 +87,58 @@ func (c *Client) CreateTask(ctx context.Context, request task.CreateRequest) (ta
 	return result, nil
 }
 
+func (c *Client) CreateSession(ctx context.Context, request task.CreateSessionRequest) (task.CreateSessionResponse, error) {
+	var result task.CreateSessionResponse
+	if err := c.postJSON(ctx, "/v1/sessions", request, &result, http.StatusCreated); err != nil {
+		return task.CreateSessionResponse{}, err
+	}
+	return result, nil
+}
+
+func (c *Client) GetSession(ctx context.Context, sessionID string) (task.Session, error) {
+	var result task.Session
+	if err := c.getJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID), &result); err != nil {
+		return task.Session{}, err
+	}
+	return result, nil
+}
+
+func (c *Client) ListSessions(ctx context.Context, limit int) ([]task.Session, error) {
+	path := "/v1/sessions"
+	if limit > 0 {
+		path += fmt.Sprintf("?limit=%d", limit)
+	}
+	var result []task.Session
+	if err := c.getJSON(ctx, path, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *Client) SessionMessages(ctx context.Context, sessionID string, limit int) ([]task.Message, error) {
+	path := "/v1/sessions/" + url.PathEscape(sessionID) + "/messages"
+	if limit > 0 {
+		path += fmt.Sprintf("?limit=%d", limit)
+	}
+	var result []task.Message
+	if err := c.getJSON(ctx, path, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *Client) SessionTasks(ctx context.Context, sessionID string, limit int) ([]task.Task, error) {
+	path := "/v1/sessions/" + url.PathEscape(sessionID) + "/tasks"
+	if limit > 0 {
+		path += fmt.Sprintf("?limit=%d", limit)
+	}
+	var result []task.Task
+	if err := c.getJSON(ctx, path, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (c *Client) GetTask(ctx context.Context, taskID string) (task.Task, error) {
 	var result task.Task
 	if err := c.getJSON(ctx, "/v1/tasks/"+url.PathEscape(taskID), &result); err != nil {

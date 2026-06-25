@@ -240,6 +240,7 @@ func initDB(db *sql.DB) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS tasks (
 			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
 			title TEXT NOT NULL,
 			user_input TEXT NOT NULL,
 			natural INTEGER NOT NULL DEFAULT 1,
@@ -251,6 +252,26 @@ func initDB(db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updated_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`,
+		`CREATE TABLE IF NOT EXISTS sessions (
+			id TEXT PRIMARY KEY,
+			title TEXT NOT NULL,
+			workspace TEXT NOT NULL,
+			last_task_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_workspace_updated ON sessions(workspace, updated_at)`,
+		`CREATE TABLE IF NOT EXISTS session_messages (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			task_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			FOREIGN KEY(session_id) REFERENCES sessions(id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_session_messages_session_created ON session_messages(session_id, created_at)`,
 		`CREATE TABLE IF NOT EXISTS task_events (
 			id TEXT PRIMARY KEY,
 			task_id TEXT NOT NULL,
@@ -267,6 +288,12 @@ func initDB(db *sql.DB) error {
 		}
 	}
 	if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN natural INTEGER NOT NULL DEFAULT 1`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_tasks_session_updated ON tasks(session_id, updated_at)`); err != nil {
 		return err
 	}
 	return nil

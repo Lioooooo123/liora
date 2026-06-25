@@ -74,6 +74,9 @@ func TestClientCapabilitiesAndTaskLifecycle(t *testing.T) {
 	if created.Task.ID == "" {
 		t.Fatalf("unexpected task %#v", created.Task)
 	}
+	if created.Task.SessionID == "" {
+		t.Fatalf("expected task session id %#v", created.Task)
+	}
 	stream, errs := client.StreamEvents(t.Context(), created.Task.ID)
 	var eventTypes []task.EventType
 	for event := range stream {
@@ -111,6 +114,63 @@ func TestClientCapabilitiesAndTaskLifecycle(t *testing.T) {
 	}
 	if !containsEvent(events, task.EventCompleted) {
 		t.Fatalf("expected completed event, got %#v", events)
+	}
+}
+
+func TestClientSessionLifecycle(t *testing.T) {
+	workspace := t.TempDir()
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	sessionResponse, err := client.CreateSession(t.Context(), task.CreateSessionRequest{Workspace: workspace, Title: "study notes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessionResponse.Session.ID == "" || sessionResponse.Session.Title != "study notes" {
+		t.Fatalf("unexpected session %#v", sessionResponse.Session)
+	}
+	created, err := client.CreateTask(t.Context(), task.CreateRequest{
+		Workspace: workspace,
+		Prompt:    "read assignment",
+		SessionID: sessionResponse.Session.ID,
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Task.SessionID != sessionResponse.Session.ID {
+		t.Fatalf("expected task in session, got %#v", created.Task)
+	}
+	sessions, err := client.ListSessions(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].LastTaskID != created.Task.ID {
+		t.Fatalf("unexpected sessions %#v", sessions)
+	}
+	messages, err := client.SessionMessages(t.Context(), sessionResponse.Session.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Content != "read assignment" {
+		t.Fatalf("unexpected messages %#v", messages)
+	}
+	tasks, err := client.SessionTasks(t.Context(), sessionResponse.Session.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != created.Task.ID {
+		t.Fatalf("unexpected session tasks %#v", tasks)
+	}
+	got, err := client.GetSession(t.Context(), sessionResponse.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastTaskID != created.Task.ID {
+		t.Fatalf("unexpected session %#v", got)
 	}
 }
 

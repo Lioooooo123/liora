@@ -133,3 +133,11 @@
 - `internal/tuisession.DaemonSubmitter` 新增 `/tasks`、`/last`、`/resume <task_id>`，直接通过 daemonclient 查询 task 列表和 event 历史，并把 task/event 回放成文本时间线。
 - `/last` 与 `/resume` 会把回放任务记录为 last task，并记住最近 diff，因此用户重启 TUI 后可以先 `/last` 或 `/resume <task_id>`，再 `/apply` 最近 diff。
 - 这一步只是 task/event 级恢复，不是完整多轮 session transcript。后续如果要对齐 Claude Code/Kimi Code 的 session resume，需要补 session/message 数据模型和更好的 transcript 渲染。
+
+## 2026-06-26 Session Transcript Baseline
+
+- SQLite 新增 `sessions` 与 `session_messages`，`tasks` 增加 `session_id`。迁移采用 `ALTER TABLE ... ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`，兼容用户已有本地 `liora.db`。
+- `Repository.Create` 现在会在一个事务内创建或复用 session、插入 task、写入用户 message，并更新 session 的 `last_task_id`。这样 daemon API、TUI 和未来 Mac 客户端都能围绕同一条会话主线恢复上下文。
+- daemon 新增 `GET/POST /v1/sessions`、`GET /v1/sessions/{id}`、`GET /v1/sessions/{id}/messages`、`GET /v1/sessions/{id}/tasks`，并同步扩展 `internal/daemonclient` SDK。
+- daemon-backed TUI 新增 `/sessions`、`/session`、`/resume-session <session_id>`。两轮以上输入会自动复用同一个 session；新 TUI 进程可通过 `/resume-session` 重新绑定旧 session。
+- 当前 transcript 只持久化用户消息，assistant summary/tool event 仍在 task_events 中。这个拆分能满足 v0.1 恢复和客户端复用，但后续若要做完整聊天历史搜索，应把 assistant answer、tool timeline projection 或 transcript snapshot 也写入 session 层。

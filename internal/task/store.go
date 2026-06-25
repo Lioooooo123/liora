@@ -32,8 +32,27 @@ func (r *Repository) Create(ctx context.Context, request CreateRequest) (Task, e
 		return Task{}, fmt.Errorf("workspace is required")
 	}
 	now := time.Now().UTC()
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Task{}, err
+	}
+	defer tx.Rollback()
+	sessionID := strings.TrimSpace(request.SessionID)
+	if sessionID == "" {
+		sessionID = newID("session")
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO sessions (id, title, workspace, last_task_id, created_at, updated_at)
+			VALUES (?, ?, ?, '', ?, ?)
+		`, sessionID, titleFromPrompt(prompt), workspace, formatTime(now), formatTime(now))
+		if err != nil {
+			return Task{}, err
+		}
+	} else if _, err := r.getSessionTx(ctx, tx, sessionID); err != nil {
+		return Task{}, err
+	}
 	task := Task{
 		ID:        newID("task"),
+		SessionID: sessionID,
 		Title:     titleFromPrompt(prompt),
 		UserInput: prompt,
 		Natural:   request.Natural,
@@ -42,11 +61,29 @@ func (r *Repository) Create(ctx context.Context, request CreateRequest) (Task, e
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO tasks (id, title, user_input, natural, status, workspace, created_at, updated_at, completed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
-	`, task.ID, task.Title, task.UserInput, boolInt(task.Natural), string(task.Status), task.Workspace, formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO tasks (id, session_id, title, user_input, natural, status, workspace, created_at, updated_at, completed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+	`, task.ID, task.SessionID, task.Title, task.UserInput, boolInt(task.Natural), string(task.Status), task.Workspace, formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
 	if err != nil {
+		return Task{}, err
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO session_messages (id, session_id, role, content, task_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, newID("msg"), task.SessionID, "user", task.UserInput, task.ID, formatTime(now))
+	if err != nil {
+		return Task{}, err
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE sessions
+		SET last_task_id = ?, updated_at = ?
+		WHERE id = ?
+	`, task.ID, formatTime(now), task.SessionID)
+	if err != nil {
+		return Task{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return Task{}, err
 	}
 	return task, nil
@@ -58,10 +95,10 @@ func (r *Repository) Get(ctx context.Context, id string) (Task, error) {
 	var completedAt sql.NullString
 	var natural int
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, title, user_input, natural, status, workspace, created_at, updated_at, completed_at
+		SELECT id, session_id, title, user_input, natural, status, workspace, created_at, updated_at, completed_at
 		FROM tasks
 		WHERE id = ?
-	`, id).Scan(&task.ID, &task.Title, &task.UserInput, &natural, &task.Status, &task.Workspace, &createdAt, &updatedAt, &completedAt)
+	`, id).Scan(&task.ID, &task.SessionID, &task.Title, &task.UserInput, &natural, &task.Status, &task.Workspace, &createdAt, &updatedAt, &completedAt)
 	if err != nil {
 		return Task{}, err
 	}
@@ -80,7 +117,7 @@ func (r *Repository) List(ctx context.Context, limit int) ([]Task, error) {
 		limit = 50
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, title, user_input, natural, status, workspace, created_at, updated_at, completed_at
+		SELECT id, session_id, title, user_input, natural, status, workspace, created_at, updated_at, completed_at
 		FROM tasks
 		ORDER BY updated_at DESC, id DESC
 		LIMIT ?
@@ -90,6 +127,160 @@ func (r *Repository) List(ctx context.Context, limit int) ([]Task, error) {
 	}
 	defer rows.Close()
 	return scanTasks(rows)
+}
+
+func (r *Repository) ListBySession(ctx context.Context, sessionID string, limit int) ([]Task, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, fmt.Errorf("session id is required")
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, session_id, title, user_input, natural, status, workspace, created_at, updated_at, completed_at
+		FROM tasks
+		WHERE session_id = ?
+		ORDER BY updated_at DESC, id DESC
+		LIMIT ?
+	`, sessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
+func (r *Repository) CreateSession(ctx context.Context, request CreateSessionRequest) (Session, error) {
+	workspace := strings.TrimSpace(request.Workspace)
+	if workspace == "" {
+		return Session{}, fmt.Errorf("workspace is required")
+	}
+	title := strings.TrimSpace(request.Title)
+	if title == "" {
+		title = "New session"
+	}
+	now := time.Now().UTC()
+	session := Session{
+		ID:        newID("session"),
+		Title:     titleFromPrompt(title),
+		Workspace: workspace,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO sessions (id, title, workspace, last_task_id, created_at, updated_at)
+		VALUES (?, ?, ?, '', ?, ?)
+	`, session.ID, session.Title, session.Workspace, formatTime(session.CreatedAt), formatTime(session.UpdatedAt))
+	if err != nil {
+		return Session{}, err
+	}
+	return session, nil
+}
+
+func (r *Repository) GetSession(ctx context.Context, id string) (Session, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Session{}, fmt.Errorf("session id is required")
+	}
+	return r.getSessionTx(ctx, r.db, id)
+}
+
+func (r *Repository) ListSessions(ctx context.Context, limit int) ([]Session, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, title, workspace, last_task_id, created_at, updated_at
+		FROM sessions
+		ORDER BY updated_at DESC, id DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sessions []Session
+	for rows.Next() {
+		session, err := scanSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	return sessions, rows.Err()
+}
+
+func (r *Repository) Messages(ctx context.Context, sessionID string, limit int) ([]Message, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, fmt.Errorf("session id is required")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, session_id, role, content, task_id, created_at
+		FROM session_messages
+		WHERE session_id = ?
+		ORDER BY created_at ASC, id ASC
+		LIMIT ?
+	`, sessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var messages []Message
+	for rows.Next() {
+		var message Message
+		var createdAt string
+		if err := rows.Scan(&message.ID, &message.SessionID, &message.Role, &message.Content, &message.TaskID, &createdAt); err != nil {
+			return nil, err
+		}
+		message.CreatedAt = parseTime(createdAt)
+		messages = append(messages, message)
+	}
+	return messages, rows.Err()
+}
+
+func (r *Repository) AppendMessage(ctx context.Context, sessionID string, role string, content string, taskID string) (Message, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	role = strings.TrimSpace(role)
+	content = strings.TrimSpace(content)
+	taskID = strings.TrimSpace(taskID)
+	if sessionID == "" {
+		return Message{}, fmt.Errorf("session id is required")
+	}
+	if role == "" {
+		return Message{}, fmt.Errorf("role is required")
+	}
+	if content == "" {
+		return Message{}, fmt.Errorf("content is required")
+	}
+	if _, err := r.GetSession(ctx, sessionID); err != nil {
+		return Message{}, err
+	}
+	now := time.Now().UTC()
+	message := Message{
+		ID:        newID("msg"),
+		SessionID: sessionID,
+		Role:      role,
+		Content:   content,
+		TaskID:    taskID,
+		CreatedAt: now,
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO session_messages (id, session_id, role, content, task_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, message.ID, message.SessionID, message.Role, message.Content, message.TaskID, formatTime(message.CreatedAt))
+	if err != nil {
+		return Message{}, err
+	}
+	_, err = r.db.ExecContext(ctx, `UPDATE sessions SET updated_at = ? WHERE id = ?`, formatTime(now), sessionID)
+	if err != nil {
+		return Message{}, err
+	}
+	return message, nil
 }
 
 func (r *Repository) UpdateStatus(ctx context.Context, id string, status Status) error {
@@ -227,7 +418,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		var createdAt, updatedAt string
 		var completedAt sql.NullString
 		var natural int
-		if err := rows.Scan(&task.ID, &task.Title, &task.UserInput, &natural, &task.Status, &task.Workspace, &createdAt, &updatedAt, &completedAt); err != nil {
+		if err := rows.Scan(&task.ID, &task.SessionID, &task.Title, &task.UserInput, &natural, &task.Status, &task.Workspace, &createdAt, &updatedAt, &completedAt); err != nil {
 			return nil, err
 		}
 		task.Natural = natural != 0
@@ -240,6 +431,34 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		tasks = append(tasks, task)
 	}
 	return tasks, rows.Err()
+}
+
+type sessionQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (r *Repository) getSessionTx(ctx context.Context, querier sessionQuerier, id string) (Session, error) {
+	row := querier.QueryRowContext(ctx, `
+		SELECT id, title, workspace, last_task_id, created_at, updated_at
+		FROM sessions
+		WHERE id = ?
+	`, id)
+	return scanSession(row)
+}
+
+type scanner interface {
+	Scan(...any) error
+}
+
+func scanSession(row scanner) (Session, error) {
+	var session Session
+	var createdAt, updatedAt string
+	if err := row.Scan(&session.ID, &session.Title, &session.Workspace, &session.LastTaskID, &createdAt, &updatedAt); err != nil {
+		return Session{}, err
+	}
+	session.CreatedAt = parseTime(createdAt)
+	session.UpdatedAt = parseTime(updatedAt)
+	return session, nil
 }
 
 func titleFromPrompt(prompt string) string {

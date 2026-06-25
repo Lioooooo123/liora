@@ -70,10 +70,11 @@ Workspace / Docker / MCP / LLM Providers
 
 ### P3：会话与恢复
 
-- SQLite 保存 session/task/message/event/transcript。
-- 支持 `/tasks`、`/resume`、`/last`。
-- TUI 重新启动后可以恢复最近 workspace 的任务历史。
-- 客户端直接复用 daemon API 获取历史和实时事件。
+- SQLite 保存 session/task/message/event 基线数据。
+- 支持 `/tasks`、`/resume`、`/last`、`/sessions`、`/session`、`/resume-session <session_id>`。
+- TUI 重新启动后可以恢复旧 task，也可以重新绑定旧 session。
+- 客户端直接复用 daemon API 获取 session、task、message 历史和实时事件。
+- 待做：assistant answer 与 tool timeline 目前主要保存在 task_events，尚未投影成完整 transcript snapshot。
 
 ### P4：产品化 TUI
 
@@ -101,9 +102,10 @@ Workspace / Docker / MCP / LLM Providers
 - 已在 daemon-backed session 层支持 `/cancel` 调用 `daemonclient.Cancel`。
 - 已在 daemon-backed session 层支持 `/apply` 调用 apply API。
 - 已在 daemon-backed session 层支持 `/tasks`、`/last`、`/resume <task_id>` 查询和回放 task/event 历史。
+- 已新增 session/message SQLite 模型与 daemon API，并在 daemon-backed TUI 中支持 `/sessions`、`/session`、`/resume-session <session_id>`。
 - 待做：line-based TUI 当前仍会在任务运行期间阻塞输入，真正的运行中快捷键取消需要 Bubble Tea/异步输入层。
 - 待做：diff 出现后的动作区需要升级为更明确的交互控件，而不是只依赖用户手输 `/apply`。
-- 待做：当前历史恢复是 task/event 回放，不是完整多轮 session/message transcript；后续需要补 session 表和更完整的 transcript model。
+- 待做：当前 session transcript 只直接保存用户消息，assistant/tool 历史仍需要从 task_events 投影，后续需要更完整的 transcript model。
 
 当前实现仍是 line-based TUI，不是 Bubble Tea 全屏 UI。它已经把任务执行链路迁到 daemon/SSE，可作为下一步全屏 TUI 的数据通路验证。
 

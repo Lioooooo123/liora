@@ -37,6 +37,8 @@ func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
+	mux.HandleFunc("/v1/sessions", s.handleSessions)
+	mux.HandleFunc("/v1/sessions/", s.handleSession)
 	mux.HandleFunc("/v1/tasks", s.handleTasks)
 	mux.HandleFunc("/v1/tasks/", s.handleTask)
 	return mux
@@ -115,6 +117,89 @@ func (s *server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "GET, POST")
 		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
 	}
+}
+
+func (s *server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		sessions, err := s.repo.ListSessions(r.Context(), limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, sessions)
+	case http.MethodPost:
+		var request taskpkg.CreateSessionRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		session, err := s.repo.CreateSession(r.Context(), request)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, taskpkg.CreateSessionResponse{Session: session})
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+	}
+}
+
+func (s *server) handleSession(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/v1/sessions/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeError(w, http.StatusNotFound, errors.New("session id is required"))
+		return
+	}
+	sessionID := parts[0]
+	if len(parts) == 1 {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+			return
+		}
+		session, err := s.repo.GetSession(r.Context(), sessionID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, session)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "messages" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+			return
+		}
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		messages, err := s.repo.Messages(r.Context(), sessionID, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, messages)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "tasks" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+			return
+		}
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		tasks, err := s.repo.ListBySession(r.Context(), sessionID, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, tasks)
+		return
+	}
+	writeError(w, http.StatusNotFound, fmt.Errorf("unknown session route %q", r.URL.Path))
 }
 
 func (s *server) handleTask(w http.ResponseWriter, r *http.Request) {
