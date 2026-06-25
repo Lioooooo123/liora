@@ -201,6 +201,12 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /skills
 /skill <name>
 /mcp
+/tasks
+/sessions
+/approve
+/deny
+/apply
+/cancel
 /exit
 ```
 
@@ -348,6 +354,33 @@ curl http://127.0.0.1:18080/v1/tasks/<task-id>/apply \
 
 `/apply` 会校验 patch 路径不能越过 workspace，并写入 `task.patch_applied` 事件。
 
+### 权限审批
+
+默认 `LIORA_PERMISSION=auto`，保持本地开发效率。启用 prompt 模式后，危险 shell、非 patch mode 写操作、MCP 外部调用会让 task 进入 `waiting_user`，并写入 `permission.requested` 事件：
+
+```sh
+export LIORA_PERMISSION=prompt
+liora -daemon -daemon-addr 127.0.0.1:18080
+```
+
+批准继续：
+
+```sh
+curl http://127.0.0.1:18080/v1/tasks/<task-id>/approval \
+  -H 'Content-Type: application/json' \
+  -d '{"decision":"approve"}'
+```
+
+拒绝并取消：
+
+```sh
+curl http://127.0.0.1:18080/v1/tasks/<task-id>/approval \
+  -H 'Content-Type: application/json' \
+  -d '{"decision":"deny","reason":"too risky"}'
+```
+
+daemon-backed TUI 中可直接使用 `/approve` 和 `/deny` 处理最近一个等待审批的 task。当前是 task 级授权：批准后该 task 后续需要审批的步骤都会继续执行；逐步授权 UI 留给后续全屏 TUI / Mac 客户端。
+
 取消任务：
 
 ```sh
@@ -370,6 +403,12 @@ GET  /v1/tasks/{id}/events/stream
 GET  /v1/tasks/{id}/diff
 POST /v1/tasks/{id}/apply
 POST /v1/tasks/{id}/cancel
+POST /v1/tasks/{id}/approval
+GET  /v1/sessions
+POST /v1/sessions
+GET  /v1/sessions/{id}
+GET  /v1/sessions/{id}/messages
+GET  /v1/sessions/{id}/tasks
 ```
 
 ## 测试
@@ -414,7 +453,7 @@ go test ./...
 - `list`、`tree`、`glob` 是安全目录查看工具；Planner 会优先用它们处理“看看文件夹里有什么”或“找文件”这类请求。
 - TUI 是轻量 Go 实现，借鉴 Kimi Code CLI 的信息结构，使用 Lip Gloss 做样式，不复用原 TypeScript/pi-tui 组件。
 - Shell 命令可通过 `LIORA_SANDBOX=docker` 进入 Docker；默认 local 方便无 Docker 环境开发。
-- 文件工具已经做 workspace 路径限制；daemon 支持 `LIORA_PATCH_MODE=1` 先产出 patch 再显式 apply，但 Docker 版本仍需要补危险命令审批、默认确认 UI 和更完整的资源隔离策略。
+- 文件工具已经做 workspace 路径限制；daemon 支持 `LIORA_PATCH_MODE=1` 先产出 patch 再显式 apply，也支持 `LIORA_PERMISSION=prompt` 对危险 shell、非 patch 写操作和 MCP 外部调用做 task 级审批。完整逐步授权 UI 和更严格资源隔离仍留给后续版本。
 - Trace 当前支持内存记录和 JSONL 落盘；任务和记忆已经进入本地 SQLite。
 
 ## 下一步

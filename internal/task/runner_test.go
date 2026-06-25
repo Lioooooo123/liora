@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Lioooooo123/liora/internal/llm"
+	"github.com/Lioooooo123/liora/internal/permission"
 	"github.com/Lioooooo123/liora/internal/store"
 	"github.com/Lioooooo123/liora/internal/tools"
 )
@@ -365,6 +366,80 @@ func TestRunnerPatchModeProducesDiffWithoutMutatingWorkspace(t *testing.T) {
 	}
 	if !containsEventType(eventTypes(events), EventSandboxWorkspace) {
 		t.Fatalf("expected sandbox workspace event, got %#v", eventTypes(events))
+	}
+}
+
+func TestRunnerWaitsForPermissionBeforeDangerousShell(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	task, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "run rm -rf build",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: ""}))
+	runner.SetPermissionPolicy(permission.Policy{Mode: permission.ModePrompt})
+	if err := runner.Run(t.Context(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(t.Context(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusWaitingUser {
+		t.Fatalf("expected waiting user status, got %#v", got)
+	}
+	events, err := repo.Events(t.Context(), task.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payloads strings.Builder
+	for _, event := range events {
+		payloads.WriteString(event.Payload)
+	}
+	if !containsEventType(eventTypes(events), EventPermissionRequest) || !strings.Contains(payloads.String(), "dangerous_shell") {
+		t.Fatalf("expected permission request event, got %#v payloads=%s", eventTypes(events), payloads.String())
+	}
+}
+
+func TestRunnerContinuesAfterApproval(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	task, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "run rm -rf build",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: ""}))
+	runner.SetPermissionPolicy(permission.Policy{Mode: permission.ModePrompt})
+	if err := repo.GrantApproval(t.Context(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(t.Context(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(t.Context(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusCompleted {
+		t.Fatalf("expected completed after approval, got %#v", got)
 	}
 }
 

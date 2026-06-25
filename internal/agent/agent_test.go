@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Lioooooo123/liora/internal/permission"
 	"github.com/Lioooooo123/liora/internal/tools"
 	"github.com/Lioooooo123/liora/internal/trace"
 )
@@ -265,5 +266,31 @@ func TestAgentExecutesMCPTool(t *testing.T) {
 	events := recorder.Events()
 	if len(events) != 1 || events[0].Tool != "mcp" || !strings.Contains(events[0].Output, "mcp output") {
 		t.Fatalf("unexpected MCP trace events %#v", events)
+	}
+}
+
+func TestAgentStopsBeforeStepThatRequiresApproval(t *testing.T) {
+	root := t.TempDir()
+	workspace, err := tools.NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := trace.NewMemoryRecorder()
+	runner := New(workspace, recorder)
+	runner.SetPermissionChecker(permission.Policy{Mode: permission.ModePrompt})
+
+	result, err := runner.Run(t.Context(), `run rm -rf build
+write should-not-exist.txt skipped`)
+	if err == nil {
+		t.Fatal("expected approval error")
+	}
+	if result.Status != StatusWaitingUser {
+		t.Fatalf("expected waiting status, got %#v", result)
+	}
+	if len(recorder.Events()) != 0 {
+		t.Fatalf("expected no tools to run before approval, got %#v", recorder.Events())
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "should-not-exist.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("agent continued after approval request, stat err: %v", statErr)
 	}
 }

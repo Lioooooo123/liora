@@ -245,11 +245,72 @@ func (s *server) handleTask(w http.ResponseWriter, r *http.Request) {
 		s.handleTaskCancel(w, r, taskID)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "approval" {
+		s.handleTaskApproval(w, r, taskID)
+		return
+	}
 	if len(parts) == 3 && parts[1] == "events" && parts[2] == "stream" {
 		s.writeEventStream(w, r, taskID)
 		return
 	}
 	writeError(w, http.StatusNotFound, fmt.Errorf("unknown task route %q", r.URL.Path))
+}
+
+func (s *server) handleTaskApproval(w http.ResponseWriter, r *http.Request, taskID string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		return
+	}
+	var request struct {
+		Decision string `json:"decision"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(request.Decision)) {
+	case "approve", "approved", "yes":
+		if err := s.repo.GrantApproval(r.Context(), taskID); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		_ = s.repo.AppendEvent(r.Context(), taskID, taskpkg.EventPermissionApproved, taskpkg.EventPayload{
+			Message: "Approval granted.",
+			Status:  string(taskpkg.StatusDraft),
+		})
+		task, err := s.repo.Get(r.Context(), taskID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		if s.runner != nil {
+			ctx, cancel := context.WithCancel(context.Background())
+			s.registerRunning(taskID, cancel)
+			go func() {
+				defer s.unregisterRunning(taskID)
+				_ = s.runner.Run(ctx, taskID)
+			}()
+			writeJSON(w, http.StatusAccepted, task)
+			return
+		}
+		writeJSON(w, http.StatusOK, task)
+	case "deny", "denied", "no":
+		if err := s.repo.DenyApproval(r.Context(), taskID, request.Reason); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		s.cancelRunning(taskID)
+		task, err := s.repo.Get(r.Context(), taskID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, task)
+	default:
+		writeError(w, http.StatusBadRequest, errors.New("decision must be approve or deny"))
+	}
 }
 
 func (s *server) handleTaskCancel(w http.ResponseWriter, r *http.Request, taskID string) {
@@ -407,7 +468,10 @@ func (s *server) writeAvailableEvents(ctx context.Context, w http.ResponseWriter
 		fmt.Fprintf(w, "event: %s\n", event.Type)
 		fmt.Fprintf(w, "id: %s\n", event.ID)
 		fmt.Fprintf(w, "data: %s\n\n", event.Payload)
-		if event.Type == taskpkg.EventCompleted || event.Type == taskpkg.EventCancelled || event.Type == taskpkg.EventError {
+		switch event.Type {
+		case taskpkg.EventPermissionApproved:
+			done = false
+		case taskpkg.EventCompleted, taskpkg.EventCancelled, taskpkg.EventError, taskpkg.EventPermissionRequest:
 			done = true
 		}
 	}

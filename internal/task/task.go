@@ -17,32 +17,36 @@ const (
 type EventType string
 
 const (
-	EventTaskCreated      EventType = "task.created"
-	EventPlanning         EventType = "task.planning"
-	EventPlanReady        EventType = "task.plan_ready"
-	EventToolCall         EventType = "tool.call"
-	EventToolResult       EventType = "tool.result"
-	EventSummary          EventType = "task.summary"
-	EventDiff             EventType = "task.diff"
-	EventSandboxRun       EventType = "sandbox.run"
-	EventSandboxWorkspace EventType = "sandbox.workspace"
-	EventPatchApply       EventType = "task.patch_applied"
-	EventError            EventType = "task.error"
-	EventCompleted        EventType = "task.completed"
-	EventCancelled        EventType = "task.cancelled"
+	EventTaskCreated        EventType = "task.created"
+	EventPlanning           EventType = "task.planning"
+	EventPlanReady          EventType = "task.plan_ready"
+	EventToolCall           EventType = "tool.call"
+	EventToolResult         EventType = "tool.result"
+	EventSummary            EventType = "task.summary"
+	EventDiff               EventType = "task.diff"
+	EventSandboxRun         EventType = "sandbox.run"
+	EventSandboxWorkspace   EventType = "sandbox.workspace"
+	EventPatchApply         EventType = "task.patch_applied"
+	EventPermissionRequest  EventType = "permission.requested"
+	EventPermissionApproved EventType = "permission.approved"
+	EventPermissionDenied   EventType = "permission.denied"
+	EventError              EventType = "task.error"
+	EventCompleted          EventType = "task.completed"
+	EventCancelled          EventType = "task.cancelled"
 )
 
 type Task struct {
-	ID          string     `json:"id"`
-	SessionID   string     `json:"session_id,omitempty"`
-	Title       string     `json:"title"`
-	UserInput   string     `json:"user_input"`
-	Natural     bool       `json:"natural"`
-	Status      Status     `json:"status"`
-	Workspace   string     `json:"workspace"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	ID              string     `json:"id"`
+	SessionID       string     `json:"session_id,omitempty"`
+	Title           string     `json:"title"`
+	UserInput       string     `json:"user_input"`
+	Natural         bool       `json:"natural"`
+	Status          Status     `json:"status"`
+	Workspace       string     `json:"workspace"`
+	ApprovalGranted bool       `json:"approval_granted,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
 }
 
 type Event struct {
@@ -101,4 +105,6 @@ type EventPayload struct {
 	Status  string `json:"status,omitempty"`
 	Steps   string `json:"steps,omitempty"`
 	Diff    string `json:"diff,omitempty"`
+	Risk    string `json:"risk,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }

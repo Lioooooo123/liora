@@ -41,11 +41,11 @@ Liora v0.1 是本地 Mac 上的轻量 agent 工坊。
 - 默认执行路径必须有 workspace 限制，文件操作不能越过 workspace。
 - 支持 patch mode：写入先发生在临时副本，再由 apply API 显式落到真实 workspace。
 - 支持 Docker sandbox 配置项，但 v0.1 不要求 Docker 成为默认执行方式。
-- 危险操作审批、权限 UI、长期后台守护的完整安全策略进入 v0.2，不作为 v0.1 结束阻塞。
+- 支持最小权限审批：`LIORA_PERMISSION=prompt` 下危险 shell、非 patch 写操作和 MCP 外部调用会进入 `waiting_user`，可通过 approve/deny API 继续或取消；完整逐步授权 UI 和长期后台守护安全策略进入 v0.2。
 
 ### 5. API 与客户端可用性
 
-- daemon API 覆盖健康检查、创建任务、查询任务、查询事件、SSE、diff、apply、cancel。
+- daemon API 覆盖健康检查、创建任务、查询任务、查询事件、SSE、diff、apply、cancel、approval、session/history。
 - CLI 能启动 daemon，并能通过 smoke script 覆盖核心 API。
 - TUI 可以作为开发入口，但 v0.1 结束不要求精致桌面 UI。
 - UI 最小要求是“能解释状态、展示进度、展示 diff、允许 apply/cancel”；二次元视觉、白板和 Mac 原生体验进入 v0.2。

@@ -13,6 +13,7 @@ import (
 	"github.com/Lioooooo123/liora/internal/daemon"
 	"github.com/Lioooooo123/liora/internal/daemonclient"
 	"github.com/Lioooooo123/liora/internal/llm"
+	"github.com/Lioooooo123/liora/internal/permission"
 	"github.com/Lioooooo123/liora/internal/store"
 	taskpkg "github.com/Lioooooo123/liora/internal/task"
 	"github.com/Lioooooo123/liora/internal/tools"
@@ -286,6 +287,62 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 	}
 }
 
+func TestDaemonSubmitterApprovesAndDeniesWaitingTask(t *testing.T) {
+	root := t.TempDir()
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: ""}))
+	runner.SetPermissionPolicy(permission.Policy{Mode: permission.ModePrompt})
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Runner: runner}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, false)
+	var streamed []string
+
+	result, err := submitter.SubmitStream(t.Context(), "run rm -rf build", func(update tui.StreamUpdate) {
+		streamed = append(streamed, update.Type)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AgentResult.Status != agent.StatusWaitingUser || !containsStreamType(streamed, string(taskpkg.EventPermissionRequest)) {
+		t.Fatalf("expected waiting approval result=%#v streamed=%#v", result.AgentResult, streamed)
+	}
+	output, handled, err := submitter.HandleCommand(t.Context(), "/approve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(output, "Approved task") {
+		t.Fatalf("unexpected approve output handled=%v output=%q", handled, output)
+	}
+	waitUntil(t, 3*time.Second, func() bool {
+		tasks, err := repo.List(t.Context(), 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(tasks) == 1 && tasks[0].Status == taskpkg.StatusCompleted
+	})
+
+	second, err := repo.Create(t.Context(), taskpkg.CreateRequest{Workspace: root, Prompt: "run rm -rf other", Natural: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	submitter.rememberTask(second.ID)
+	output, handled, err = submitter.HandleCommand(t.Context(), "/deny")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(output, "Denied task") {
+		t.Fatalf("unexpected deny output handled=%v output=%q", handled, output)
+	}
+	denied, err := repo.Get(t.Context(), second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if denied.Status != taskpkg.StatusCancelled {
+		t.Fatalf("expected denied task to be cancelled, got %#v", denied)
+	}
+}
+
 func findOnlyTaskID(t *testing.T, repo *taskpkg.Repository) string {
 	t.Helper()
 	tasks, err := repo.List(t.Context(), 10)
@@ -323,4 +380,16 @@ func containsStreamType(events []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func waitUntil(t *testing.T, timeout time.Duration, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition was not met before timeout")
 }

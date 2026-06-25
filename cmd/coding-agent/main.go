@@ -14,6 +14,7 @@ import (
 	"github.com/Lioooooo123/liora/internal/daemonclient"
 	"github.com/Lioooooo123/liora/internal/llm"
 	mcppkg "github.com/Lioooooo123/liora/internal/mcp"
+	"github.com/Lioooooo123/liora/internal/permission"
 	"github.com/Lioooooo123/liora/internal/runtime"
 	"github.com/Lioooooo123/liora/internal/sandbox"
 	"github.com/Lioooooo123/liora/internal/store"
@@ -100,6 +101,7 @@ func main() {
 	}
 	turnRuntime := runtime.FromWorkspace(workspace, planner, persistentStore)
 	turnRuntime.SetSandbox(sandboxExecutor)
+	turnRuntime.SetPermissionChecker(permissionPolicy(false))
 
 	if *interactive || defaultInteractive {
 		submitter := tui.Submitter(turnRuntime)
@@ -203,7 +205,16 @@ func newTaskRunner(repo *taskpkg.Repository, planner *llm.Planner, executor sand
 	runner := taskpkg.NewRunner(repo, planner)
 	runner.SetSandbox(executor)
 	runner.SetPatchMode(patchMode)
+	runner.SetPermissionPolicy(permissionPolicy(patchMode))
 	return runner
+}
+
+func permissionPolicy(patchMode bool) permission.Policy {
+	mode := permission.ModeAuto
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("LIORA_PERMISSION")), string(permission.ModePrompt)) {
+		mode = permission.ModePrompt
+	}
+	return permission.Policy{Mode: mode, AllowWritesInPatchMode: patchMode}
 }
 
 func truthyEnv(name string) bool {

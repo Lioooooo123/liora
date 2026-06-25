@@ -141,3 +141,11 @@
 - daemon 新增 `GET/POST /v1/sessions`、`GET /v1/sessions/{id}`、`GET /v1/sessions/{id}/messages`、`GET /v1/sessions/{id}/tasks`，并同步扩展 `internal/daemonclient` SDK。
 - daemon-backed TUI 新增 `/sessions`、`/session`、`/resume-session <session_id>`。两轮以上输入会自动复用同一个 session；新 TUI 进程可通过 `/resume-session` 重新绑定旧 session。
 - 当前 transcript 只持久化用户消息，assistant summary/tool event 仍在 task_events 中。这个拆分能满足 v0.1 恢复和客户端复用，但后续若要做完整聊天历史搜索，应把 assistant answer、tool timeline projection 或 transcript snapshot 也写入 session 层。
+
+## 2026-06-26 Permission Prompt Baseline
+
+- 新增 `internal/permission`，通过 `LIORA_PERMISSION=prompt` 启用审批策略；默认仍是 `auto`，避免破坏脚本模式和本地快速开发。
+- prompt 模式下，危险 shell、非 patch mode 写操作、MCP 外部调用会在执行前返回 permission required，task runner 将任务置为 `waiting_user` 并写入 `permission.requested` 事件。
+- daemon 新增 `POST /v1/tasks/{id}/approval`，`approve` 会给 task 写入 `approval_granted` 并重新异步运行该 task，`deny` 会把 task 取消并写入 `permission.denied` 事件。
+- daemon-backed TUI 新增 `/approve`、`/deny` 命令，处理最近 task 的审批。当前 line-based TUI 只能显示批准/拒绝结果，批准后的继续执行在 daemon 中进行；更自然的“批准后继续流式展示”需要全屏异步 TUI 的命令通道。
+- 当前授权粒度是 task 级，一旦批准，该 task 后续需要审批的步骤都会继续执行。这是为了用最小实现先打通 daemon/session/task/event/API 结构；后续 Mac 客户端或 Bubble Tea TUI 应升级为逐步授权队列。

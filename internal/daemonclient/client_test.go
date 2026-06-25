@@ -10,6 +10,7 @@ import (
 
 	"github.com/Lioooooo123/liora/internal/daemon"
 	"github.com/Lioooooo123/liora/internal/llm"
+	"github.com/Lioooooo123/liora/internal/permission"
 	"github.com/Lioooooo123/liora/internal/store"
 	"github.com/Lioooooo123/liora/internal/task"
 	"github.com/Lioooooo123/liora/internal/tools"
@@ -209,6 +210,35 @@ func TestClientCancelRunningTask(t *testing.T) {
 	case <-executor.done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("cancel did not stop shell")
+	}
+}
+
+func TestClientApprovesWaitingTask(t *testing.T) {
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	runner := task.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: ""}))
+	runner.SetPermissionPolicy(permission.Policy{Mode: permission.ModePrompt})
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Runner: runner}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	created, err := client.CreateTask(t.Context(), task.CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "run rm -rf build",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Task.Status != task.StatusWaitingUser {
+		t.Fatalf("expected waiting task, got %#v", created.Task)
+	}
+	approved, err := client.Approve(t.Context(), created.Task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !approved.ApprovalGranted {
+		t.Fatalf("expected approved task, got %#v", approved)
 	}
 }
 

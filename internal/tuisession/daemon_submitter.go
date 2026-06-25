@@ -48,11 +48,15 @@ func (s *DaemonSubmitter) SubmitStream(ctx context.Context, input string, onEven
 		return tui.TurnResult{}, err
 	}
 	s.rememberSession(created.Task.SessionID)
-	s.setCurrentTask(created.Task.ID)
-	defer s.clearCurrentTask(created.Task.ID)
+	return s.streamTask(ctx, created.Task.ID, onEvent)
+}
+
+func (s *DaemonSubmitter) streamTask(ctx context.Context, taskID string, onEvent func(tui.StreamUpdate)) (tui.TurnResult, error) {
+	s.setCurrentTask(taskID)
+	defer s.clearCurrentTask(taskID)
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
-	stream, errs := s.client.StreamEvents(streamCtx, created.Task.ID)
+	stream, errs := s.client.StreamEvents(streamCtx, taskID)
 	result := tui.TurnResult{AgentResult: agent.Result{Status: agent.StatusCompleted}}
 	var runErr error
 	terminalError := false
@@ -65,11 +69,11 @@ func (s *DaemonSubmitter) SubmitStream(ctx context.Context, input string, onEven
 		}
 		if update.Type == taskpkg.EventDiff {
 			if payload, err := eventPayload(update.Event); err == nil {
-				s.rememberDiff(created.Task.ID, payload.Diff)
+				s.rememberDiff(taskID, payload.Diff)
 			}
 		}
 		mergeStreamEvent(&result, update)
-		if update.Type == taskpkg.EventCompleted || update.Type == taskpkg.EventCancelled || update.Type == taskpkg.EventError {
+		if update.Type == taskpkg.EventCompleted || update.Type == taskpkg.EventCancelled || update.Type == taskpkg.EventError || update.Type == taskpkg.EventPermissionRequest {
 			terminalError = update.Type == taskpkg.EventError
 			cancelStream()
 			break
@@ -120,6 +124,11 @@ func mergeStreamEvent(result *tui.TurnResult, update daemonclient.StreamEvent) {
 	case taskpkg.EventCancelled:
 		result.AgentResult.Status = agent.StatusFailed
 		result.AgentResult.Summary = "cancelled"
+	case taskpkg.EventPermissionRequest:
+		result.AgentResult.Status = agent.StatusWaitingUser
+		if strings.TrimSpace(result.AgentResult.Summary) == "" {
+			result.AgentResult.Summary = "waiting for approval"
+		}
 	case taskpkg.EventCompleted:
 		result.AgentResult.Status = agent.StatusCompleted
 	}
@@ -130,6 +139,10 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 	switch line {
 	case "/cancel":
 		return s.cancelCurrent(ctx)
+	case "/approve":
+		return s.approveLast(ctx)
+	case "/deny":
+		return s.denyLast(ctx)
 	case "/apply":
 		return s.applyLast(ctx)
 	case "/tasks":
@@ -155,6 +168,30 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		}
 		return "", false, nil
 	}
+}
+
+func (s *DaemonSubmitter) approveLast(ctx context.Context) (string, bool, error) {
+	taskID := s.lastTask()
+	if taskID == "" {
+		return "No daemon task to approve.", true, nil
+	}
+	task, err := s.client.Approve(ctx, taskID)
+	if err != nil {
+		return "", true, err
+	}
+	return "Approved task " + task.ID + ". It is continuing in the daemon.", true, nil
+}
+
+func (s *DaemonSubmitter) denyLast(ctx context.Context) (string, bool, error) {
+	taskID := s.lastTask()
+	if taskID == "" {
+		return "No daemon task to deny.", true, nil
+	}
+	task, err := s.client.Deny(ctx, taskID, "denied from TUI")
+	if err != nil {
+		return "", true, err
+	}
+	return "Denied task " + task.ID + ".", true, nil
 }
 
 func (s *DaemonSubmitter) listSessions(ctx context.Context) (string, bool, error) {
@@ -375,6 +412,12 @@ func (s *DaemonSubmitter) lastPatch() (string, string) {
 	return s.lastTaskID, s.lastDiff
 }
 
+func (s *DaemonSubmitter) lastTask() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastTaskID
+}
+
 func (s *DaemonSubmitter) rememberDiff(taskID string, diff string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -400,6 +443,10 @@ func formatReplayEvent(eventType taskpkg.EventType, payload taskpkg.EventPayload
 		if payload.Message != "" {
 			return string(eventType) + ": " + payload.Message
 		}
+	case taskpkg.EventPermissionRequest:
+		return strings.TrimSpace(string(eventType) + ": " + payload.Tool + " " + payload.Input + " " + payload.Risk + " " + payload.Reason)
+	case taskpkg.EventPermissionApproved, taskpkg.EventPermissionDenied:
+		return string(eventType) + ": " + payload.Message
 	}
 	if payload.Message != "" {
 		return string(eventType) + ": " + payload.Message

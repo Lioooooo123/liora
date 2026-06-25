@@ -12,6 +12,7 @@ import (
 
 	"github.com/Lioooooo123/liora/internal/apply"
 	"github.com/Lioooooo123/liora/internal/llm"
+	"github.com/Lioooooo123/liora/internal/permission"
 	"github.com/Lioooooo123/liora/internal/store"
 	taskpkg "github.com/Lioooooo123/liora/internal/task"
 	"github.com/Lioooooo123/liora/internal/tools"
@@ -435,6 +436,109 @@ func TestServerCancelStopsRunningAsyncTask(t *testing.T) {
 	}
 	if got.Status != taskpkg.StatusCancelled {
 		t.Fatalf("cancelled async task should stay cancelled, got %#v", got)
+	}
+}
+
+func TestServerApprovesWaitingPermissionTask(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: ""}))
+	runner.SetPermissionPolicy(permission.Policy{Mode: permission.ModePrompt})
+	server := httptest.NewServer(NewServer(Config{Repository: repo, Runner: runner}))
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/v1/tasks", "application/json", strings.NewReader(`{"workspace":`+quote(t.TempDir())+`,"prompt":"run rm -rf build","natural":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("unexpected create status %d", resp.StatusCode)
+	}
+	var created taskpkg.CreateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Task.Status != taskpkg.StatusWaitingUser {
+		t.Fatalf("expected waiting task, got %#v", created.Task)
+	}
+
+	stream, err := http.Get(server.URL + "/v1/tasks/" + created.Task.ID + "/events/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamData, err := io.ReadAll(stream.Body)
+	_ = stream.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(streamData), "event: permission.requested") {
+		t.Fatalf("expected permission stream event, got:\n%s", string(streamData))
+	}
+
+	approve, err := http.Post(server.URL+"/v1/tasks/"+created.Task.ID+"/approval", "application/json", strings.NewReader(`{"decision":"approve"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer approve.Body.Close()
+	if approve.StatusCode != http.StatusAccepted {
+		t.Fatalf("unexpected approve status %d", approve.StatusCode)
+	}
+	waitUntil(t, 3*time.Second, func() bool {
+		task, err := repo.Get(t.Context(), created.Task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return task.Status == taskpkg.StatusCompleted
+	})
+}
+
+func TestServerDeniesWaitingPermissionTask(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	task, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "run rm -rf build",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), task.ID, taskpkg.StatusWaitingUser); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(NewServer(Config{Repository: repo}))
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/v1/tasks/"+task.ID+"/approval", "application/json", strings.NewReader(`{"decision":"deny","reason":"too risky"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected deny status %d", resp.StatusCode)
+	}
+	cancelled, err := repo.Get(t.Context(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != taskpkg.StatusCancelled {
+		t.Fatalf("expected cancelled task, got %#v", cancelled)
+	}
+	events, err := repo.Events(t.Context(), task.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasEvent(events, taskpkg.EventPermissionDenied) {
+		t.Fatalf("expected permission denied event, got %#v", events)
 	}
 }
 

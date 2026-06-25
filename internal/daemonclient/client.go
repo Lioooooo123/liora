@@ -199,6 +199,26 @@ func (c *Client) Cancel(ctx context.Context, taskID string, reason string) (task
 	return result, nil
 }
 
+func (c *Client) Approve(ctx context.Context, taskID string) (task.Task, error) {
+	return c.submitApproval(ctx, taskID, "approve", "")
+}
+
+func (c *Client) Deny(ctx context.Context, taskID string, reason string) (task.Task, error) {
+	return c.submitApproval(ctx, taskID, "deny", reason)
+}
+
+func (c *Client) submitApproval(ctx context.Context, taskID string, decision string, reason string) (task.Task, error) {
+	var result task.Task
+	body := struct {
+		Decision string `json:"decision"`
+		Reason   string `json:"reason,omitempty"`
+	}{Decision: decision, Reason: reason}
+	if err := c.postJSON(ctx, "/v1/tasks/"+url.PathEscape(taskID)+"/approval", body, &result, http.StatusOK, http.StatusAccepted); err != nil {
+		return task.Task{}, err
+	}
+	return result, nil
+}
+
 func (c *Client) StreamEvents(ctx context.Context, taskID string) (<-chan StreamEvent, <-chan error) {
 	events := make(chan StreamEvent)
 	errs := make(chan error, 1)

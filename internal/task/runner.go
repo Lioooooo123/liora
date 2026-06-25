@@ -9,6 +9,7 @@ import (
 
 	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/llm"
+	"github.com/Lioooooo123/liora/internal/permission"
 	"github.com/Lioooooo123/liora/internal/runtime"
 	"github.com/Lioooooo123/liora/internal/sandbox"
 	"github.com/Lioooooo123/liora/internal/tools"
@@ -20,10 +21,11 @@ type Runner struct {
 	planner    *llm.Planner
 	sandboxRun sandbox.Executor
 	patchMode  bool
+	permission permission.Policy
 }
 
 func NewRunner(repo *Repository, planner *llm.Planner) *Runner {
-	return &Runner{repo: repo, planner: planner}
+	return &Runner{repo: repo, planner: planner, permission: permission.Policy{Mode: permission.ModeAuto}}
 }
 
 func (r *Runner) SetSandbox(executor sandbox.Executor) {
@@ -32,6 +34,10 @@ func (r *Runner) SetSandbox(executor sandbox.Executor) {
 
 func (r *Runner) SetPatchMode(enabled bool) {
 	r.patchMode = enabled
+}
+
+func (r *Runner) SetPermissionPolicy(policy permission.Policy) {
+	r.permission = policy
 }
 
 func (r *Runner) Run(ctx context.Context, taskID string) error {
@@ -45,6 +51,13 @@ func (r *Runner) Run(ctx context.Context, taskID string) error {
 	_ = r.repo.AppendEvent(ctx, task.ID, EventPlanning, EventPayload{Message: "Planning task"})
 
 	result, err := r.runTask(ctx, task)
+	var permissionErr *permission.RequiredError
+	if errors.As(err, &permissionErr) {
+		if waitErr := r.waitForPermission(ctx, task.ID, permissionErr.Request); waitErr != nil {
+			return waitErr
+		}
+		return nil
+	}
 	if isContextCancelled(ctx, err) && r.isTaskCancelled(task.ID) {
 		return err
 	}
@@ -106,6 +119,7 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 			return runtimeResult{}, err
 		}
 		turnRuntime.SetSandbox(r.sandboxRun)
+		turnRuntime.SetPermissionChecker(r.permissionChecker(task))
 		recorder := newRepositoryRecorder(ctx, r, task.ID)
 		planReadyEmitted := false
 		result, err := turnRuntime.SubmitWithOptions(ctx, task.UserInput, runtime.SubmitOptions{
@@ -132,6 +146,7 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 	}
 	recorder := newRepositoryRecorder(ctx, r, task.ID)
 	runner := agent.New(workspace, recorder)
+	runner.SetPermissionChecker(r.permissionChecker(task))
 	if r.sandboxRun != nil {
 		runner.SetShellExecutor(r.sandboxRun)
 	}
@@ -141,6 +156,13 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 		summary:      result.Summary,
 		diff:         result.Diff,
 	}, err
+}
+
+func (r *Runner) permissionChecker(task Task) permission.Checker {
+	policy := r.permission
+	policy.Approved = policy.Approved || task.ApprovalGranted
+	policy.AllowWritesInPatchMode = r.patchMode
+	return policy
 }
 
 func containsRunStep(steps string) bool {
@@ -201,6 +223,21 @@ func (r *Runner) fail(ctx context.Context, taskID string, err error) error {
 		return fmt.Errorf("%w; also failed updating task status: %v", err, updateErr)
 	}
 	_ = r.repo.AppendEvent(ctx, taskID, EventError, EventPayload{Message: err.Error(), Status: string(StatusFailed)})
+	return nil
+}
+
+func (r *Runner) waitForPermission(ctx context.Context, taskID string, request permission.Request) error {
+	if updateErr := r.repo.UpdateStatus(ctx, taskID, StatusWaitingUser); updateErr != nil {
+		return updateErr
+	}
+	_ = r.repo.AppendEvent(ctx, taskID, EventPermissionRequest, EventPayload{
+		Message: "Approval required before continuing.",
+		Tool:    request.Tool,
+		Input:   request.Input,
+		Status:  string(StatusWaitingUser),
+		Risk:    request.Risk,
+		Reason:  request.Reason,
+	})
 	return nil
 }
 

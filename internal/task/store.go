@@ -51,20 +51,21 @@ func (r *Repository) Create(ctx context.Context, request CreateRequest) (Task, e
 		return Task{}, err
 	}
 	task := Task{
-		ID:        newID("task"),
-		SessionID: sessionID,
-		Title:     titleFromPrompt(prompt),
-		UserInput: prompt,
-		Natural:   request.Natural,
-		Status:    StatusDraft,
-		Workspace: workspace,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:              newID("task"),
+		SessionID:       sessionID,
+		Title:           titleFromPrompt(prompt),
+		UserInput:       prompt,
+		Natural:         request.Natural,
+		Status:          StatusDraft,
+		Workspace:       workspace,
+		ApprovalGranted: false,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO tasks (id, session_id, title, user_input, natural, status, workspace, created_at, updated_at, completed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
-	`, task.ID, task.SessionID, task.Title, task.UserInput, boolInt(task.Natural), string(task.Status), task.Workspace, formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
+		INSERT INTO tasks (id, session_id, title, user_input, natural, status, workspace, approval_granted, created_at, updated_at, completed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+	`, task.ID, task.SessionID, task.Title, task.UserInput, boolInt(task.Natural), string(task.Status), task.Workspace, boolInt(task.ApprovalGranted), formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
 	if err != nil {
 		return Task{}, err
 	}
@@ -93,16 +94,17 @@ func (r *Repository) Get(ctx context.Context, id string) (Task, error) {
 	var task Task
 	var createdAt, updatedAt string
 	var completedAt sql.NullString
-	var natural int
+	var natural, approvalGranted int
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, session_id, title, user_input, natural, status, workspace, created_at, updated_at, completed_at
+		SELECT id, session_id, title, user_input, natural, status, workspace, approval_granted, created_at, updated_at, completed_at
 		FROM tasks
 		WHERE id = ?
-	`, id).Scan(&task.ID, &task.SessionID, &task.Title, &task.UserInput, &natural, &task.Status, &task.Workspace, &createdAt, &updatedAt, &completedAt)
+	`, id).Scan(&task.ID, &task.SessionID, &task.Title, &task.UserInput, &natural, &task.Status, &task.Workspace, &approvalGranted, &createdAt, &updatedAt, &completedAt)
 	if err != nil {
 		return Task{}, err
 	}
 	task.Natural = natural != 0
+	task.ApprovalGranted = approvalGranted != 0
 	task.CreatedAt = parseTime(createdAt)
 	task.UpdatedAt = parseTime(updatedAt)
 	if completedAt.Valid && completedAt.String != "" {
@@ -117,7 +119,7 @@ func (r *Repository) List(ctx context.Context, limit int) ([]Task, error) {
 		limit = 50
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, session_id, title, user_input, natural, status, workspace, created_at, updated_at, completed_at
+		SELECT id, session_id, title, user_input, natural, status, workspace, approval_granted, created_at, updated_at, completed_at
 		FROM tasks
 		ORDER BY updated_at DESC, id DESC
 		LIMIT ?
@@ -138,7 +140,7 @@ func (r *Repository) ListBySession(ctx context.Context, sessionID string, limit 
 		limit = 50
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, session_id, title, user_input, natural, status, workspace, created_at, updated_at, completed_at
+		SELECT id, session_id, title, user_input, natural, status, workspace, approval_granted, created_at, updated_at, completed_at
 		FROM tasks
 		WHERE session_id = ?
 		ORDER BY updated_at DESC, id DESC
@@ -297,6 +299,30 @@ func (r *Repository) UpdateStatus(ctx context.Context, id string, status Status)
 	return err
 }
 
+func (r *Repository) GrantApproval(ctx context.Context, id string) error {
+	now := time.Now().UTC()
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE tasks
+		SET approval_granted = 1, status = ?, updated_at = ?, completed_at = NULL
+		WHERE id = ?
+	`, string(StatusDraft), formatTime(now), id)
+	return err
+}
+
+func (r *Repository) DenyApproval(ctx context.Context, id string, reason string) error {
+	if err := r.UpdateStatus(ctx, id, StatusCancelled); err != nil {
+		return err
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "permission denied"
+	}
+	return r.AppendEvent(ctx, id, EventPermissionDenied, EventPayload{
+		Message: reason,
+		Status:  string(StatusCancelled),
+	})
+}
+
 func (r *Repository) Cancel(ctx context.Context, id string, reason string) error {
 	if err := r.UpdateStatus(ctx, id, StatusCancelled); err != nil {
 		return err
@@ -417,11 +443,12 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		var task Task
 		var createdAt, updatedAt string
 		var completedAt sql.NullString
-		var natural int
-		if err := rows.Scan(&task.ID, &task.SessionID, &task.Title, &task.UserInput, &natural, &task.Status, &task.Workspace, &createdAt, &updatedAt, &completedAt); err != nil {
+		var natural, approvalGranted int
+		if err := rows.Scan(&task.ID, &task.SessionID, &task.Title, &task.UserInput, &natural, &task.Status, &task.Workspace, &approvalGranted, &createdAt, &updatedAt, &completedAt); err != nil {
 			return nil, err
 		}
 		task.Natural = natural != 0
+		task.ApprovalGranted = approvalGranted != 0
 		task.CreatedAt = parseTime(createdAt)
 		task.UpdatedAt = parseTime(updatedAt)
 		if completedAt.Valid && completedAt.String != "" {

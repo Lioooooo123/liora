@@ -246,6 +246,7 @@ func initDB(db *sql.DB) error {
 			natural INTEGER NOT NULL DEFAULT 1,
 			status TEXT NOT NULL,
 			workspace TEXT NOT NULL,
+			approval_granted INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			completed_at TEXT
@@ -291,6 +292,9 @@ func initDB(db *sql.DB) error {
 		return err
 	}
 	if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN approval_granted INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
 		return err
 	}
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_tasks_session_updated ON tasks(session_id, updated_at)`); err != nil {

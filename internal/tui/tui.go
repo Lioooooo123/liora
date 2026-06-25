@@ -109,7 +109,7 @@ func RenderWelcome(config Config) string {
 		labelStyle.Render("Workspace") + " " + config.Workspace,
 		labelStyle.Render("Model") + " " + model,
 	}, "\n")
-	commands := mutedStyle.Render("Commands  /help  /tools  /tasks  /sessions  /last  /resume  /resume-session  /apply  /cancel  /exit")
+	commands := mutedStyle.Render("Commands  /help  /tools  /tasks  /sessions  /last  /resume  /resume-session  /approve  /deny  /apply  /cancel  /exit")
 	return header + "\n" + status + "\n\n" + commands + "\n"
 }
 
@@ -130,7 +130,7 @@ func (a *App) Run(ctx context.Context, input io.Reader, output io.Writer) error 
 			fmt.Fprintln(output, "Bye")
 			return nil
 		case "/help":
-			fmt.Fprintln(output, "Type a coding request in natural language. Commands: /tools, /tasks, /sessions, /last, /resume <task_id>, /resume-session <session_id>, /apply, /cancel, /goal, /memory, /skills, /skill, /mcp, /exit.")
+			fmt.Fprintln(output, "Type a coding request in natural language. Commands: /tools, /tasks, /sessions, /last, /resume <task_id>, /resume-session <session_id>, /approve, /deny, /apply, /cancel, /goal, /memory, /skills, /skill, /mcp, /exit.")
 			continue
 		}
 		if strings.HasPrefix(line, "/") && a.config.Commands != nil {
@@ -195,6 +195,20 @@ func RenderStreamUpdate(output io.Writer, update StreamUpdate) {
 			renderSection(output, "Diff", strings.TrimRight(payload.Diff, "\n"))
 			renderSection(output, "Next", "Review the diff before applying changes.\nCommands: /apply to confirm, /cancel to stop a running task.")
 		}
+	case "permission.requested":
+		body := strings.TrimSpace(payload.Tool + " " + payload.Input)
+		if payload.Risk != "" {
+			body += "\nRisk: " + payload.Risk
+		}
+		if payload.Reason != "" {
+			body += "\nReason: " + payload.Reason
+		}
+		body += "\nCommands: /approve to continue, /deny to cancel."
+		renderSection(output, "Approval", body)
+	case "permission.approved":
+		renderSection(output, "Approval", "approved")
+	case "permission.denied":
+		renderSection(output, "Approval", "denied")
 	case "task.completed", "task.cancelled":
 		status := update.Type
 		if payload.Status != "" {
@@ -256,6 +270,8 @@ type eventPayload struct {
 	Status  string `json:"status,omitempty"`
 	Steps   string `json:"steps,omitempty"`
 	Diff    string `json:"diff,omitempty"`
+	Risk    string `json:"risk,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 func decodeEventPayload(payloadJSON string) eventPayload {

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Lioooooo123/liora/internal/permission"
 	"github.com/Lioooooo123/liora/internal/tools"
 	"github.com/Lioooooo123/liora/internal/trace"
 )
@@ -14,8 +15,9 @@ import (
 type Status string
 
 const (
-	StatusCompleted Status = "completed"
-	StatusFailed    Status = "failed"
+	StatusCompleted   Status = "completed"
+	StatusFailed      Status = "failed"
+	StatusWaitingUser Status = "waiting_user"
 )
 
 type Result struct {
@@ -29,6 +31,7 @@ type Agent struct {
 	recorder  trace.Recorder
 	mcp       MCPExecutor
 	shell     ShellExecutor
+	checker   permission.Checker
 }
 
 type MCPExecutor interface {
@@ -51,6 +54,10 @@ func (a *Agent) SetShellExecutor(executor ShellExecutor) {
 	a.shell = executor
 }
 
+func (a *Agent) SetPermissionChecker(checker permission.Checker) {
+	a.checker = checker
+}
+
 func (a *Agent) Run(ctx context.Context, prompt string) (Result, error) {
 	steps := parseSteps(prompt)
 	if len(steps) == 0 {
@@ -63,6 +70,13 @@ func (a *Agent) Run(ctx context.Context, prompt string) (Result, error) {
 		case <-ctx.Done():
 			return Result{Status: StatusFailed}, ctx.Err()
 		default:
+		}
+		if err := a.checkPermission(ctx, step); err != nil {
+			return Result{
+				Status:  StatusWaitingUser,
+				Summary: fmt.Sprintf("waiting for approval at step %d/%d: %s", i+1, len(steps), step.Raw),
+				Diff:    latestDiff,
+			}, err
 		}
 		output, diff, err := a.execute(ctx, step)
 		if diff != "" {
@@ -100,6 +114,16 @@ func (a *Agent) Run(ctx context.Context, prompt string) (Result, error) {
 		Summary: completionSummary(len(steps)),
 		Diff:    latestDiff,
 	}, nil
+}
+
+func (a *Agent) checkPermission(ctx context.Context, step Step) error {
+	if a.checker == nil {
+		return nil
+	}
+	return a.checker.Check(ctx, permission.Request{
+		Tool:  step.Tool,
+		Input: strings.Join(step.Args, " "),
+	})
 }
 
 func (a *Agent) execute(ctx context.Context, step Step) (output string, diff string, err error) {

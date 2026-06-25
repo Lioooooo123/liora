@@ -10,6 +10,7 @@ import (
 	"github.com/Lioooooo123/liora/internal/capabilities"
 	"github.com/Lioooooo123/liora/internal/llm"
 	mcppkg "github.com/Lioooooo123/liora/internal/mcp"
+	"github.com/Lioooooo123/liora/internal/permission"
 	"github.com/Lioooooo123/liora/internal/sandbox"
 	"github.com/Lioooooo123/liora/internal/store"
 	"github.com/Lioooooo123/liora/internal/tools"
@@ -22,6 +23,7 @@ type Runtime struct {
 	planner   *llm.Planner
 	store     *store.Store
 	sandbox   sandbox.Executor
+	checker   permission.Checker
 }
 
 type SubmitOptions struct {
@@ -47,6 +49,10 @@ func FromWorkspace(workspace *tools.Workspace, planner *llm.Planner, stores ...*
 
 func (r *Runtime) SetSandbox(executor sandbox.Executor) {
 	r.sandbox = executor
+}
+
+func (r *Runtime) SetPermissionChecker(checker permission.Checker) {
+	r.checker = checker
 }
 
 func (r *Runtime) Submit(ctx context.Context, input string) (tui.TurnResult, error) {
@@ -78,6 +84,9 @@ func (r *Runtime) SubmitWithOptions(ctx context.Context, input string, options S
 	runner := agent.New(r.workspace, recorder)
 	if r.sandbox != nil {
 		runner.SetShellExecutor(r.sandbox)
+	}
+	if r.checker != nil {
+		runner.SetPermissionChecker(r.checker)
 	}
 	if manager, err := r.mcpManager(); err == nil {
 		runner.SetMCP(manager)

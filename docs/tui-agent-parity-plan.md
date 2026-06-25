@@ -103,9 +103,11 @@ Workspace / Docker / MCP / LLM Providers
 - 已在 daemon-backed session 层支持 `/apply` 调用 apply API。
 - 已在 daemon-backed session 层支持 `/tasks`、`/last`、`/resume <task_id>` 查询和回放 task/event 历史。
 - 已新增 session/message SQLite 模型与 daemon API，并在 daemon-backed TUI 中支持 `/sessions`、`/session`、`/resume-session <session_id>`。
+- 已新增 `LIORA_PERMISSION=prompt` 权限策略基线，危险 shell、非 patch 写操作和 MCP 外部调用会进入 `waiting_user`，daemon API 和 TUI 支持 `/approve`、`/deny` 继续或拒绝。
 - 待做：line-based TUI 当前仍会在任务运行期间阻塞输入，真正的运行中快捷键取消需要 Bubble Tea/异步输入层。
 - 待做：diff 出现后的动作区需要升级为更明确的交互控件，而不是只依赖用户手输 `/apply`。
 - 待做：当前 session transcript 只直接保存用户消息，assistant/tool 历史仍需要从 task_events 投影，后续需要更完整的 transcript model。
+- 待做：当前 approval 是 task 级授权，不是逐步授权弹窗；全屏 TUI / Mac 客户端需要把 tool permission 做成可审查队列。
 
 当前实现仍是 line-based TUI，不是 Bubble Tea 全屏 UI。它已经把任务执行链路迁到 daemon/SSE，可作为下一步全屏 TUI 的数据通路验证。
 
