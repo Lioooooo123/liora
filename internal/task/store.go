@@ -103,6 +103,20 @@ func (r *Repository) UpdateStatus(ctx context.Context, id string, status Status)
 	return err
 }
 
+func (r *Repository) Cancel(ctx context.Context, id string, reason string) error {
+	if err := r.UpdateStatus(ctx, id, StatusCancelled); err != nil {
+		return err
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "cancelled"
+	}
+	return r.AppendEvent(ctx, id, EventCancelled, EventPayload{
+		Message: reason,
+		Status:  string(StatusCancelled),
+	})
+}
+
 func (r *Repository) AppendEvent(ctx context.Context, taskID string, eventType EventType, payload EventPayload) error {
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {

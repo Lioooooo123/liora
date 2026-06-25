@@ -193,6 +193,53 @@ func TestEventStreamWaitsForNewEventsUntilTaskCompletes(t *testing.T) {
 	}
 }
 
+func TestServerCancelsTask(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	task, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "long task",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(NewServer(Config{Repository: repo}))
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/v1/tasks/"+task.ID+"/cancel", "application/json", strings.NewReader(`{"reason":"user clicked stop"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected cancel status %d", resp.StatusCode)
+	}
+	var cancelled taskpkg.Task
+	if err := json.NewDecoder(resp.Body).Decode(&cancelled); err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != taskpkg.StatusCancelled {
+		t.Fatalf("unexpected cancelled task %#v", cancelled)
+	}
+	stream, err := http.Get(server.URL + "/v1/tasks/" + task.ID + "/events/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Body.Close()
+	data, err := io.ReadAll(stream.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "event: task.cancelled") || !strings.Contains(string(data), "user clicked stop") {
+		t.Fatalf("unexpected cancel stream:\n%s", string(data))
+	}
+}
+
 func quote(value string) string {
 	data, _ := json.Marshal(value)
 	return string(data)

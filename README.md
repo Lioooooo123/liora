@@ -328,6 +328,14 @@ curl http://127.0.0.1:18080/v1/tasks/<task-id>/apply \
 
 `/apply` 会校验 patch 路径不能越过 workspace，并写入 `task.patch_applied` 事件。
 
+取消任务：
+
+```sh
+curl http://127.0.0.1:18080/v1/tasks/<task-id>/cancel \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":"user stopped task"}'
+```
+
 当前 v0.1 API：
 
 ```text
@@ -339,6 +347,7 @@ GET  /v1/tasks/{id}/events
 GET  /v1/tasks/{id}/events/stream
 GET  /v1/tasks/{id}/diff
 POST /v1/tasks/{id}/apply
+POST /v1/tasks/{id}/cancel
 ```
 
 ## 测试

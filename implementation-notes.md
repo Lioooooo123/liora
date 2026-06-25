@@ -37,3 +37,8 @@
 
 - `/v1/tasks/{id}/events/stream` 从一次性输出改成轮询 SQLite 事件表，按 event id 去重输出，直到看到 `task.completed`、`task.cancelled` 或 `task.error`。
 - 当前实现是轻量轮询，优点是简单稳定、无需引入消息总线；后续任务量上来后可以替换为内存 pub/sub 或 SQLite update hook。
+
+## 2026-06-25 Task Cancel API
+
+- 新增 `POST /v1/tasks/{id}/cancel`，会把任务状态更新为 `cancelled` 并写入 `task.cancelled` 事件。
+- 当前取消是持久化状态和事件层能力，还没有中断已经运行中的 goroutine 或 shell 进程；后续需要 runner registry 保存 cancel func，并让 shell executor 继承可取消 context。

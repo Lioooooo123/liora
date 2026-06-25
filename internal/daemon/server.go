@@ -126,11 +126,39 @@ func (s *server) handleTask(w http.ResponseWriter, r *http.Request) {
 		s.handleTaskApply(w, r, taskID)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "cancel" {
+		s.handleTaskCancel(w, r, taskID)
+		return
+	}
 	if len(parts) == 3 && parts[1] == "events" && parts[2] == "stream" {
 		s.writeEventStream(w, r, taskID)
 		return
 	}
 	writeError(w, http.StatusNotFound, fmt.Errorf("unknown task route %q", r.URL.Path))
+}
+
+func (s *server) handleTaskCancel(w http.ResponseWriter, r *http.Request, taskID string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		return
+	}
+	var request struct {
+		Reason string `json:"reason"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&request)
+	}
+	if err := s.repo.Cancel(r.Context(), taskID, request.Reason); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	task, err := s.repo.Get(r.Context(), taskID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
 }
 
 func (s *server) handleTaskDiff(w http.ResponseWriter, r *http.Request, taskID string) {
