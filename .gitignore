@@ -3,3 +3,4 @@ liora.db
 *.db
 *.db-shm
 *.db-wal
+.superpowers/
