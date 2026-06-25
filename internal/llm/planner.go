@@ -4,25 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
-)
 
-var allowedTools = map[string]bool{
-	"list":    true,
-	"tree":    true,
-	"glob":    true,
-	"stat":    true,
-	"read":    true,
-	"search":  true,
-	"write":   true,
-	"append":  true,
-	"edit":    true,
-	"replace": true,
-	"mkdir":   true,
-	"delete":  true,
-	"run":     true,
-	"diff":    true,
-	"mcp":     true,
-}
+	"github.com/Lioooooo123/liora/internal/capabilities"
+)
 
 type PlanRequest struct {
 	WorkspaceSummary string
@@ -82,21 +66,7 @@ Output one of:
 2. ANSWER: <short reply> when the user is greeting, chatting, or asking something that does not need tools.
 
 Allowed tools:
-- list <path>
-- tree <path> <max depth>
-- glob <pattern> <path>
-- stat <path>
-- read <path> [start line] [line count]
-- search <query>
-- write <path> <content>
-- append <path> <content>
-- edit <path> <old text> <new text> [all]
-- replace <path> <old> <new>
-- mkdir <path>
-- delete <path>
-- run <shell command>
-- diff
-- mcp <server> <tool> <json arguments>
+` + capabilities.PlannerToolList() + `
 
 Rules:
 - Use relative paths only.
@@ -155,7 +125,7 @@ func validateSteps(steps string) error {
 			continue
 		}
 		tool := strings.ToLower(fields[0])
-		if !allowedTools[tool] {
+		if !capabilities.HasBuiltinTool(tool) {
 			return fmt.Errorf("unsupported tool %q in planner output", tool)
 		}
 	}

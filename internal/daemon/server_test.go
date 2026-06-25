@@ -102,6 +102,48 @@ func TestServerCreatesTaskAndServesEvents(t *testing.T) {
 	}
 }
 
+func TestServerServesCapabilities(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := httptest.NewServer(NewServer(Config{Repository: taskpkg.NewRepository(db)}))
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/v1/capabilities")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status %d", resp.StatusCode)
+	}
+	var body struct {
+		Tools []struct {
+			Name  string `json:"name"`
+			Usage string `json:"usage"`
+			Kind  string `json:"kind"`
+		} `json:"tools"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	var foundRead bool
+	var foundRunShell bool
+	for _, tool := range body.Tools {
+		if tool.Name == "read" {
+			foundRead = true
+		}
+		if tool.Usage == "run <shell command>" && tool.Kind == "shell" {
+			foundRunShell = true
+		}
+	}
+	if !foundRead || !foundRunShell {
+		t.Fatalf("unexpected capabilities response %#v", body)
+	}
+}
+
 func TestServerServesDiffAndAppliesPatch(t *testing.T) {
 	workspace := t.TempDir()
 	db, err := store.New(t.TempDir()).OpenDB()

@@ -35,7 +35,7 @@ func TestRenderWelcomeShowsWorkspaceAndModel(t *testing.T) {
 		Model:     "deepseek-v4-pro",
 	})
 
-	for _, want := range []string{"Liora", "Workspace", "/tmp/project", "Model", "deepseek-v4-pro", "/help", "/exit"} {
+	for _, want := range []string{"Liora", "Workspace", "/tmp/project", "Model", "deepseek-v4-pro", "/help", "/tools", "/exit"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected welcome output to contain %q, got:\n%s", want, output)
 		}

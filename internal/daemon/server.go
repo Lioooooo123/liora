@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Lioooooo123/liora/internal/apply"
+	"github.com/Lioooooo123/liora/internal/capabilities"
 	taskpkg "github.com/Lioooooo123/liora/internal/task"
 )
 
@@ -35,6 +36,7 @@ func newServer(config Config) *server {
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
 	mux.HandleFunc("/v1/tasks", s.handleTasks)
 	mux.HandleFunc("/v1/tasks/", s.handleTask)
 	return mux
@@ -51,6 +53,17 @@ const eventStreamFallbackInterval = 5 * time.Second
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tools": capabilities.BuiltinTools(),
+	})
 }
 
 func (s *server) handleTasks(w http.ResponseWriter, r *http.Request) {

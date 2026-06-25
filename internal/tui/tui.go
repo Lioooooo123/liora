@@ -78,7 +78,7 @@ func RenderWelcome(config Config) string {
 		labelStyle.Render("Workspace") + " " + config.Workspace,
 		labelStyle.Render("Model") + " " + model,
 	}, "\n")
-	commands := mutedStyle.Render("Commands  /help  /goal  /memory  /skills  /skill  /mcp  /exit")
+	commands := mutedStyle.Render("Commands  /help  /tools  /goal  /memory  /skills  /skill  /mcp  /exit")
 	return header + "\n" + status + "\n\n" + commands + "\n"
 }
 
@@ -99,7 +99,7 @@ func (a *App) Run(ctx context.Context, input io.Reader, output io.Writer) error 
 			fmt.Fprintln(output, "Bye")
 			return nil
 		case "/help":
-			fmt.Fprintln(output, "Type a coding request in natural language. Commands: /goal, /memory, /skills, /skill, /mcp, /exit.")
+			fmt.Fprintln(output, "Type a coding request in natural language. Commands: /tools, /goal, /memory, /skills, /skill, /mcp, /exit.")
 			continue
 		}
 		if strings.HasPrefix(line, "/") && a.config.Commands != nil {

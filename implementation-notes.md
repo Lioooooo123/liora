@@ -101,3 +101,9 @@
 
 - 修复 LLM 生成 `assignment\ question.pdf` 或 `"course notes.txt"` 时路径被按空格拆散的问题，文件类工具现在支持反斜杠转义和单/双引号参数。
 - `run` 和 `mcp` 不能使用同一套去引号逻辑：`run` 需要保留 shell 命令原文，`mcp` 需要保留 JSON 参数中的双引号，因此 parser 按工具类型处理后续参数。
+
+## 2026-06-25 TUI / Agent Capability Parity
+
+- 用户要求参考 `kimi-code` 和 `claude-code-main` 复刻 TUI 与 coding agent 主能力。当前没有直接全量重写 TUI，而是先抽出 `internal/capabilities` 作为工具能力注册表，避免 planner、TUI、未来客户端各自维护一套工具说明。
+- 第一阶段将 `/tools` 接入 runtime，planner 的 allowed tools 也改为从注册表生成，并新增 `GET /v1/capabilities` 给未来客户端读取。这样用户问“你能干嘛”、模型规划工具步骤、后续客户端展示能力清单时可以共享同一份来源。
+- 参考结论已写入 `docs/tui-agent-parity-plan.md`。后续真正重写 TUI 时应优先接 daemon/SSE 事件流和取消能力，而不是只做视觉美化；否则仍会出现同步阻塞、长输出卡顿和客户端无法复用的问题。

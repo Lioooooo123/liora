@@ -114,6 +114,27 @@ func TestRuntimeHandlesGoalAndMemoryCommands(t *testing.T) {
 	}
 }
 
+func TestRuntimeListsBuiltinToolsCommand(t *testing.T) {
+	root := t.TempDir()
+	runtime, err := New(root, llm.NewPlanner(&fakeGenerator{response: "ANSWER: unused"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, handled, err := runtime.HandleCommand(t.Context(), "/tools")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled {
+		t.Fatal("expected /tools to be handled")
+	}
+	for _, want := range []string{"read <path>", "run <shell command>", "mcp <server>", "read_only", "shell"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected /tools output to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
 func TestRuntimeListsSkillsCommand(t *testing.T) {
 	root := t.TempDir()
 	storeRoot := t.TempDir()

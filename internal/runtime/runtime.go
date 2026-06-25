@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Lioooooo123/liora/internal/agent"
+	"github.com/Lioooooo123/liora/internal/capabilities"
 	"github.com/Lioooooo123/liora/internal/llm"
 	mcppkg "github.com/Lioooooo123/liora/internal/mcp"
 	"github.com/Lioooooo123/liora/internal/sandbox"
@@ -114,6 +115,8 @@ func (r *Runtime) HandleCommand(ctx context.Context, line string) (string, bool,
 		return r.handleSkill(strings.TrimSpace(strings.TrimPrefix(line, "/skill")))
 	case line == "/skills":
 		return r.handleSkills()
+	case line == "/tools":
+		return capabilities.HumanToolList(), true, nil
 	case line == "/mcp":
 		return r.handleMCP(ctx)
 	default:
