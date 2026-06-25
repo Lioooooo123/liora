@@ -69,6 +69,55 @@ func TestCLINaturalModeUsesLLMPlan(t *testing.T) {
 	}
 }
 
+func TestCLINaturalModeUsesAnthropicProvider(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "app.txt"), []byte("hello old agent\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotAPIKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/messages" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		gotAPIKey = r.Header.Get("x-api-key")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"content": [
+				{"type": "text", "text": "read app.txt\nreplace app.txt old new\ndiff"}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	cmd := exec.Command(
+		"go",
+		"run",
+		".",
+		"-workspace", workspace,
+		"-natural",
+		"-llm-provider", "anthropic",
+		"-llm-base-url", server.URL,
+		"-llm-api-key", "anthropic-key",
+		"-llm-model", "claude-test",
+		"-prompt", "把 old 改成 new",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\n%s", err, string(output))
+	}
+	if gotAPIKey != "anthropic-key" {
+		t.Fatalf("unexpected anthropic key header %q", gotAPIKey)
+	}
+	updated, err := os.ReadFile(filepath.Join(workspace, "app.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(updated) != "hello new agent\n" {
+		t.Fatalf("unexpected updated file %q", string(updated))
+	}
+}
+
 func TestCLIInteractiveModeRunsTurns(t *testing.T) {
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "app.txt"), []byte("hello old agent\n"), 0o600); err != nil {

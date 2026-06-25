@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"coding-agent-mvp/internal/agent"
-	"coding-agent-mvp/internal/trace"
+	"github.com/Lioooooo123/liora/internal/agent"
+	"github.com/Lioooooo123/liora/internal/trace"
 	"github.com/charmbracelet/lipgloss"
 )
 

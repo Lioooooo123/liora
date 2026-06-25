@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"coding-agent-mvp/internal/tools"
-	"coding-agent-mvp/internal/trace"
+	"github.com/Lioooooo123/liora/internal/tools"
+	"github.com/Lioooooo123/liora/internal/trace"
 )
 
 type Status string

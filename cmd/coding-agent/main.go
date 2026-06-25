@@ -7,15 +7,15 @@ import (
 	"os"
 	"strings"
 
-	"coding-agent-mvp/internal/agent"
-	"coding-agent-mvp/internal/config"
-	"coding-agent-mvp/internal/llm"
-	mcppkg "coding-agent-mvp/internal/mcp"
-	"coding-agent-mvp/internal/runtime"
-	"coding-agent-mvp/internal/store"
-	"coding-agent-mvp/internal/tools"
-	"coding-agent-mvp/internal/trace"
-	"coding-agent-mvp/internal/tui"
+	"github.com/Lioooooo123/liora/internal/agent"
+	"github.com/Lioooooo123/liora/internal/config"
+	"github.com/Lioooooo123/liora/internal/llm"
+	mcppkg "github.com/Lioooooo123/liora/internal/mcp"
+	"github.com/Lioooooo123/liora/internal/runtime"
+	"github.com/Lioooooo123/liora/internal/store"
+	"github.com/Lioooooo123/liora/internal/tools"
+	"github.com/Lioooooo123/liora/internal/trace"
+	"github.com/Lioooooo123/liora/internal/tui"
 )
 
 func main() {
@@ -28,8 +28,10 @@ func main() {
 	prompt := flag.String("prompt", "", "newline-separated agent steps")
 	interactive := flag.Bool("interactive", false, "start an interactive terminal UI")
 	natural := flag.Bool("natural", false, "treat prompt/stdin as natural language and ask an LLM to plan tool steps")
-	llmBaseURL := flag.String("llm-base-url", getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"), "OpenAI-compatible API base URL")
-	llmModel := flag.String("llm-model", getenv("OPENAI_MODEL", ""), "OpenAI-compatible model name")
+	llmProvider := flag.String("llm-provider", getenvAny("LIORA_LLM_PROVIDER", "OPENAI_PROVIDER", ""), "LLM provider: openai-chat, openai-responses, deepseek, anthropic, gemini")
+	llmBaseURL := flag.String("llm-base-url", getenvAny("LIORA_LLM_BASE_URL", "OPENAI_BASE_URL", ""), "LLM API base URL")
+	llmAPIKey := flag.String("llm-api-key", getenvAny("LIORA_LLM_API_KEY", "OPENAI_API_KEY", ""), "LLM API key")
+	llmModel := flag.String("llm-model", getenvAny("LIORA_LLM_MODEL", "OPENAI_MODEL", ""), "LLM model name")
 	traceOut := flag.String("trace-out", "", "write trace events to a JSONL file")
 	flag.Parse()
 
@@ -45,18 +47,25 @@ func main() {
 		os.Exit(2)
 	}
 
-	planner := llm.NewPlanner(llm.NewOpenAICompatibleClient(llm.Config{
-		BaseURL: *llmBaseURL,
-		APIKey:  os.Getenv("OPENAI_API_KEY"),
-		Model:   *llmModel,
-	}))
+	llmConfig := llm.Config{
+		Provider: *llmProvider,
+		BaseURL:  *llmBaseURL,
+		APIKey:   *llmAPIKey,
+		Model:    *llmModel,
+	}
+	llmClient, err := llm.NewClient(llmConfig)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	planner := llm.NewPlanner(llmClient)
 	persistentStore := store.New("")
 	turnRuntime := runtime.FromWorkspace(workspace, planner, persistentStore)
 
 	if *interactive || defaultInteractive {
 		app := tui.New(tui.Config{
 			Workspace: workspace.Root(),
-			Model:     *llmModel,
+			Model:     llmLabel(llmConfig),
 			Commands:  turnRuntime,
 		}, turnRuntime)
 		if err := app.Run(context.Background(), os.Stdin, os.Stdout); err != nil {
@@ -126,12 +135,28 @@ func main() {
 	}
 }
 
-func getenv(name string, fallback string) string {
-	value := os.Getenv(name)
-	if value == "" {
-		return fallback
+func getenvAny(names ...string) string {
+	if len(names) == 0 {
+		return ""
 	}
-	return value
+	fallback := names[len(names)-1]
+	for _, name := range names[:len(names)-1] {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return fallback
+}
+
+func llmLabel(config llm.Config) string {
+	provider := llm.NormalizeProvider(config.Provider)
+	if provider == "" {
+		provider = llm.ProviderOpenAIChat
+	}
+	if config.Model == "" {
+		return llm.ProviderDisplayName(provider)
+	}
+	return llm.ProviderDisplayName(provider) + " / " + config.Model
 }
 
 func mcpManagerFromStore(s *store.Store) (*mcppkg.Manager, error) {

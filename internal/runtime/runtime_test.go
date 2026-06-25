@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"coding-agent-mvp/internal/llm"
-	"coding-agent-mvp/internal/store"
+	"github.com/Lioooooo123/liora/internal/llm"
+	"github.com/Lioooooo123/liora/internal/store"
 )
 
 func TestMain(m *testing.M) {

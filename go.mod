@@ -1,4 +1,4 @@
-module coding-agent-mvp
+module github.com/Lioooooo123/liora
 
 go 1.24
 

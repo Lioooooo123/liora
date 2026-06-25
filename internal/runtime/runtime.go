@@ -6,13 +6,13 @@ import (
 	"sort"
 	"strings"
 
-	"coding-agent-mvp/internal/agent"
-	"coding-agent-mvp/internal/llm"
-	mcppkg "coding-agent-mvp/internal/mcp"
-	"coding-agent-mvp/internal/store"
-	"coding-agent-mvp/internal/tools"
-	"coding-agent-mvp/internal/trace"
-	"coding-agent-mvp/internal/tui"
+	"github.com/Lioooooo123/liora/internal/agent"
+	"github.com/Lioooooo123/liora/internal/llm"
+	mcppkg "github.com/Lioooooo123/liora/internal/mcp"
+	"github.com/Lioooooo123/liora/internal/store"
+	"github.com/Lioooooo123/liora/internal/tools"
+	"github.com/Lioooooo123/liora/internal/trace"
+	"github.com/Lioooooo123/liora/internal/tui"
 )
 
 type Runtime struct {

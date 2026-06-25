@@ -5,7 +5,7 @@ Liora 是一个可运行的最小 Coding Agent MVP，用于验证“工具调用
 它支持两种使用方式：
 
 - 脚本模式：直接输入工具步骤，便于稳定调试。
-- 自然语言模式：通过 OpenAI-compatible LLM API 将用户需求转换成工具步骤，再交给本地执行器运行。
+- 自然语言模式：通过可切换供应商的 LLM client 将用户需求转换成工具步骤，再交给本地执行器运行。
 - 交互模式：启动一个轻量 TUI，连续输入自然语言任务并查看计划、工具调用、总结和 diff。
 
 ## 功能
@@ -20,7 +20,7 @@ Liora 是一个可运行的最小 Coding Agent MVP，用于验证“工具调用
 - 记录每次工具调用的输入、输出和状态。
 - 可将 trace 保存为 JSONL 文件。
 - 文件读写会限制在 workspace 内，防止路径穿越。
-- 可接入 OpenAI-compatible `/chat/completions` API 做自然语言规划。
+- 可接入 DeepSeek、OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 和 Gemini generateContent 做自然语言规划。
 - 提供基于 Lip Gloss 样式的轻量终端界面，展示 workspace、model、plan、tools、summary 和 diff。
 
 ## 支持的步骤
@@ -84,14 +84,15 @@ liora \
 
 ## 接入 LLM API
 
-自然语言模式通过 OpenAI-compatible Chat Completions API 生成工具步骤。当前本地 `.env.local` 已按 DeepSeek 配置，文件不会被 git 跟踪。
+自然语言模式通过 `internal/llm` 的统一 client 生成工具步骤。CLI 和未来客户端都复用同一个 `llm.Config -> llm.NewClient` 入口。
 
 环境变量：
 
 ```sh
-export OPENAI_API_KEY="YOUR_API_KEY"
-export OPENAI_BASE_URL="https://api.deepseek.com"
-export OPENAI_MODEL="deepseek-v4-pro"
+export LIORA_LLM_PROVIDER="deepseek"
+export LIORA_LLM_API_KEY="YOUR_API_KEY"
+export LIORA_LLM_BASE_URL="https://api.deepseek.com"
+export LIORA_LLM_MODEL="deepseek-v4-pro"
 ```
 
 也可以复制示例配置：
@@ -100,7 +101,19 @@ export OPENAI_MODEL="deepseek-v4-pro"
 cp .env.example .env.local
 ```
 
-然后把 `.env.local` 里的 `OPENAI_API_KEY` 改成自己的 key。`.env.local` 不会被 Git 跟踪。
+然后把 `.env.local` 里的 `LIORA_LLM_API_KEY` 改成自己的 key。`.env.local` 不会被 Git 跟踪。
+
+支持的 provider：
+
+```text
+deepseek          DeepSeek OpenAI-compatible API
+openai-chat       OpenAI-compatible Chat Completions
+openai-responses  OpenAI Responses API
+anthropic         Anthropic Messages API
+gemini            Google Gemini generateContent
+```
+
+为了兼容旧配置，`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 仍然可用；新的 `LIORA_LLM_*` 优先级更高。
 
 运行：
 
@@ -118,12 +131,14 @@ liora \
 liora \
   -workspace /path/to/project \
   -natural \
+  -llm-provider "openai-chat" \
   -llm-base-url "https://api.openai.com/v1" \
-  -llm-model "deepseek-v4-pro" \
+  -llm-api-key "YOUR_API_KEY" \
+  -llm-model "gpt-5.5" \
   -prompt "修复测试失败并输出 diff"
 ```
 
-如果想使用更低成本模型，可以把 `OPENAI_MODEL` 改为 `deepseek-v4-flash`。
+如果想使用更低成本模型，可以把 `LIORA_LLM_MODEL` 改为 `deepseek-v4-flash`。
 
 ## 交互 TUI
 
@@ -241,7 +256,7 @@ go test ./...
 - `cmd/coding-agent`：CLI 参数、配置加载和模式选择。
 - `internal/tui`：交互循环和单轮结果渲染，不直接执行工具。
 - `internal/runtime`：连接 Planner 和 Agent，是交互模式的一轮执行编排层。
-- `internal/llm`：OpenAI-compatible 客户端和自然语言 Planner。
+- `internal/llm`：多供应商 LLM client 和自然语言 Planner。
 - `internal/store`：goal、memory、skill 和 MCP 配置的本地持久化。
 - `internal/mcp`：stdio MCP client 和 server/tool manager。
 - `internal/agent`：解析工具步骤并调度工具。
