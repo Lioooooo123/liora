@@ -198,4 +198,9 @@
 
 - 新增 `scripts/coding-eval.sh`，用临时 fake LLM、临时 daemon 和临时 workspace 跑真实 coding task eval，不依赖用户 API key，也不污染当前项目。
 - eval 覆盖自然语言规划、工具执行、patch-first 不直接写真实 workspace、apply 后文件落盘、`task.patch_applied` 事件、session timeline 和运行中 cancel。
-- 这不是完整 benchmark suite，只是 v0.1 防退化基线；后续可以继续增加多文件编辑、失败后 replan、权限审批、MCP 调用和大输出截断 case。
+- 这不是完整 benchmark suite，只是 v0.1 防退化基线；后续可以继续增加多文件编辑、失败后 replan、MCP 调用和大输出截断 case。
+
+## 2026-06-26 Permission Eval Coverage
+
+- `scripts/coding-eval.sh` 现在启用 `LIORA_PERMISSION=prompt`，并新增危险 shell 的 approve/deny 两条分支，验证 `permission.requested`、`permission.approved`、`permission.denied` 和对应任务终态。
+- patch-first 写文件仍不触发审批，危险 shell 仍触发审批；这符合当前产品取舍：默认安全写入减少打扰，但高风险外部动作需要用户确认。

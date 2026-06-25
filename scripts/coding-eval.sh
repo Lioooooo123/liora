@@ -37,6 +37,24 @@ print(data)
 ' "$1"
 }
 
+wait_task_status() {
+  local task_id="$1"
+  local want="$2"
+  for _ in $(seq 1 100); do
+    local body
+    body="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks/$task_id")"
+    local status
+    status="$(printf '%s' "$body" | json_get status)"
+    if [[ "$status" == "$want" ]]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "task $task_id did not reach status $want" >&2
+  curl -fsS "http://$DAEMON_ADDR/v1/tasks/$task_id" >&2 || true
+  return 1
+}
+
 # Fake OpenAI-compatible planner for deterministic natural-language eval tasks.
 python3 - "$LLM_ADDR" >"$TMP_DIR/llm.log" 2>&1 <<'PY' &
 import json
@@ -73,7 +91,7 @@ LLM_PID="$!"
 
 (
   cd "$ROOT"
-  LIORA_HOME="$TMP_DIR/home" LIORA_PATCH_MODE=1 go run ./cmd/coding-agent \
+  LIORA_HOME="$TMP_DIR/home" LIORA_PATCH_MODE=1 LIORA_PERMISSION=prompt go run ./cmd/coding-agent \
     -workspace "$WORKSPACE" \
     -daemon \
     -daemon-addr "$DAEMON_ADDR" \
@@ -135,6 +153,53 @@ printf '%s' "$TIMELINE_JSON" | grep -q '把 app.txt'
 printf '%s' "$TIMELINE_JSON" | grep -q 'tool_result'
 printf '%s' "$TIMELINE_JSON" | grep -q 'diff'
 
+APPROVE_BODY="$(python3 - "$WORKSPACE" <<'PY'
+import json
+import sys
+print(json.dumps({
+    "workspace": sys.argv[1],
+    "prompt": "run rm -rf build",
+    "natural": False,
+}))
+PY
+)"
+APPROVE_JSON="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks" -H 'Content-Type: application/json' -d "$APPROVE_BODY")"
+APPROVE_TASK_ID="$(printf '%s' "$APPROVE_JSON" | json_get task.id)"
+APPROVE_STATUS="$(printf '%s' "$APPROVE_JSON" | json_get task.status)"
+if [[ "$APPROVE_STATUS" != "waiting_user" ]]; then
+  echo "expected permission task to wait, got $APPROVE_STATUS" >&2
+  exit 1
+fi
+curl -fsS "http://$DAEMON_ADDR/v1/tasks/$APPROVE_TASK_ID/events/stream" | grep -q 'event: permission.requested'
+curl -fsS "http://$DAEMON_ADDR/v1/tasks/$APPROVE_TASK_ID/approval" \
+  -H 'Content-Type: application/json' \
+  -d '{"decision":"approve"}' >/dev/null
+wait_task_status "$APPROVE_TASK_ID" "completed"
+curl -fsS "http://$DAEMON_ADDR/v1/tasks/$APPROVE_TASK_ID/events" | grep -q 'permission.approved'
+
+DENY_BODY="$(python3 - "$WORKSPACE" <<'PY'
+import json
+import sys
+print(json.dumps({
+    "workspace": sys.argv[1],
+    "prompt": "run rm -rf denied-build",
+    "natural": False,
+}))
+PY
+)"
+DENY_JSON="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks" -H 'Content-Type: application/json' -d "$DENY_BODY")"
+DENY_TASK_ID="$(printf '%s' "$DENY_JSON" | json_get task.id)"
+DENY_STATUS="$(printf '%s' "$DENY_JSON" | json_get task.status)"
+if [[ "$DENY_STATUS" != "waiting_user" ]]; then
+  echo "expected denied permission task to wait, got $DENY_STATUS" >&2
+  exit 1
+fi
+curl -fsS "http://$DAEMON_ADDR/v1/tasks/$DENY_TASK_ID/approval" \
+  -H 'Content-Type: application/json' \
+  -d '{"decision":"deny","reason":"eval deny"}' >/dev/null
+wait_task_status "$DENY_TASK_ID" "cancelled"
+curl -fsS "http://$DAEMON_ADDR/v1/tasks/$DENY_TASK_ID/events" | grep -q 'permission.denied'
+
 CANCEL_BODY="$(python3 - "$WORKSPACE" <<'PY'
 import json
 import sys
@@ -153,4 +218,4 @@ curl -fsS "http://$DAEMON_ADDR/v1/tasks/$CANCEL_TASK_ID/cancel" \
   -d '{"reason":"eval stop"}' >/dev/null
 curl -fsS "http://$DAEMON_ADDR/v1/tasks/$CANCEL_TASK_ID/events/stream" | grep -q 'event: task.cancelled'
 
-echo "coding eval ok: task=$TASK_ID session=$SESSION_ID cancel=$CANCEL_TASK_ID"
+echo "coding eval ok: task=$TASK_ID session=$SESSION_ID approve=$APPROVE_TASK_ID deny=$DENY_TASK_ID cancel=$CANCEL_TASK_ID"
