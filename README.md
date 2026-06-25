@@ -336,6 +336,8 @@ curl http://127.0.0.1:18080/v1/tasks/<task-id>/cancel \
   -d '{"reason":"user stopped task"}'
 ```
 
+对当前 daemon 进程内正在运行的异步任务，`/cancel` 会触发执行 context 取消，并阻止 runner 把任务终态覆盖回 `completed` 或 `failed`。
+
 当前 v0.1 API：
 
 ```text

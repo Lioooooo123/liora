@@ -14,6 +14,7 @@ import (
 	"github.com/Lioooooo123/liora/internal/llm"
 	"github.com/Lioooooo123/liora/internal/store"
 	taskpkg "github.com/Lioooooo123/liora/internal/task"
+	"github.com/Lioooooo123/liora/internal/tools"
 )
 
 type fakeGenerator struct {
@@ -22,6 +23,25 @@ type fakeGenerator struct {
 
 func (f *fakeGenerator) Generate(_ context.Context, _ []llm.Message) (string, error) {
 	return f.response, nil
+}
+
+type blockingShellExecutor struct {
+	started chan struct{}
+	done    chan struct{}
+}
+
+func newBlockingShellExecutor() *blockingShellExecutor {
+	return &blockingShellExecutor{
+		started: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+}
+
+func (e *blockingShellExecutor) Run(ctx context.Context, _ string, _ string) (tools.ShellResult, error) {
+	close(e.started)
+	<-ctx.Done()
+	close(e.done)
+	return tools.ShellResult{ExitCode: -1}, ctx.Err()
 }
 
 func TestServerCreatesTaskAndServesEvents(t *testing.T) {
@@ -238,6 +258,78 @@ func TestServerCancelsTask(t *testing.T) {
 	if !strings.Contains(string(data), "event: task.cancelled") || !strings.Contains(string(data), "user clicked stop") {
 		t.Fatalf("unexpected cancel stream:\n%s", string(data))
 	}
+}
+
+func TestServerCancelStopsRunningAsyncTask(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	executor := newBlockingShellExecutor()
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: ""}))
+	runner.SetSandbox(executor)
+	handler := newServer(Config{Repository: repo, Runner: runner})
+	server := httptest.NewServer(handler.routes())
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/v1/tasks", "application/json", strings.NewReader(`{"workspace":`+quote(t.TempDir())+`,"prompt":"run long-task","natural":false,"run_async":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("unexpected async create status %d", resp.StatusCode)
+	}
+	var created taskpkg.CreateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-executor.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("async runner did not start")
+	}
+
+	cancelResp, err := http.Post(server.URL+"/v1/tasks/"+created.Task.ID+"/cancel", "application/json", strings.NewReader(`{"reason":"stop now"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancelResp.Body.Close()
+	if cancelResp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected cancel status %d", cancelResp.StatusCode)
+	}
+
+	select {
+	case <-executor.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancel did not stop running async task")
+	}
+	waitUntil(t, 3*time.Second, func() bool {
+		return !handler.isRunning(created.Task.ID)
+	})
+
+	got, err := repo.Get(t.Context(), created.Task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != taskpkg.StatusCancelled {
+		t.Fatalf("cancelled async task should stay cancelled, got %#v", got)
+	}
+}
+
+func waitUntil(t *testing.T, timeout time.Duration, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition was not met before timeout")
 }
 
 func quote(value string) string {

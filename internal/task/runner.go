@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -43,6 +44,9 @@ func (r *Runner) Run(ctx context.Context, taskID string) error {
 	_ = r.repo.AppendEvent(ctx, task.ID, EventPlanning, EventPayload{Message: "Planning task"})
 
 	result, err := r.runTask(ctx, task)
+	if isContextCancelled(ctx, err) && r.isTaskCancelled(task.ID) {
+		return err
+	}
 	if strings.TrimSpace(result.plannedSteps) != "" {
 		_ = r.repo.AppendEvent(ctx, task.ID, EventPlanReady, EventPayload{Steps: result.plannedSteps})
 	}
@@ -67,8 +71,14 @@ func (r *Runner) Run(ctx context.Context, taskID string) error {
 		_ = r.repo.AppendEvent(ctx, task.ID, EventDiff, EventPayload{Diff: result.diff})
 	}
 	if err != nil {
+		if isContextCancelled(ctx, err) && r.isTaskCancelled(task.ID) {
+			return err
+		}
 		_ = r.fail(ctx, task.ID, err)
 		return err
+	}
+	if r.isTaskCancelled(task.ID) {
+		return context.Canceled
 	}
 	if err := r.repo.UpdateStatus(ctx, task.ID, StatusCompleted); err != nil {
 		return err
@@ -160,4 +170,13 @@ func (r *Runner) fail(ctx context.Context, taskID string, err error) error {
 	}
 	_ = r.repo.AppendEvent(ctx, taskID, EventError, EventPayload{Message: err.Error(), Status: string(StatusFailed)})
 	return nil
+}
+
+func (r *Runner) isTaskCancelled(taskID string) bool {
+	task, err := r.repo.Get(context.Background(), taskID)
+	return err == nil && task.Status == StatusCancelled
+}
+
+func isContextCancelled(ctx context.Context, err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)
 }

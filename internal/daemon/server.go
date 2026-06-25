@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Lioooooo123/liora/internal/apply"
@@ -20,17 +21,30 @@ type Config struct {
 }
 
 func NewServer(config Config) http.Handler {
-	server := &server{repo: config.Repository, runner: config.Runner}
+	return newServer(config).routes()
+}
+
+func newServer(config Config) *server {
+	return &server{
+		repo:    config.Repository,
+		runner:  config.Runner,
+		running: map[string]context.CancelFunc{},
+	}
+}
+
+func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", server.handleHealth)
-	mux.HandleFunc("/v1/tasks", server.handleTasks)
-	mux.HandleFunc("/v1/tasks/", server.handleTask)
+	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc("/v1/tasks", s.handleTasks)
+	mux.HandleFunc("/v1/tasks/", s.handleTask)
 	return mux
 }
 
 type server struct {
-	repo   *taskpkg.Repository
-	runner *taskpkg.Runner
+	repo      *taskpkg.Repository
+	runner    *taskpkg.Runner
+	runningMu sync.Mutex
+	running   map[string]context.CancelFunc
 }
 
 const eventStreamPollInterval = 100 * time.Millisecond
@@ -63,8 +77,11 @@ func (s *server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		_ = s.repo.AppendEvent(r.Context(), task.ID, taskpkg.EventTaskCreated, taskpkg.EventPayload{Message: task.UserInput})
 		if request.RunAsync {
 			taskID := task.ID
+			ctx, cancel := context.WithCancel(context.Background())
+			s.registerRunning(taskID, cancel)
 			go func() {
-				_ = s.runner.Run(context.Background(), taskID)
+				defer s.unregisterRunning(taskID)
+				_ = s.runner.Run(ctx, taskID)
 			}()
 			writeJSON(w, http.StatusAccepted, taskpkg.CreateResponse{Task: task})
 			return
@@ -153,12 +170,40 @@ func (s *server) handleTaskCancel(w http.ResponseWriter, r *http.Request, taskID
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	s.cancelRunning(taskID)
 	task, err := s.repo.Get(r.Context(), taskID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, task)
+}
+
+func (s *server) registerRunning(taskID string, cancel context.CancelFunc) {
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
+	s.running[taskID] = cancel
+}
+
+func (s *server) unregisterRunning(taskID string) {
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
+	delete(s.running, taskID)
+}
+
+func (s *server) cancelRunning(taskID string) {
+	s.runningMu.Lock()
+	cancel := s.running[taskID]
+	s.runningMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (s *server) isRunning(taskID string) bool {
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
+	return s.running[taskID] != nil
 }
 
 func (s *server) handleTaskDiff(w http.ResponseWriter, r *http.Request, taskID string) {

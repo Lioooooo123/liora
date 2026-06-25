@@ -41,4 +41,10 @@
 ## 2026-06-25 Task Cancel API
 
 - 新增 `POST /v1/tasks/{id}/cancel`，会把任务状态更新为 `cancelled` 并写入 `task.cancelled` 事件。
-- 当前取消是持久化状态和事件层能力，还没有中断已经运行中的 goroutine 或 shell 进程；后续需要 runner registry 保存 cancel func，并让 shell executor 继承可取消 context。
+- 初始版本只做持久化状态和事件层取消；随后已补充当前 daemon 进程内运行任务的真实 context 取消，详见下一节。
+
+## 2026-06-25 Running Task Cancellation
+
+- daemon 新增运行中任务注册表，只保存当前进程内 `run_async` 任务的 cancel func；`/cancel` 先落库 `cancelled`，再触发运行中 context 取消。
+- runner 在发现 context 已取消且任务状态已经是 `cancelled` 时，不再把终态覆盖为 `failed` 或 `completed`。
+- 这个设计先解决本地 MVP 最重要的“能停住当前任务”；daemon 重启后无法恢复旧进程的 cancel func，因此重启前启动的任务只能做状态层取消。

@@ -66,7 +66,7 @@ grep -q '^ok$' "$APPLY_WORKSPACE/smoke.txt"
 CANCEL_TASK_JSON="$(
   curl -fsS "http://$ADDR/v1/tasks" \
     -H 'Content-Type: application/json' \
-    -d "{\"workspace\":\"$APPLY_WORKSPACE\",\"prompt\":\"manual cancel\",\"natural\":false,\"run_async\":true}"
+    -d "{\"workspace\":\"$APPLY_WORKSPACE\",\"prompt\":\"run sleep 5\",\"natural\":false,\"run_async\":true}"
 )"
 CANCEL_TASK_ID="$(printf '%s' "$CANCEL_TASK_JSON" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
 curl -fsS "http://$ADDR/v1/tasks/$CANCEL_TASK_ID/cancel" \
