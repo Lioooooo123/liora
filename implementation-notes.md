@@ -60,3 +60,9 @@
 - `Repository.AppendEvent` 新增同进程内存通知，SSE 事件流优先等待通知，不再每 100ms 固定轮询 SQLite。
 - 通知订阅是一次性的 channel，并提供 unsubscribe，避免事件流长连接在高频事件下堆积 goroutine。
 - 保留 5 秒 fallback 轮询，原因是未来可能出现另一个进程直接写同一个 SQLite DB；这类跨进程写入不会触发当前进程内存通知。
+
+## 2026-06-25 Live Script Tool Events
+
+- script task 不再用 `MemoryRecorder` 等任务结束后批量写工具事件；新增 task 层实时 recorder，每条工具执行完成后立即写入 `tool.call` 和 `tool.result`。
+- 实时 recorder 第一次收到工具事件时把任务状态更新为 `running`，这样客户端能更早展示任务已经进入执行阶段。
+- 当前改动先覆盖无 LLM 的 script task；natural task 仍经过 runtime 聚合返回，后续要进一步拆成 plan ready 和 tool event 的实时流。

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/llm"
@@ -116,7 +117,7 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 	if err != nil {
 		return runtimeResult{}, err
 	}
-	recorder := trace.NewMemoryRecorder()
+	recorder := newRepositoryRecorder(ctx, r, task.ID)
 	runner := agent.New(workspace, recorder)
 	if r.sandboxRun != nil {
 		runner.SetShellExecutor(r.sandboxRun)
@@ -126,7 +127,6 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 		plannedSteps: task.UserInput,
 		summary:      result.Summary,
 		diff:         result.Diff,
-		events:       recorder.Events(),
 	}, err
 }
 
@@ -145,6 +145,24 @@ type runtimeResult struct {
 	summary      string
 	diff         string
 	events       []trace.Event
+}
+
+type repositoryRecorder struct {
+	ctx    context.Context
+	runner *Runner
+	taskID string
+	once   sync.Once
+}
+
+func newRepositoryRecorder(ctx context.Context, runner *Runner, taskID string) *repositoryRecorder {
+	return &repositoryRecorder{ctx: ctx, runner: runner, taskID: taskID}
+}
+
+func (r *repositoryRecorder) Record(event trace.Event) {
+	r.once.Do(func() {
+		_ = r.runner.repo.UpdateStatus(r.ctx, r.taskID, StatusRunning)
+	})
+	r.runner.appendTraceEvents(r.ctx, r.taskID, event)
 }
 
 func (r *Runner) appendTraceEvents(ctx context.Context, taskID string, event trace.Event) {
