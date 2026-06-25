@@ -31,3 +31,4 @@
 - patch mode 下真实 workspace 不会被任务执行阶段直接修改，必须通过 `/v1/tasks/{id}/apply` 显式应用 patch。
 - 当前 patch mode 复制时跳过 `.git`、`node_modules` 和 `vendor`，这是为了控制本地性能；后续需要把跳过规则做成配置并在 UI 中解释。
 - 这一步还不是完整 Docker sandbox apply：Docker 只覆盖 `run` 工具，文件工具是在临时副本中执行。下一步应把 Docker 临时 workspace 和 patch mode 合并成统一任务工作目录。
+- workspace 准备逻辑已下沉到 `internal/sandbox.PrepareWorkspace`，task runner 只选择 `direct/copy` 模式，并写入 `sandbox.workspace` 事件给未来客户端展示。

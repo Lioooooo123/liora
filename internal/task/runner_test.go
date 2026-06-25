@@ -193,6 +193,9 @@ func TestRunnerPatchModeProducesDiffWithoutMutatingWorkspace(t *testing.T) {
 	if !strings.Contains(payloads.String(), "+++ b/notes.txt") || !strings.Contains(payloads.String(), "+hello") {
 		t.Fatalf("expected diff event for notes.txt, got %s", payloads.String())
 	}
+	if !containsEventType(eventTypes(events), EventSandboxWorkspace) {
+		t.Fatalf("expected sandbox workspace event, got %#v", eventTypes(events))
+	}
 }
 
 func containsEventType(events []EventType, want EventType) bool {

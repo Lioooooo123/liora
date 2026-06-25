@@ -17,18 +17,19 @@ const (
 type EventType string
 
 const (
-	EventTaskCreated EventType = "task.created"
-	EventPlanning    EventType = "task.planning"
-	EventPlanReady   EventType = "task.plan_ready"
-	EventToolCall    EventType = "tool.call"
-	EventToolResult  EventType = "tool.result"
-	EventSummary     EventType = "task.summary"
-	EventDiff        EventType = "task.diff"
-	EventSandboxRun  EventType = "sandbox.run"
-	EventPatchApply  EventType = "task.patch_applied"
-	EventError       EventType = "task.error"
-	EventCompleted   EventType = "task.completed"
-	EventCancelled   EventType = "task.cancelled"
+	EventTaskCreated      EventType = "task.created"
+	EventPlanning         EventType = "task.planning"
+	EventPlanReady        EventType = "task.plan_ready"
+	EventToolCall         EventType = "tool.call"
+	EventToolResult       EventType = "tool.result"
+	EventSummary          EventType = "task.summary"
+	EventDiff             EventType = "task.diff"
+	EventSandboxRun       EventType = "sandbox.run"
+	EventSandboxWorkspace EventType = "sandbox.workspace"
+	EventPatchApply       EventType = "task.patch_applied"
+	EventError            EventType = "task.error"
+	EventCompleted        EventType = "task.completed"
+	EventCancelled        EventType = "task.cancelled"
 )
 
 type Task struct {

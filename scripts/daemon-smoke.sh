@@ -30,6 +30,7 @@ if [[ -z "$TASK_ID" ]]; then
 fi
 
 curl -fsS "http://$ADDR/v1/tasks/$TASK_ID/events" >/dev/null
+curl -fsS "http://$ADDR/v1/tasks/$TASK_ID/events/stream" | grep -q 'event: sandbox.workspace'
 curl -fsS "http://$ADDR/v1/tasks/$TASK_ID/diff" | grep -q 'proposed.txt'
 if [[ -e "$PATCH_WORKSPACE/proposed.txt" ]]; then
   echo "patch mode mutated workspace before apply" >&2

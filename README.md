@@ -316,6 +316,8 @@ export LIORA_PATCH_MODE=1
 liora -daemon -daemon-addr 127.0.0.1:18080
 ```
 
+任务事件流会包含 `sandbox.workspace`，用于显示本次任务使用的是 `direct` 还是 `copy` workspace。
+
 应用 patch 到任务 workspace：
 
 ```sh
