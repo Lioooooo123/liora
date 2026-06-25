@@ -35,9 +35,11 @@ func TestRenderWelcomeShowsWorkspaceAndModel(t *testing.T) {
 	output := RenderWelcome(Config{
 		Workspace: "/tmp/project",
 		Model:     "deepseek-v4-pro",
+		Core:      "embedded daemon",
+		Safety:    "patch-first",
 	})
 
-	for _, want := range []string{"Liora", "Workspace", "/tmp/project", "Model", "deepseek-v4-pro", "/help", "/tools", "/exit"} {
+	for _, want := range []string{"Liora", "Workspace", "/tmp/project", "Model", "deepseek-v4-pro", "Core", "embedded daemon", "Safety", "patch-first", "/help", "/tools", "/exit"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected welcome output to contain %q, got:\n%s", want, output)
 		}
@@ -60,7 +62,7 @@ func TestInteractiveLoopSubmitsPromptAndExits(t *testing.T) {
 		t.Fatalf("unexpected submitted inputs %#v", submitter.inputs)
 	}
 	rendered := out.String()
-	for _, want := range []string{"Working", "Plan", "Tools", "Summary", "completed 2 steps", "Bye"} {
+	for _, want := range []string{"Task - started", "Plan", "Tools", "Summary", "completed 2 steps", "Bye"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected rendered output to contain %q, got:\n%s", want, rendered)
 		}
@@ -117,13 +119,31 @@ func TestInteractiveLoopStreamsTaskEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	rendered := out.String()
-	for _, want := range []string{"Working", "Plan", "- list .", "Tools", "README.md", "Summary", "completed 1 step", "Status", "completed"} {
+	for _, want := range []string{"Task - started", "Plan", "- list .", "Tools", "README.md", "Summary", "completed 1 step", "Status", "completed"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected streamed output to contain %q, got:\n%s", want, rendered)
 		}
 	}
 	if strings.Contains(rendered, "You") {
 		t.Fatalf("interactive stream output should not repeat user input, got:\n%s", rendered)
+	}
+}
+
+func TestRenderStreamUpdateUsesCompactProgressLines(t *testing.T) {
+	var out strings.Builder
+	RenderStreamUpdate(&out, streamUpdate("task.planning", eventPayload{Message: "Planning task"}))
+	RenderStreamUpdate(&out, streamUpdate("tool.call", eventPayload{Tool: "list", Input: "."}))
+
+	rendered := out.String()
+	for _, want := range []string{"Status - Planning task", "Tool - list ."} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected compact progress output to contain %q, got:\n%s", want, rendered)
+		}
+	}
+	for _, avoid := range []string{"│ Status", "│ Tool"} {
+		if strings.Contains(rendered, avoid) {
+			t.Fatalf("expected progress output not to render boxed %q, got:\n%s", avoid, rendered)
+		}
 	}
 }
 
@@ -187,7 +207,7 @@ func TestStreamingLoopHandlesCommandWhileTaskRuns(t *testing.T) {
 		t.Fatal("interactive loop did not exit")
 	}
 	rendered := out.String()
-	for _, want := range []string{"Working", "Plan", "Cancelled task", "cancelled from test", "Bye"} {
+	for _, want := range []string{"Task - started", "Plan", "Cancelled task", "cancelled from test", "Bye"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected streaming command output to contain %q, got:\n%s", want, rendered)
 		}

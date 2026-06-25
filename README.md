@@ -217,6 +217,8 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 
 交互界面会展示：
 
+- `Core` / `Safety`：当前连接的 agent core 和写入策略。
+- 轻量进度行：任务启动、planning、workspace、tool call 和完成状态。
 - `You`：本轮用户输入。
 - `Plan`：LLM 生成的工具步骤。
 - `Tools`：每个工具的执行状态和多行输出预览。

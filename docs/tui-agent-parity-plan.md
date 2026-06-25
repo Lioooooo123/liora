@@ -85,6 +85,8 @@ Workspace / Docker / MCP / LLM Providers
 - 首屏不阻塞慢初始化，MCP/skills/git 扫描后台完成后更新状态。
 - 支持 transcript 搜索、长输出分页、模型/权限模式状态显示。
 
+当前进展：line-based TUI 已增加 `Core` / `Safety` 状态，并把 planning、workspace、tool.call、completed 等进度事件改为轻量日志行；Plan、Tools、Summary、Diff 继续使用阅读区块。完整全屏 TUI 仍是下一阶段。
+
 ## 第一阶段落地
 
 本阶段先做共享能力基础，不急着全量重写 TUI：

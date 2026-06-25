@@ -18,6 +18,8 @@ import (
 type Config struct {
 	Workspace string
 	Model     string
+	Core      string
+	Safety    string
 	Commands  CommandHandler
 }
 
@@ -110,6 +112,16 @@ func RenderWelcome(config Config) string {
 		labelStyle.Render("Workspace") + " " + config.Workspace,
 		labelStyle.Render("Model") + " " + model,
 	}, "\n")
+	var runtime []string
+	if strings.TrimSpace(config.Core) != "" {
+		runtime = append(runtime, labelStyle.Render("Core")+" "+config.Core)
+	}
+	if strings.TrimSpace(config.Safety) != "" {
+		runtime = append(runtime, labelStyle.Render("Safety")+" "+config.Safety)
+	}
+	if len(runtime) > 0 {
+		status += "\n" + strings.Join(runtime, "\n")
+	}
 	commands := mutedStyle.Render("Commands  /help  /tools  /tasks  /sessions  /timeline  /last  /resume  /resume-session  /approve  /deny  /apply  /cancel  /exit")
 	return header + "\n" + status + "\n\n" + commands + "\n"
 }
@@ -304,7 +316,7 @@ func (a *App) handleStreamingLine(ctx context.Context, line string, output io.Wr
 
 func (a *App) startStreamingTurn(ctx context.Context, input string, output io.Writer, streamer StreamingSubmitter, write func(func()), running *bool, turnDone *<-chan turnOutcome) {
 	write(func() {
-		fmt.Fprintln(output, mutedStyle.Render("Working..."))
+		renderLogLine(output, "task", "started")
 	})
 	done := make(chan turnOutcome, 1)
 	*running = true
@@ -324,7 +336,7 @@ func isRunningCommand(line string) bool {
 }
 
 func (a *App) runTurn(ctx context.Context, input string, output io.Writer) error {
-	fmt.Fprintln(output, mutedStyle.Render("Working..."))
+	renderLogLine(output, "task", "started")
 	if streamer, ok := a.submitter.(StreamingSubmitter); ok {
 		_, err := streamer.SubmitStream(ctx, input, func(update StreamUpdate) {
 			RenderStreamUpdate(output, update)
@@ -345,7 +357,7 @@ func RenderStreamUpdate(output io.Writer, update StreamUpdate) {
 	switch update.Type {
 	case "task.planning", "sandbox.run", "sandbox.workspace":
 		if strings.TrimSpace(payload.Message) != "" {
-			renderSection(output, "Status", payload.Message)
+			renderLogLine(output, "status", payload.Message)
 		}
 	case "task.plan_ready":
 		if strings.TrimSpace(payload.Steps) != "" {
@@ -354,7 +366,7 @@ func RenderStreamUpdate(output io.Writer, update StreamUpdate) {
 	case "tool.call":
 		line := strings.TrimSpace(payload.Tool + " " + payload.Input)
 		if line != "" {
-			renderSection(output, "Tool", line)
+			renderLogLine(output, "tool", line)
 		}
 	case "tool.result":
 		renderSection(output, "Tools", formatToolEvent(payload))
@@ -389,7 +401,7 @@ func RenderStreamUpdate(output io.Writer, update StreamUpdate) {
 		if payload.Message != "" {
 			status += ": " + payload.Message
 		}
-		renderSection(output, "Status", status)
+		renderLogLine(output, "status", status)
 	case "task.error":
 		renderSection(output, "Error", strings.TrimSpace(payload.Message+"\n"+payload.Output))
 	}
@@ -482,6 +494,28 @@ func renderSection(output io.Writer, title string, body string) {
 	body = strings.TrimRight(body, "\n")
 	content := labelStyle.Render(title) + "\n" + body
 	fmt.Fprintln(output, boxStyle.Render(content))
+}
+
+func renderLogLine(output io.Writer, label string, body string) {
+	body = firstNonEmptyLine(strings.TrimSpace(body))
+	if body == "" {
+		return
+	}
+	label = strings.TrimSpace(label)
+	if label != "" {
+		label = strings.ToUpper(label[:1]) + label[1:]
+	}
+	fmt.Fprintln(output, mutedStyle.Render("  "+label+" - ")+body)
+}
+
+func firstNonEmptyLine(value string) string {
+	for _, line := range strings.Split(value, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 func formatToolOutput(value string, maxLines int) []string {

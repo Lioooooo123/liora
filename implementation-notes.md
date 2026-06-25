@@ -181,3 +181,9 @@
 - daemon 和默认 TUI 的 `LIORA_PATCH_MODE` 默认值从关闭改为开启，写文件先发生在临时 workspace 副本中，用户通过 `/apply` 或 apply API 后才落到真实 workspace。
 - 保留 `LIORA_PATCH_MODE=0` 作为显式关闭开关，便于调试或需要旧式直接写入的本地自动化；非交互脚本模式仍保持直接执行，不受该默认值影响。
 - 默认 patch mode 后，运行中 `/cancel` 更容易与 task runner 的事件写入并发，曾触发 SQLite `database is locked`。`Store.OpenDB` 现在设置单连接池和 `PRAGMA busy_timeout=5000`，优先保证本地 agent 的写入稳定性；未来高并发客户端再考虑更细的写队列。
+
+## 2026-06-26 TUI Workbench Baseline
+
+- TUI 首屏新增 `Core` 和 `Safety`，让用户能看到当前是 embedded/external daemon，以及写入策略是 patch-first 还是 direct-write。
+- streaming 事件里的 planning、workspace、tool.call、completed/cancelled 改为轻量日志行，避免每个小状态都渲染成卡片；Plan、Tools、Summary、Diff 仍保留区块，保证主要内容可读。
+- 本阶段没有引入 Bubble Tea 全屏 TUI，原因是当前 line-based TUI 已经承担 smoke/e2e 基线；先降低噪音和卡顿风险，再做可滚动 transcript、状态栏、diff 面板和快捷键。

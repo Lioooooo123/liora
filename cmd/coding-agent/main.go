@@ -110,6 +110,7 @@ func main() {
 		commands := tui.CommandHandler(turnRuntime)
 		baseURL := daemonBaseURL(*daemonAddr)
 		var embedded *embeddedDaemon
+		coreLabel := "external daemon"
 		if !*tuiDaemon {
 			embedded, err = startEmbeddedDaemon(persistentStore, planner, sandboxExecutor, patchMode)
 			if err != nil {
@@ -118,6 +119,7 @@ func main() {
 			}
 			defer embedded.close()
 			baseURL = embedded.baseURL
+			coreLabel = "embedded daemon"
 		}
 		client, err := daemonclient.New(baseURL)
 		if err != nil {
@@ -134,6 +136,8 @@ func main() {
 		app := tui.New(tui.Config{
 			Workspace: workspace.Root(),
 			Model:     llmLabel(llmConfig),
+			Core:      coreLabel,
+			Safety:    safetyLabel(patchMode),
 			Commands:  commands,
 		}, submitter)
 		if err := app.Run(context.Background(), os.Stdin, os.Stdout); err != nil {
@@ -311,6 +315,13 @@ func llmLabel(config llm.Config) string {
 		return llm.ProviderDisplayName(provider)
 	}
 	return llm.ProviderDisplayName(provider) + " / " + config.Model
+}
+
+func safetyLabel(patchMode bool) string {
+	if patchMode {
+		return "patch-first"
+	}
+	return "direct-write"
 }
 
 func mcpManagerFromStore(s *store.Store) (*mcppkg.Manager, error) {
