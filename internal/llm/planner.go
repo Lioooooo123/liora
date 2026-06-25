@@ -13,6 +13,13 @@ type PlanRequest struct {
 	UserPrompt       string
 }
 
+type ReplanRequest struct {
+	WorkspaceSummary string
+	UserPrompt       string
+	PreviousSteps    string
+	Failure          string
+}
+
 type Planner struct {
 	generator Generator
 }
@@ -58,6 +65,33 @@ func (p *Planner) PlanTurn(ctx context.Context, request PlanRequest) (PlanTurn, 
 	return PlanTurn{Steps: steps}, nil
 }
 
+func (p *Planner) ReplanTurn(ctx context.Context, request ReplanRequest) (PlanTurn, error) {
+	if strings.TrimSpace(request.UserPrompt) == "" {
+		return PlanTurn{}, fmt.Errorf("user prompt is required")
+	}
+	if strings.TrimSpace(request.PreviousSteps) == "" {
+		return PlanTurn{}, fmt.Errorf("previous steps are required")
+	}
+	if strings.TrimSpace(request.Failure) == "" {
+		return PlanTurn{}, fmt.Errorf("failure context is required")
+	}
+	response, err := p.generator.Generate(ctx, []Message{
+		{Role: "system", Content: replanSystemPrompt()},
+		{Role: "user", Content: replanUserPrompt(request)},
+	})
+	if err != nil {
+		return PlanTurn{}, err
+	}
+	steps := cleanPlannerResponse(response)
+	if answer, ok := parseDirectAnswer(steps); ok {
+		return PlanTurn{Answer: answer}, nil
+	}
+	if err := validateSteps(steps); err != nil {
+		return PlanTurn{}, err
+	}
+	return PlanTurn{Steps: steps}, nil
+}
+
 func plannerSystemPrompt() string {
 	return `You are a coding-agent planner. Convert the user's request into newline-separated tool steps.
 
@@ -80,6 +114,24 @@ Rules:
 - For greetings such as "hello" or "你好", answer directly with ANSWER:.`
 }
 
+func replanSystemPrompt() string {
+	return `You are a coding-agent repair planner. A previous tool plan failed.
+
+Output a corrected newline-separated tool plan that continues from the current workspace state.
+
+Allowed tools:
+` + capabilities.PlannerToolList() + `
+
+Rules:
+- Use relative paths only.
+- Do not repeat the exact failing step unless it is intentionally fixed by earlier steps.
+- Prefer observing the workspace with list, glob, search, stat, or read before editing.
+- Prefer built-in file tools over shell commands when possible.
+- End with diff after file edits.
+- Do not output unsupported tools.
+- Do not output explanations.`
+}
+
 func plannerUserPrompt(request PlanRequest) string {
 	var builder strings.Builder
 	if strings.TrimSpace(request.WorkspaceSummary) != "" {
@@ -89,6 +141,23 @@ func plannerUserPrompt(request PlanRequest) string {
 	}
 	builder.WriteString("User request:\n")
 	builder.WriteString(request.UserPrompt)
+	return builder.String()
+}
+
+func replanUserPrompt(request ReplanRequest) string {
+	var builder strings.Builder
+	if strings.TrimSpace(request.WorkspaceSummary) != "" {
+		builder.WriteString("Workspace:\n")
+		builder.WriteString(request.WorkspaceSummary)
+		builder.WriteString("\n\n")
+	}
+	builder.WriteString("Original user request:\n")
+	builder.WriteString(request.UserPrompt)
+	builder.WriteString("\n\nPrevious plan:\n")
+	builder.WriteString(request.PreviousSteps)
+	builder.WriteString("\n\nFailure:\n")
+	builder.WriteString(request.Failure)
+	builder.WriteString("\n\nReturn a corrected plan.")
 	return builder.String()
 }
 

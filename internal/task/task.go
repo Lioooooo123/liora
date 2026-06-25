@@ -20,6 +20,7 @@ const (
 	EventTaskCreated        EventType = "task.created"
 	EventPlanning           EventType = "task.planning"
 	EventPlanReady          EventType = "task.plan_ready"
+	EventReplanning         EventType = "task.replanning"
 	EventToolCall           EventType = "tool.call"
 	EventToolResult         EventType = "tool.result"
 	EventSummary            EventType = "task.summary"

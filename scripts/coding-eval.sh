@@ -67,7 +67,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length).decode()
-        if "multi-file" in raw:
+        if "Failure:" in raw and "missing-replan.txt" in raw:
+            content = "read README.md"
+        elif "replan-case" in raw:
+            content = "read missing-replan.txt"
+        elif "multi-file" in raw:
             content = "write config/settings.txt enabled\nwrite docs/guide.txt ready\ndiff"
         elif "old" in raw and "new" in raw:
             content = "read app.txt\nreplace app.txt old new\ndiff"
@@ -186,6 +190,25 @@ printf '%s' "$MULTI_APPLY_JSON" | grep -q 'docs/guide.txt'
 grep -q '^enabled$' "$WORKSPACE/config/settings.txt"
 grep -q '^ready$' "$WORKSPACE/docs/guide.txt"
 
+REPLAN_BODY="$(python3 - "$WORKSPACE" <<'PY'
+import json
+import sys
+print(json.dumps({
+    "workspace": sys.argv[1],
+    "prompt": "replan-case: recover from a missing file and read README",
+    "natural": True,
+    "run_async": True,
+}))
+PY
+)"
+REPLAN_JSON="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks" -H 'Content-Type: application/json' -d "$REPLAN_BODY")"
+REPLAN_TASK_ID="$(printf '%s' "$REPLAN_JSON" | json_get task.id)"
+REPLAN_STREAM="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks/$REPLAN_TASK_ID/events/stream")"
+[[ "$REPLAN_STREAM" == *"event: task.replanning"* ]]
+[[ "$REPLAN_STREAM" == *"missing-replan.txt"* ]]
+[[ "$REPLAN_STREAM" == *"event: task.completed"* ]]
+curl -fsS "http://$DAEMON_ADDR/v1/tasks/$REPLAN_TASK_ID/events" | grep -q 'README.md'
+
 BIG_OUTPUT_BODY="$(python3 - "$WORKSPACE" <<'PY'
 import json
 import sys
@@ -269,4 +292,4 @@ curl -fsS "http://$DAEMON_ADDR/v1/tasks/$CANCEL_TASK_ID/cancel" \
   -d '{"reason":"eval stop"}' >/dev/null
 curl -fsS "http://$DAEMON_ADDR/v1/tasks/$CANCEL_TASK_ID/events/stream" | grep -q 'event: task.cancelled'
 
-echo "coding eval ok: task=$TASK_ID session=$SESSION_ID multi=$MULTI_TASK_ID big_output=$BIG_OUTPUT_TASK_ID approve=$APPROVE_TASK_ID deny=$DENY_TASK_ID cancel=$CANCEL_TASK_ID"
+echo "coding eval ok: task=$TASK_ID session=$SESSION_ID multi=$MULTI_TASK_ID replan=$REPLAN_TASK_ID big_output=$BIG_OUTPUT_TASK_ID approve=$APPROVE_TASK_ID deny=$DENY_TASK_ID cancel=$CANCEL_TASK_ID"

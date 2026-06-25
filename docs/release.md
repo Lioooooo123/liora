@@ -47,7 +47,7 @@ LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 \
 ./scripts/coding-eval.sh
 ```
 
-这个 eval 会启动临时 fake LLM 和 Core Daemon，覆盖自然语言规划、单文件和多文件 patch-first 写入、apply 落盘、大输出截断、事件历史、timeline、permission approve/deny、cancel 和子进程清理。
+这个 eval 会启动临时 fake LLM 和 Core Daemon，覆盖自然语言规划、失败后 replan、单文件和多文件 patch-first 写入、apply 落盘、大输出截断、事件历史、timeline、permission approve/deny、cancel 和子进程清理。
 
 ## 用户安装
 

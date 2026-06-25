@@ -361,10 +361,11 @@ func timelineItemFromEvent(sessionID string, task Task, event Event) (TimelineIt
 		item.Kind = "approval"
 		item.Status = payload.Status
 		item.Content = payload.Message
-	case EventCompleted, EventCancelled, EventError:
+	case EventReplanning, EventCompleted, EventCancelled, EventError:
 		item.Kind = "status"
 		item.Status = payload.Status
 		item.Content = payload.Message
+		item.Reason = payload.Reason
 	default:
 		return TimelineItem{}, false
 	}

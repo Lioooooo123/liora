@@ -72,3 +72,33 @@ func TestPlannerSupportsDirectAnswer(t *testing.T) {
 		t.Fatalf("expected no tool steps, got %q", turn.Steps)
 	}
 }
+
+func TestPlannerReplansWithFailureContext(t *testing.T) {
+	generator := &fakeGenerator{response: "list .\nread app.txt"}
+	planner := NewPlanner(generator)
+
+	turn, err := planner.ReplanTurn(t.Context(), ReplanRequest{
+		WorkspaceSummary: "files: README.md app.txt",
+		UserPrompt:       "看看 app 文件",
+		PreviousSteps:    "read missing.txt",
+		Failure:          "open missing.txt: no such file or directory",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turn.Steps != "list .\nread app.txt" {
+		t.Fatalf("unexpected replan steps %q", turn.Steps)
+	}
+	if len(generator.messages) != 2 {
+		t.Fatalf("expected system and user messages, got %#v", generator.messages)
+	}
+	if !strings.Contains(generator.messages[0].Content, "repair planner") || !strings.Contains(generator.messages[0].Content, "read <path>") {
+		t.Fatalf("unexpected replan system prompt:\n%s", generator.messages[0].Content)
+	}
+	userPrompt := generator.messages[1].Content
+	for _, want := range []string{"看看 app 文件", "read missing.txt", "open missing.txt"} {
+		if !strings.Contains(userPrompt, want) {
+			t.Fatalf("expected replan prompt to contain %q, got:\n%s", want, userPrompt)
+		}
+	}
+}

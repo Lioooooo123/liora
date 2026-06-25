@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -29,6 +30,7 @@ type Runtime struct {
 type SubmitOptions struct {
 	Recorder trace.Recorder
 	OnPlan   func(steps string)
+	OnReplan func(attempt int, reason string)
 }
 
 func New(workspacePath string, planner *llm.Planner, stores ...*store.Store) (*Runtime, error) {
@@ -81,6 +83,42 @@ func (r *Runtime) SubmitWithOptions(ctx context.Context, input string, options S
 	if recorder == nil {
 		recorder = trace.NewMemoryRecorder()
 	}
+	result, err := r.runPlannedSteps(ctx, turn.Steps, recorder)
+	plannedSteps := turn.Steps
+	if err != nil && r.shouldReplan(ctx, err) {
+		if options.OnReplan != nil {
+			options.OnReplan(1, err.Error())
+		}
+		replan, replanErr := r.planner.ReplanTurn(ctx, llm.ReplanRequest{
+			WorkspaceSummary: r.workspaceSummary(),
+			UserPrompt:       input,
+			PreviousSteps:    turn.Steps,
+			Failure:          replanFailureContext(result, err),
+		})
+		if replanErr != nil {
+			return tui.TurnResult{
+				PlannedSteps: plannedSteps,
+				AgentResult:  result,
+				Events:       recordedEvents(recorder),
+			}, err
+		}
+		if strings.TrimSpace(replan.Answer) != "" {
+			return tui.TurnResult{Answer: replan.Answer, PlannedSteps: plannedSteps, AgentResult: result, Events: recordedEvents(recorder)}, err
+		}
+		if options.OnPlan != nil {
+			options.OnPlan(replan.Steps)
+		}
+		plannedSteps = strings.TrimSpace(plannedSteps + "\n\n# Replan 1\n" + replan.Steps)
+		result, err = r.runPlannedSteps(ctx, replan.Steps, recorder)
+	}
+	return tui.TurnResult{
+		PlannedSteps: plannedSteps,
+		AgentResult:  result,
+		Events:       recordedEvents(recorder),
+	}, err
+}
+
+func (r *Runtime) runPlannedSteps(ctx context.Context, steps string, recorder trace.Recorder) (agent.Result, error) {
 	runner := agent.New(r.workspace, recorder)
 	if r.sandbox != nil {
 		runner.SetShellExecutor(r.sandbox)
@@ -91,12 +129,36 @@ func (r *Runtime) SubmitWithOptions(ctx context.Context, input string, options S
 	if manager, err := r.mcpManager(); err == nil {
 		runner.SetMCP(manager)
 	}
-	result, err := runner.Run(ctx, turn.Steps)
-	return tui.TurnResult{
-		PlannedSteps: turn.Steps,
-		AgentResult:  result,
-		Events:       recordedEvents(recorder),
-	}, err
+	return runner.Run(ctx, steps)
+}
+
+func (r *Runtime) shouldReplan(ctx context.Context, err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+		return false
+	}
+	var permissionErr *permission.RequiredError
+	return !errors.As(err, &permissionErr)
+}
+
+func replanFailureContext(result agent.Result, err error) string {
+	var builder strings.Builder
+	if err != nil {
+		builder.WriteString(err.Error())
+	}
+	if strings.TrimSpace(result.Summary) != "" {
+		if builder.Len() > 0 {
+			builder.WriteString("\n")
+		}
+		builder.WriteString(result.Summary)
+	}
+	if strings.TrimSpace(result.Diff) != "" {
+		if builder.Len() > 0 {
+			builder.WriteString("\n")
+		}
+		builder.WriteString("Current diff:\n")
+		builder.WriteString(result.Diff)
+	}
+	return builder.String()
 }
 
 type eventRecorder interface {

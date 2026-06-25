@@ -131,6 +131,13 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 				planReadyEmitted = true
 				_ = r.repo.AppendEvent(ctx, task.ID, EventPlanReady, EventPayload{Steps: steps})
 			},
+			OnReplan: func(attempt int, reason string) {
+				_ = r.repo.AppendEvent(ctx, task.ID, EventReplanning, EventPayload{
+					Message: fmt.Sprintf("Replanning after failure, attempt %d", attempt),
+					Status:  string(StatusPlanning),
+					Reason:  reason,
+				})
+			},
 		})
 		return runtimeResult{
 			answer:           result.Answer,
@@ -206,11 +213,7 @@ func (r *Runner) appendTraceEvents(ctx context.Context, taskID string, event tra
 		Tool:  event.Tool,
 		Input: event.Input,
 	})
-	eventType := EventToolResult
-	if event.Status == trace.StatusError {
-		eventType = EventError
-	}
-	_ = r.repo.AppendEvent(ctx, taskID, eventType, EventPayload{
+	_ = r.repo.AppendEvent(ctx, taskID, EventToolResult, EventPayload{
 		Tool:   event.Tool,
 		Input:  event.Input,
 		Output: event.Output,

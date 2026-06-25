@@ -15,7 +15,8 @@ import (
 )
 
 type fakeGenerator struct {
-	response string
+	response  string
+	responses []string
 }
 
 type fakeSandboxExecutor struct {
@@ -28,6 +29,11 @@ type blockingSecondCommandExecutor struct {
 }
 
 func (f *fakeGenerator) Generate(_ context.Context, _ []llm.Message) (string, error) {
+	if len(f.responses) > 0 {
+		response := f.responses[0]
+		f.responses = f.responses[1:]
+		return response, nil
+	}
 	return f.response, nil
 }
 
@@ -329,6 +335,72 @@ func TestRunnerPersistsNaturalPlanBeforeTaskCompletes(t *testing.T) {
 	}
 }
 
+func TestRunnerReplansNaturalTaskAfterToolFailure(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "app.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	task, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "read the app file",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner := NewRunner(repo, llm.NewPlanner(&fakeGenerator{responses: []string{
+		"read missing.txt",
+		"list .\nread app.txt",
+	}}))
+	if err := runner.Run(t.Context(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.Get(t.Context(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusCompleted {
+		t.Fatalf("unexpected task status %#v", got)
+	}
+	events, err := repo.Events(t.Context(), task.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	types := eventTypes(events)
+	if !containsEventType(types, EventReplanning) || countEventType(types, EventPlanReady) != 2 {
+		t.Fatalf("expected replan and two plan events, got %#v", types)
+	}
+	var payloads strings.Builder
+	for _, event := range events {
+		payloads.WriteString(event.Payload)
+		payloads.WriteByte('\n')
+	}
+	if !strings.Contains(payloads.String(), "missing.txt") || !strings.Contains(payloads.String(), "app.txt") || !strings.Contains(payloads.String(), "completed 2 steps") {
+		t.Fatalf("unexpected event payloads:\n%s", payloads.String())
+	}
+	timeline, err := repo.Timeline(t.Context(), task.SessionID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawReplan bool
+	for _, item := range timeline {
+		if item.Type == string(EventReplanning) && item.Kind == "status" {
+			sawReplan = true
+		}
+	}
+	if !sawReplan {
+		t.Fatalf("expected timeline to expose replan status, got %#v", timeline)
+	}
+}
+
 func TestRunnerPatchModeProducesDiffWithoutMutatingWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	db, err := store.New(t.TempDir()).OpenDB()
@@ -458,6 +530,16 @@ func eventTypes(events []Event) []EventType {
 		types = append(types, event.Type)
 	}
 	return types
+}
+
+func countEventType(events []EventType, want EventType) int {
+	count := 0
+	for _, event := range events {
+		if event == want {
+			count++
+		}
+	}
+	return count
 }
 
 func waitUntil(t *testing.T, timeout time.Duration, condition func() bool) {

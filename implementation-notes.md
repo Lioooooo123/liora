@@ -220,3 +220,10 @@
 - 全量测试暴露 `TestLocalExecutorCancelStopsChildProcesses` 偶发失败：只按 process group 发送一次 `SIGKILL` 时，shell 后台子进程仍可能存活并继续写 workspace。
 - Unix 本地 executor 取消时现在先递归收集并杀掉当前命令的 descendant pids，再杀 process group；`cmd.Wait()` 返回后再补一次清理。这样覆盖 shell 子进程不完全留在同一 process group 的情况。
 - 该实现依赖 Unix `pgrep -P` 做 descendant discovery；macOS 本地优先满足，非 Unix 仍保留原主进程 kill fallback。
+
+## 2026-06-26 Bounded Replan Baseline
+
+- natural task 在工具步骤失败后会最多触发一次 replan：runtime 把用户原始请求、上一次计划、错误信息和当前 diff 交给 planner，要求 LLM 生成修正版步骤并在同一 workspace 副本中继续执行。
+- 新增 `task.replanning` 事件，daemon/TUI/未来客户端都能看到“正在修正计划”，随后会出现第二个 `task.plan_ready`。工具级失败现在仍使用 `tool.result` 且 `status=error`，`task.error` 只表示任务最终失败，避免 TUI 在可恢复错误上提前断流。
+- 当前不做无限循环或复杂 self-healing tree search，原因是本地 MVP 需要可预测的执行时间和清晰事件线。后续如要对齐更强的 Claude Code/Kimi Code 体验，可以把 replan 次数、错误分类和观察步骤预算做成策略配置。
+- `scripts/coding-eval.sh` 新增 `replan-case`，用 fake LLM 先规划错误文件，再根据 replan prompt 中的 failure context 返回正确读取步骤，验证 `task.replanning` 和最终 `task.completed`。

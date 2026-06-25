@@ -363,6 +363,15 @@ func RenderStreamUpdate(output io.Writer, update StreamUpdate) {
 		if strings.TrimSpace(payload.Steps) != "" {
 			renderSection(output, "Plan", formatPlan(payload.Steps))
 		}
+	case "task.replanning":
+		message := payload.Message
+		if strings.TrimSpace(message) == "" {
+			message = "Replanning after failure"
+		}
+		if strings.TrimSpace(payload.Reason) != "" {
+			message += ": " + firstNonEmptyLine(payload.Reason)
+		}
+		renderLogLine(output, "status", message)
 	case "tool.call":
 		line := strings.TrimSpace(payload.Tool + " " + payload.Input)
 		if line != "" {

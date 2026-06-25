@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/llm"
 	"github.com/Lioooooo123/liora/internal/store"
 )
@@ -23,12 +24,20 @@ func TestMain(m *testing.M) {
 }
 
 type fakeGenerator struct {
-	response string
-	messages []llm.Message
+	response    string
+	responses   []string
+	messages    []llm.Message
+	allMessages [][]llm.Message
 }
 
 func (f *fakeGenerator) Generate(_ context.Context, messages []llm.Message) (string, error) {
-	f.messages = messages
+	f.messages = append([]llm.Message(nil), messages...)
+	f.allMessages = append(f.allMessages, append([]llm.Message(nil), messages...))
+	if len(f.responses) > 0 {
+		response := f.responses[0]
+		f.responses = f.responses[1:]
+		return response, nil
+	}
 	return f.response, nil
 }
 
@@ -73,6 +82,60 @@ func TestTurnRuntimeExecutesPlannedTools(t *testing.T) {
 	}
 	if !strings.Contains(result.Events[0].Output, "README.md") {
 		t.Fatalf("expected list output, got %#v", result.Events[0])
+	}
+}
+
+func TestTurnRuntimeReplansAfterToolFailure(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "app.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	generator := &fakeGenerator{responses: []string{
+		"read missing.txt",
+		"list .\nread app.txt",
+	}}
+	runtime, err := New(root, llm.NewPlanner(generator))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plans []string
+	var replans []string
+
+	result, err := runtime.SubmitWithOptions(t.Context(), "看看 app 文件", SubmitOptions{
+		OnPlan: func(steps string) {
+			plans = append(plans, steps)
+		},
+		OnReplan: func(_ int, reason string) {
+			replans = append(replans, reason)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AgentResult.Status != agent.StatusCompleted {
+		t.Fatalf("expected completed, got %#v", result.AgentResult)
+	}
+	if len(plans) != 2 || plans[0] != "read missing.txt" || plans[1] != "list .\nread app.txt" {
+		t.Fatalf("unexpected plan callbacks %#v", plans)
+	}
+	if len(replans) != 1 || !strings.Contains(replans[0], "missing.txt") {
+		t.Fatalf("unexpected replan callbacks %#v", replans)
+	}
+	if !strings.Contains(result.PlannedSteps, "# Replan 1") || !strings.Contains(result.PlannedSteps, "read app.txt") {
+		t.Fatalf("unexpected planned steps:\n%s", result.PlannedSteps)
+	}
+	if len(result.Events) != 3 {
+		t.Fatalf("expected failed read plus two repaired events, got %#v", result.Events)
+	}
+	if result.Events[0].Status != "error" || result.Events[0].Tool != "read" {
+		t.Fatalf("expected first event to be failed read, got %#v", result.Events[0])
+	}
+	if len(generator.allMessages) != 2 {
+		t.Fatalf("expected initial plan and replan calls, got %d", len(generator.allMessages))
+	}
+	if !strings.Contains(generator.allMessages[1][1].Content, "read missing.txt") ||
+		!strings.Contains(generator.allMessages[1][1].Content, "no such file") {
+		t.Fatalf("expected replan prompt to include failure context:\n%s", generator.allMessages[1][1].Content)
 	}
 }
 
