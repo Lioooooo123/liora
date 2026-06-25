@@ -11,6 +11,7 @@ import (
 	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/config"
 	"github.com/Lioooooo123/liora/internal/daemon"
+	"github.com/Lioooooo123/liora/internal/daemonclient"
 	"github.com/Lioooooo123/liora/internal/llm"
 	mcppkg "github.com/Lioooooo123/liora/internal/mcp"
 	"github.com/Lioooooo123/liora/internal/runtime"
@@ -20,6 +21,7 @@ import (
 	"github.com/Lioooooo123/liora/internal/tools"
 	"github.com/Lioooooo123/liora/internal/trace"
 	"github.com/Lioooooo123/liora/internal/tui"
+	"github.com/Lioooooo123/liora/internal/tuisession"
 )
 
 var version = "dev"
@@ -36,6 +38,7 @@ func main() {
 	natural := flag.Bool("natural", false, "treat prompt/stdin as natural language and ask an LLM to plan tool steps")
 	daemonMode := flag.Bool("daemon", false, "start the local Liora core daemon")
 	daemonAddr := flag.String("daemon-addr", "127.0.0.1:18080", "daemon listen address")
+	tuiDaemon := flag.Bool("tui-daemon", false, "run interactive TUI through the local daemon event stream")
 	llmProvider := flag.String("llm-provider", getenvAny("LIORA_LLM_PROVIDER", "OPENAI_PROVIDER", ""), "LLM provider: openai-chat, openai-responses, deepseek, anthropic, gemini")
 	llmBaseURL := flag.String("llm-base-url", getenvAny("LIORA_LLM_BASE_URL", "OPENAI_BASE_URL", ""), "LLM API base URL")
 	llmAPIKey := flag.String("llm-api-key", getenvAny("LIORA_LLM_API_KEY", "OPENAI_API_KEY", ""), "LLM API key")
@@ -99,11 +102,24 @@ func main() {
 	turnRuntime.SetSandbox(sandboxExecutor)
 
 	if *interactive || defaultInteractive {
+		submitter := tui.Submitter(turnRuntime)
+		if *tuiDaemon {
+			client, err := daemonclient.New(daemonBaseURL(*daemonAddr))
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
+			if err := client.Health(context.Background()); err != nil {
+				fmt.Fprintln(os.Stderr, "daemon is not reachable:", err)
+				os.Exit(1)
+			}
+			submitter = tuisession.NewDaemonSubmitter(client, workspace.Root(), true)
+		}
 		app := tui.New(tui.Config{
 			Workspace: workspace.Root(),
 			Model:     llmLabel(llmConfig),
 			Commands:  turnRuntime,
-		}, turnRuntime)
+		}, submitter)
 		if err := app.Run(context.Background(), os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -170,6 +186,14 @@ func main() {
 	if err != nil {
 		os.Exit(1)
 	}
+}
+
+func daemonBaseURL(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
+		return addr
+	}
+	return "http://" + addr
 }
 
 func newTaskRunner(repo *taskpkg.Repository, planner *llm.Planner, executor sandbox.Executor, patchMode bool) *taskpkg.Runner {

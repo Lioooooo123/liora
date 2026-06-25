@@ -274,6 +274,75 @@ func TestCLIDaemonModeServesHealth(t *testing.T) {
 	}
 }
 
+func TestCLIInteractiveCanStreamThroughDaemon(t *testing.T) {
+	workspace := t.TempDir()
+	for _, path := range []string{"README.md", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(workspace, path), []byte("hello\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	packageDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "liora")
+	build := exec.Command("go", "build", "-o", binary, packageDir)
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %v\n%s", err, string(output))
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices": [
+				{"message": {"role": "assistant", "content": "list ."}}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	addr := freeLocalAddr(t)
+	home := t.TempDir()
+	daemonCmd := exec.Command(
+		binary,
+		"-daemon",
+		"-daemon-addr", addr,
+		"-workspace", workspace,
+		"-llm-base-url", server.URL,
+		"-llm-model", "test-model",
+	)
+	daemonCmd.Env = append(os.Environ(), "LIORA_HOME="+home, "OPENAI_API_KEY=test-key")
+	if err := daemonCmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = daemonCmd.Process.Kill()
+		_ = daemonCmd.Wait()
+	})
+	waitForDaemon(t, addr)
+
+	tuiCmd := exec.Command(
+		binary,
+		"-workspace", workspace,
+		"-interactive",
+		"-tui-daemon",
+		"-daemon-addr", addr,
+		"-llm-base-url", server.URL,
+		"-llm-model", "test-model",
+	)
+	tuiCmd.Env = append(os.Environ(), "LIORA_HOME="+home, "OPENAI_API_KEY=test-key")
+	tuiCmd.Stdin = strings.NewReader("看看目录\n/exit\n")
+	output, err := tuiCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\n%s", err, string(output))
+	}
+	rendered := string(output)
+	for _, want := range []string{"Status", "Planning task", "Plan", "- list .", "Tools", "README.md", "notes.txt", "completed"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected daemon-backed TUI output to contain %q, got:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestCLIInteractiveDirectoryListingShowsMultipleEntries(t *testing.T) {
 	workspace := t.TempDir()
 	for _, path := range []string{"README.md", "notes.txt"} {
@@ -319,6 +388,22 @@ func TestCLIInteractiveDirectoryListingShowsMultipleEntries(t *testing.T) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, rendered)
 		}
 	}
+}
+
+func waitForDaemon(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get("http://" + addr + "/healthz")
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("daemon did not become healthy at %s", addr)
 }
 
 func freeLocalAddr(t *testing.T) string {

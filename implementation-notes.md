@@ -113,3 +113,10 @@
 - 新增 `internal/daemonclient`，作为 TUI、CLI 扩展和未来 Mac 客户端复用 daemon API 的统一入口。它负责 HTTP 状态码、JSON decode、SSE 解析和 API error 包装，避免 UI 层各自拼接 `/v1/tasks/...` 路径。
 - client 当前覆盖 health、capabilities、create/list/get task、events、stream events、diff、apply、cancel。下一步做流式 TUI 时应依赖这个包，而不是继续直接调用 in-process runtime。
 - SSE parser 会把 `event:` 与 `data:` 转成 `StreamEvent`。daemon 目前的错误帧只携带字符串，因此 client 将 `task.error` 帧包装成错误返回；如果后续 daemon 将错误也标准化成 `task.Event`，这里需要同步更新解析逻辑。
+
+## 2026-06-26 Daemon-backed TUI
+
+- 新增 `tui.StreamingSubmitter` 和 `internal/tuisession.DaemonSubmitter`，TUI 可以通过 daemon 创建 async task，并随着 SSE 事件即时渲染 `Status / Plan / Tool / Tools / Summary / Diff`。这样后续 Mac 客户端和 TUI 共用 daemon/task/event 主链路。
+- `internal/tui` 不再直接依赖 daemonclient 或 task 包，避免 `runtime -> tui` 与 `tui -> task -> runtime` 的 import cycle；daemon 适配逻辑放在 `internal/tuisession`。
+- CLI 新增 `-tui-daemon`，连接 `-daemon-addr` 指向的已运行 daemon。当前不会自动拉起 daemon，也还不能在任务运行中通过输入 `/cancel` 取消；这两个能力留给后续阶段。
+- 修正 `daemonclient` SSE 解析：daemon 的 SSE `data:` 是事件 payload JSON，不是完整 task event。client 现在用 `event:` 填 type、`id:` 填 id、`data:` 填 payload，避免 UI 层拿不到 payload。

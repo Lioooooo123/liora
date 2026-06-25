@@ -95,11 +95,13 @@ Workspace / Docker / MCP / LLM Providers
 
 下一阶段优先把 TUI 从同步 in-process `Submit` 改成 daemon task 模式：
 
-- 启动或连接 daemon。
-- 创建 async task。
-- 用 `daemonclient.StreamEvents` 驱动实时渲染。
-- `/cancel` 或 Ctrl+C 调用 `daemonclient.Cancel`。
-- diff 出现后展示 apply/cancel/continue 的动作区。
+- 已新增 `-tui-daemon`，可连接已运行 daemon。
+- 已创建 async task。
+- 已用 `daemonclient.StreamEvents` 驱动实时渲染。
+- 待做：`/cancel` 或 Ctrl+C 调用 `daemonclient.Cancel`。
+- 待做：diff 出现后展示 apply/cancel/continue 的动作区，并接入 apply API。
+
+当前实现仍是 line-based TUI，不是 Bubble Tea 全屏 UI。它已经把任务执行链路迁到 daemon/SSE，可作为下一步全屏 TUI 的数据通路验证。
 
 ## 验证门槛
 

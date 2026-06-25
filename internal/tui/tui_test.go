@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -88,6 +89,43 @@ func TestInteractiveLoopRendersAssistantAnswerWithoutTools(t *testing.T) {
 	}
 }
 
+type fakeStreamingSubmitter struct{}
+
+func (f fakeStreamingSubmitter) Submit(_ context.Context, input string) (TurnResult, error) {
+	return TurnResult{}, nil
+}
+
+func (f fakeStreamingSubmitter) SubmitStream(_ context.Context, input string, onEvent func(StreamUpdate)) (TurnResult, error) {
+	for _, update := range []StreamUpdate{
+		streamUpdate("task.plan_ready", eventPayload{Steps: "list ."}),
+		streamUpdate("tool.result", eventPayload{Tool: "list", Input: ".", Output: "README.md\n", Status: string(trace.StatusOK)}),
+		streamUpdate("task.summary", eventPayload{Message: "completed 1 step"}),
+		streamUpdate("task.completed", eventPayload{Status: "completed"}),
+	} {
+		onEvent(update)
+	}
+	return TurnResult{AgentResult: agent.Result{Status: agent.StatusCompleted, Summary: "completed 1 step"}}, nil
+}
+
+func TestInteractiveLoopStreamsTaskEvents(t *testing.T) {
+	var out strings.Builder
+	app := New(Config{Workspace: "/tmp/project", Model: "deepseek-v4-pro"}, fakeStreamingSubmitter{})
+
+	err := app.Run(context.Background(), strings.NewReader("看看目录\n/exit\n"), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := out.String()
+	for _, want := range []string{"Working", "Plan", "- list .", "Tools", "README.md", "Summary", "completed 1 step", "Status", "completed"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected streamed output to contain %q, got:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "You") {
+		t.Fatalf("interactive stream output should not repeat user input, got:\n%s", rendered)
+	}
+}
+
 func TestInteractiveLoopRendersMultilineToolOutput(t *testing.T) {
 	submitter := SubmitterFunc(func(_ context.Context, input string) (TurnResult, error) {
 		return TurnResult{
@@ -115,6 +153,14 @@ func TestInteractiveLoopRendersMultilineToolOutput(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected rendered output to contain %q, got:\n%s", want, rendered)
 		}
+	}
+}
+
+func streamUpdate(eventType string, payload eventPayload) StreamUpdate {
+	data, _ := json.Marshal(payload)
+	return StreamUpdate{
+		Type:        eventType,
+		PayloadJSON: string(data),
 	}
 }
 

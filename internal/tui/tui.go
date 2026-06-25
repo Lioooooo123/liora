@@ -3,6 +3,7 @@ package tui
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strconv"
@@ -34,6 +35,15 @@ type TurnView struct {
 
 type Submitter interface {
 	Submit(ctx context.Context, input string) (TurnResult, error)
+}
+
+type StreamingSubmitter interface {
+	SubmitStream(ctx context.Context, input string, onEvent func(StreamUpdate)) (TurnResult, error)
+}
+
+type StreamUpdate struct {
+	Type        string
+	PayloadJSON string
 }
 
 type CommandHandler interface {
@@ -122,6 +132,12 @@ func (a *App) Run(ctx context.Context, input io.Reader, output io.Writer) error 
 
 func (a *App) runTurn(ctx context.Context, input string, output io.Writer) error {
 	fmt.Fprintln(output, mutedStyle.Render("Working..."))
+	if streamer, ok := a.submitter.(StreamingSubmitter); ok {
+		_, err := streamer.SubmitStream(ctx, input, func(update StreamUpdate) {
+			RenderStreamUpdate(output, update)
+		})
+		return err
+	}
 	result, err := a.submitter.Submit(ctx, input)
 	RenderTurn(output, TurnView{
 		Input:      input,
@@ -129,6 +145,47 @@ func (a *App) runTurn(ctx context.Context, input string, output io.Writer) error
 		TurnResult: result,
 	})
 	return err
+}
+
+func RenderStreamUpdate(output io.Writer, update StreamUpdate) {
+	payload := decodeEventPayload(update.PayloadJSON)
+	switch update.Type {
+	case "task.planning", "sandbox.run", "sandbox.workspace":
+		if strings.TrimSpace(payload.Message) != "" {
+			renderSection(output, "Status", payload.Message)
+		}
+	case "task.plan_ready":
+		if strings.TrimSpace(payload.Steps) != "" {
+			renderSection(output, "Plan", formatPlan(payload.Steps))
+		}
+	case "tool.call":
+		line := strings.TrimSpace(payload.Tool + " " + payload.Input)
+		if line != "" {
+			renderSection(output, "Tool", line)
+		}
+	case "tool.result":
+		renderSection(output, "Tools", formatToolEvent(payload))
+	case "task.summary":
+		if strings.TrimSpace(payload.Message) != "" {
+			renderSection(output, "Summary", payload.Message)
+		}
+	case "task.diff":
+		if strings.TrimSpace(payload.Diff) != "" {
+			renderSection(output, "Diff", strings.TrimRight(payload.Diff, "\n"))
+			renderSection(output, "Next", "Review the diff before applying changes.\nCommands: /apply to confirm, /cancel to stop a running task.")
+		}
+	case "task.completed", "task.cancelled":
+		status := update.Type
+		if payload.Status != "" {
+			status = payload.Status
+		}
+		if payload.Message != "" {
+			status += ": " + payload.Message
+		}
+		renderSection(output, "Status", status)
+	case "task.error":
+		renderSection(output, "Error", strings.TrimSpace(payload.Message+"\n"+payload.Output))
+	}
 }
 
 func RenderTurn(output io.Writer, view TurnView) {
@@ -140,13 +197,7 @@ func RenderTurn(output io.Writer, view TurnView) {
 		renderSection(output, "Assistant", result.Answer)
 	}
 	if strings.TrimSpace(result.PlannedSteps) != "" {
-		var lines []string
-		for _, step := range strings.Split(result.PlannedSteps, "\n") {
-			if strings.TrimSpace(step) != "" {
-				lines = append(lines, "- "+step)
-			}
-		}
-		renderSection(output, "Plan", strings.Join(lines, "\n"))
+		renderSection(output, "Plan", formatPlan(result.PlannedSteps))
 	}
 	if len(result.Events) > 0 {
 		var blocks []string
@@ -174,6 +225,48 @@ func RenderTurn(output io.Writer, view TurnView) {
 		renderSection(output, "Diff", strings.TrimRight(result.AgentResult.Diff, "\n"))
 		renderSection(output, "Next", "Review the diff before applying changes.\nDaemon API: POST /apply to confirm, POST /cancel to stop a running task.")
 	}
+}
+
+type eventPayload struct {
+	Message string `json:"message,omitempty"`
+	Tool    string `json:"tool,omitempty"`
+	Input   string `json:"input,omitempty"`
+	Output  string `json:"output,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Steps   string `json:"steps,omitempty"`
+	Diff    string `json:"diff,omitempty"`
+}
+
+func decodeEventPayload(payloadJSON string) eventPayload {
+	var payload eventPayload
+	_ = json.Unmarshal([]byte(payloadJSON), &payload)
+	return payload
+}
+
+func formatPlan(steps string) string {
+	var lines []string
+	for _, step := range strings.Split(steps, "\n") {
+		if strings.TrimSpace(step) != "" {
+			lines = append(lines, "- "+step)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatToolEvent(payload eventPayload) string {
+	status := okStyle.Render("ok")
+	if payload.Status != "" && payload.Status != string(trace.StatusOK) {
+		status = errStyle.Render("error")
+	}
+	var lines []string
+	lines = append(lines, "["+status+"] "+strings.TrimSpace(payload.Tool+" "+payload.Input))
+	out := strings.TrimSpace(payload.Output)
+	if out != "" {
+		for _, line := range formatToolOutput(out, 12) {
+			lines = append(lines, "  "+line)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderSection(output io.Writer, title string, body string) {

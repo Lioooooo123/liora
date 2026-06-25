@@ -222,6 +222,7 @@ func scanSSE(ctx context.Context, reader io.Reader, events chan<- StreamEvent) e
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
 	var eventType string
+	var eventID string
 	var data strings.Builder
 	flush := func() error {
 		if eventType == "" && data.Len() == 0 {
@@ -231,9 +232,13 @@ func scanSSE(ctx context.Context, reader io.Reader, events chan<- StreamEvent) e
 		if eventType == "task.error" {
 			return fmt.Errorf("daemon stream error: %s", payload)
 		}
-		var event task.Event
-		if err := json.Unmarshal([]byte(payload), &event); err != nil {
-			return fmt.Errorf("decode stream event %q: %w", eventType, err)
+		if !json.Valid([]byte(payload)) {
+			return fmt.Errorf("decode stream event %q: invalid JSON payload", eventType)
+		}
+		event := task.Event{
+			ID:      eventID,
+			Type:    task.EventType(eventType),
+			Payload: payload,
 		}
 		select {
 		case <-ctx.Done():
@@ -241,6 +246,7 @@ func scanSSE(ctx context.Context, reader io.Reader, events chan<- StreamEvent) e
 		case events <- StreamEvent{Type: task.EventType(eventType), Event: event}:
 		}
 		eventType = ""
+		eventID = ""
 		data.Reset()
 		return nil
 	}
@@ -257,6 +263,10 @@ func scanSSE(ctx context.Context, reader io.Reader, events chan<- StreamEvent) e
 		}
 		if strings.HasPrefix(line, "event:") {
 			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			continue
+		}
+		if strings.HasPrefix(line, "id:") {
+			eventID = strings.TrimSpace(strings.TrimPrefix(line, "id:"))
 			continue
 		}
 		if strings.HasPrefix(line, "data:") {
