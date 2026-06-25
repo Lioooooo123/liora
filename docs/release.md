@@ -71,7 +71,7 @@ liora -workspace /path/to/project -prompt $'list .\ndiff'
 启动本地 daemon：
 
 ```sh
-LIORA_PATCH_MODE=1 liora -daemon -daemon-addr 127.0.0.1:18080
+liora -daemon -daemon-addr 127.0.0.1:18080
 ```
 
 ## 包内容

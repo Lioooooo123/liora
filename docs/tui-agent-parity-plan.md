@@ -76,6 +76,8 @@ Workspace / Docker / MCP / LLM Providers
 - 客户端直接复用 daemon API 获取 session、task、message、timeline 历史和实时事件。
 - 待做：timeline 当前是按需投影，不是 materialized transcript snapshot；后续如果要全文搜索和长期压缩，需要落库专门 transcript 表。
 
+当前进展：daemon 和默认 embedded-daemon TUI 已默认开启 patch mode，`LIORA_PATCH_MODE=0` 可显式关闭。下一步应把 apply 确认从命令升级为全屏 TUI/桌面端中的明确按钮或快捷键。
+
 ### P4：产品化 TUI
 
 - 使用 Bubble Tea 或等价模型实现全屏 TUI。

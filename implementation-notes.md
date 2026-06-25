@@ -175,3 +175,9 @@
 - 默认 `liora` / `liora -interactive` 不再走旧的进程内 runtime submitter，而是在本进程内监听临时 localhost 端口启动 embedded Core Daemon，然后 TUI 通过 `daemonclient` 和 SSE 消费任务事件。
 - 显式 `-tui-daemon` 仍表示连接用户已启动的外部 daemon；默认 embedded daemon 避免普通用户还要先手动运行 `liora -daemon`，也让 CLI 入口和未来 Mac 客户端更接近同一套 agent core。
 - embedded daemon 退出时会 shutdown HTTP server 并关闭 SQLite DB。当前没有暴露 daemon 地址，也不做跨进程复用；如果后续要做常驻后台进程，需要补本地 token、端口发现和生命周期管理。
+
+## 2026-06-26 Default Patch Mode
+
+- daemon 和默认 TUI 的 `LIORA_PATCH_MODE` 默认值从关闭改为开启，写文件先发生在临时 workspace 副本中，用户通过 `/apply` 或 apply API 后才落到真实 workspace。
+- 保留 `LIORA_PATCH_MODE=0` 作为显式关闭开关，便于调试或需要旧式直接写入的本地自动化；非交互脚本模式仍保持直接执行，不受该默认值影响。
+- 默认 patch mode 后，运行中 `/cancel` 更容易与 task runner 的事件写入并发，曾触发 SQLite `database is locked`。`Store.OpenDB` 现在设置单连接池和 `PRAGMA busy_timeout=5000`，优先保证本地 agent 的写入稳定性；未来高并发客户端再考虑更细的写队列。

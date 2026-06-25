@@ -74,7 +74,7 @@ func main() {
 	planner := llm.NewPlanner(llmClient)
 	persistentStore := store.New("")
 	sandboxExecutor := sandbox.FromEnv()
-	patchMode := truthyEnv("LIORA_PATCH_MODE")
+	patchMode := boolEnvDefault("LIORA_PATCH_MODE", true)
 
 	if *daemonMode {
 		db, err := persistentStore.OpenDB()
@@ -276,12 +276,16 @@ func permissionPolicy(patchMode bool) permission.Policy {
 	return permission.Policy{Mode: mode, AllowWritesInPatchMode: patchMode}
 }
 
-func truthyEnv(name string) bool {
+func boolEnvDefault(name string, fallback bool) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
 	case "1", "true", "yes", "on":
 		return true
-	default:
+	case "0", "false", "no", "off":
 		return false
+	case "":
+		return fallback
+	default:
+		return fallback
 	}
 }
 

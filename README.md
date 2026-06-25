@@ -340,11 +340,16 @@ liora -daemon -daemon-addr 127.0.0.1:18080
 
 Docker executor 会把 workspace 挂载到容器 `/workspace`，使用 `--rm`、`--network none`、内存和 CPU 限制运行 `run` 工具。文件读写工具仍由 Liora 的 workspace guard 负责限制路径；后续版本会把更多文件变更也迁移到 sandbox apply 流程。
 
-启用 patch mode 后，任务会在临时 workspace 副本中执行文件写入，真实 workspace 不会被直接修改。客户端可先读取 `/diff`，再调用 `/apply` 确认落地：
+daemon 和默认交互 TUI 默认启用 patch mode：任务会在临时 workspace 副本中执行文件写入，真实 workspace 不会被直接修改。客户端可先读取 `/diff`，再调用 `/apply` 确认落地：
 
 ```sh
-export LIORA_PATCH_MODE=1
 liora -daemon -daemon-addr 127.0.0.1:18080
+```
+
+如需回到直接写入的开发模式，可显式关闭：
+
+```sh
+LIORA_PATCH_MODE=0 liora
 ```
 
 任务事件流会等待新事件并持续输出，直到任务进入 completed、failed 或 cancelled。事件里会包含 `sandbox.workspace`，用于显示本次任务使用的是 `direct` 还是 `copy` workspace。
@@ -461,13 +466,13 @@ LIORA_TUI_SMOKE_DAEMON_ADDR=127.0.0.1:19090 LIORA_TUI_SMOKE_LLM_ADDR=127.0.0.1:1
 - `list`、`tree`、`glob` 是安全目录查看工具；Planner 会优先用它们处理“看看文件夹里有什么”或“找文件”这类请求。
 - TUI 是轻量 Go 实现，借鉴 Kimi Code CLI 的信息结构，使用 Lip Gloss 做样式，不复用原 TypeScript/pi-tui 组件；默认 `liora` 会自动拉起 embedded daemon，`-tui-daemon` 用于连接外部 daemon。
 - Shell 命令可通过 `LIORA_SANDBOX=docker` 进入 Docker；默认 local 方便无 Docker 环境开发。
-- 文件工具已经做 workspace 路径限制；daemon 支持 `LIORA_PATCH_MODE=1` 先产出 patch 再显式 apply，也支持 `LIORA_PERMISSION=prompt` 对危险 shell、非 patch 写操作和 MCP 外部调用做 task 级审批。完整逐步授权 UI 和更严格资源隔离仍留给后续版本。
+- 文件工具已经做 workspace 路径限制；daemon 和默认 TUI 默认先产出 patch 再显式 apply，可用 `LIORA_PATCH_MODE=0` 回到直接写入模式；也支持 `LIORA_PERMISSION=prompt` 对危险 shell、非 patch 写操作和 MCP 外部调用做 task 级审批。完整逐步授权 UI 和更严格资源隔离仍留给后续版本。
 - Trace 当前支持内存记录和 JSONL 落盘；任务和记忆已经进入本地 SQLite。
 
 ## 下一步
 
 - 将 Docker sandbox 从可配置能力升级为任务默认执行策略。
 - 将 task event 和 tool call 事件进一步结构化。
-- 把 patch mode 升级为默认任务策略，并接入桌面端确认 UI。
+- 将 diff/apply 确认体验升级到全屏 TUI 或桌面端确认 UI。
 - 建立一组 coding task eval case，支持回归评测。
 - 增加执行失败后的 Replan 能力。

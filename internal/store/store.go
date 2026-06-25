@@ -208,6 +208,8 @@ func (s *Store) OpenDB() (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	if err := initDB(db); err != nil {
 		db.Close()
 		return nil, err
@@ -222,6 +224,7 @@ func (s *Store) OpenDB() (*sql.DB, error) {
 func initDB(db *sql.DB) error {
 	statements := []string{
 		`PRAGMA journal_mode=WAL`,
+		`PRAGMA busy_timeout=5000`,
 		`CREATE TABLE IF NOT EXISTS memories (
 			id TEXT PRIMARY KEY,
 			text TEXT NOT NULL,

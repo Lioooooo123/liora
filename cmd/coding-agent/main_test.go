@@ -174,7 +174,7 @@ func TestCLIInteractiveModeRunsTurns(t *testing.T) {
 		t.Fatalf("command failed: %v\n%s", err, string(output))
 	}
 	rendered := string(output)
-	for _, want := range []string{"Liora", "Plan", "Tools", "Summary", "Bye"} {
+	for _, want := range []string{"Liora", "Plan", "Tools", "Summary", "Diff", "Next", "Bye"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, rendered)
 		}
@@ -186,8 +186,48 @@ func TestCLIInteractiveModeRunsTurns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if string(updated) != "hello old agent\n" {
+		t.Fatalf("interactive patch mode should not mutate before apply, got %q", string(updated))
+	}
+}
+
+func TestCLIInteractiveCanDisablePatchMode(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "app.txt"), []byte("hello old agent\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices": [
+				{"message": {"role": "assistant", "content": "replace app.txt old new\ndiff"}}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	cmd := exec.Command(
+		"go",
+		"run",
+		".",
+		"-workspace", workspace,
+		"-interactive",
+		"-llm-base-url", server.URL,
+		"-llm-model", "test-model",
+	)
+	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=test-key", "LIORA_PATCH_MODE=0")
+	cmd.Stdin = strings.NewReader("把 old 改成 new\n/exit\n")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\n%s", err, string(output))
+	}
+	updated, err := os.ReadFile(filepath.Join(workspace, "app.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(updated) != "hello new agent\n" {
-		t.Fatalf("unexpected updated file %q", string(updated))
+		t.Fatalf("disabled patch mode should mutate workspace, got %q", string(updated))
 	}
 }
 

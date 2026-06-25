@@ -39,7 +39,7 @@ Liora v0.1 是本地 Mac 上的轻量 agent 工坊。
 ### 4. Sandbox 与安全边界
 
 - 默认执行路径必须有 workspace 限制，文件操作不能越过 workspace。
-- 支持 patch mode：写入先发生在临时副本，再由 apply API 显式落到真实 workspace。
+- daemon 和默认 TUI 默认启用 patch mode：写入先发生在临时副本，再由 apply API 显式落到真实 workspace；调试时可用 `LIORA_PATCH_MODE=0` 关闭。
 - 支持 Docker sandbox 配置项，但 v0.1 不要求 Docker 成为默认执行方式。
 - 支持最小权限审批：`LIORA_PERMISSION=prompt` 下危险 shell、非 patch 写操作和 MCP 外部调用会进入 `waiting_user`，可通过 approve/deny API 继续或取消；完整逐步授权 UI 和长期后台守护安全策略进入 v0.2。
 
