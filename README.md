@@ -210,6 +210,8 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /exit
 ```
 
+在 daemon-backed TUI 中，任务 streaming 期间可以直接输入 `/cancel` 中止当前任务；其它命令会在当前任务结束后按顺序执行，避免 `/apply` 或 `/exit` 抢在结果和 diff 之前生效。
+
 交互界面会展示：
 
 - `You`：本轮用户输入。

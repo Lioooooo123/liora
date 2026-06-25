@@ -8,6 +8,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/trace"
@@ -115,6 +116,13 @@ func RenderWelcome(config Config) string {
 
 func (a *App) Run(ctx context.Context, input io.Reader, output io.Writer) error {
 	fmt.Fprint(output, RenderWelcome(a.config))
+	if streamer, ok := a.submitter.(StreamingSubmitter); ok {
+		return a.runStreaming(ctx, input, output, streamer)
+	}
+	return a.runBlocking(ctx, input, output)
+}
+
+func (a *App) runBlocking(ctx context.Context, input io.Reader, output io.Writer) error {
 	scanner := bufio.NewScanner(input)
 	for {
 		fmt.Fprint(output, "\n"+accentStyle.Render("agent")+" > ")
@@ -149,6 +157,170 @@ func (a *App) Run(ctx context.Context, input io.Reader, output io.Writer) error 
 		}
 	}
 	return scanner.Err()
+}
+
+type inputLine struct {
+	line string
+	ok   bool
+	err  error
+}
+
+type turnOutcome struct {
+	err error
+}
+
+func (a *App) runStreaming(ctx context.Context, input io.Reader, output io.Writer, streamer StreamingSubmitter) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	lines := scanInput(ctx, input)
+	var outputMu sync.Mutex
+	write := func(fn func()) {
+		outputMu.Lock()
+		defer outputMu.Unlock()
+		fn()
+	}
+	prompt := func() {
+		write(func() {
+			fmt.Fprint(output, "\n"+accentStyle.Render("agent")+" > ")
+		})
+	}
+	prompt()
+	var pending []string
+	var running bool
+	var turnDone <-chan turnOutcome
+	var inputClosed bool
+	var scanErr error
+	for {
+		if !running && len(pending) > 0 {
+			line := pending[0]
+			pending = pending[1:]
+			exit := a.handleStreamingLine(ctx, line, output, streamer, write, &running, &turnDone)
+			if exit {
+				cancel()
+				return nil
+			}
+			continue
+		}
+		if inputClosed && !running {
+			return scanErr
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case result := <-turnDone:
+			running = false
+			turnDone = nil
+			if result.err != nil {
+				write(func() {
+					fmt.Fprintf(output, "Error: %v\n", result.err)
+				})
+			}
+			if len(pending) == 0 && !inputClosed {
+				prompt()
+			}
+		case scanned := <-lines:
+			if !scanned.ok {
+				inputClosed = true
+				scanErr = scanned.err
+				continue
+			}
+			line := strings.TrimSpace(scanned.line)
+			if line == "" {
+				if !running {
+					prompt()
+				}
+				continue
+			}
+			if running && !isRunningCommand(line) {
+				pending = append(pending, line)
+				continue
+			}
+			exit := a.handleStreamingLine(ctx, line, output, streamer, write, &running, &turnDone)
+			if exit {
+				cancel()
+				return nil
+			}
+		}
+	}
+}
+
+func scanInput(ctx context.Context, input io.Reader) <-chan inputLine {
+	lines := make(chan inputLine)
+	go func() {
+		defer close(lines)
+		scanner := bufio.NewScanner(input)
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				return
+			case lines <- inputLine{line: scanner.Text(), ok: true}:
+			}
+		}
+		select {
+		case <-ctx.Done():
+		case lines <- inputLine{ok: false, err: scanner.Err()}:
+		}
+	}()
+	return lines
+}
+
+func (a *App) handleStreamingLine(ctx context.Context, line string, output io.Writer, streamer StreamingSubmitter, write func(func()), running *bool, turnDone *<-chan turnOutcome) bool {
+	switch line {
+	case "/exit", "/quit":
+		write(func() {
+			fmt.Fprintln(output, "Bye")
+		})
+		return true
+	case "/help":
+		write(func() {
+			fmt.Fprintln(output, "Type a coding request in natural language. Commands: /tools, /tasks, /sessions, /last, /resume <task_id>, /resume-session <session_id>, /approve, /deny, /apply, /cancel, /goal, /memory, /skills, /skill, /mcp, /exit.")
+		})
+		return false
+	}
+	if strings.HasPrefix(line, "/") && a.config.Commands != nil {
+		result, handled, err := a.config.Commands.HandleCommand(ctx, line)
+		write(func() {
+			if err != nil {
+				fmt.Fprintf(output, "Error: %v\n", err)
+				return
+			}
+			if handled {
+				renderSection(output, "System", result)
+			}
+		})
+		if handled || err != nil {
+			return false
+		}
+	}
+	if *running {
+		write(func() {
+			renderSection(output, "System", "Task is still running. Use /cancel, /approve, /deny, or wait for it to finish.")
+		})
+		return false
+	}
+	a.startStreamingTurn(ctx, line, output, streamer, write, running, turnDone)
+	return false
+}
+
+func (a *App) startStreamingTurn(ctx context.Context, input string, output io.Writer, streamer StreamingSubmitter, write func(func()), running *bool, turnDone *<-chan turnOutcome) {
+	write(func() {
+		fmt.Fprintln(output, mutedStyle.Render("Working..."))
+	})
+	done := make(chan turnOutcome, 1)
+	*running = true
+	*turnDone = done
+	go func() {
+		_, err := streamer.SubmitStream(ctx, input, func(update StreamUpdate) {
+			write(func() {
+				RenderStreamUpdate(output, update)
+			})
+		})
+		done <- turnOutcome{err: err}
+	}()
+}
+
+func isRunningCommand(line string) bool {
+	return strings.TrimSpace(line) == "/cancel"
 }
 
 func (a *App) runTurn(ctx context.Context, input string, output io.Writer) error {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/trace"
@@ -123,6 +124,73 @@ func TestInteractiveLoopStreamsTaskEvents(t *testing.T) {
 	}
 	if strings.Contains(rendered, "You") {
 		t.Fatalf("interactive stream output should not repeat user input, got:\n%s", rendered)
+	}
+}
+
+type blockingStreamingSubmitter struct {
+	cancelled <-chan struct{}
+	started   chan struct{}
+}
+
+func (s *blockingStreamingSubmitter) Submit(_ context.Context, _ string) (TurnResult, error) {
+	return TurnResult{}, nil
+}
+
+func (s *blockingStreamingSubmitter) SubmitStream(ctx context.Context, _ string, onEvent func(StreamUpdate)) (TurnResult, error) {
+	close(s.started)
+	onEvent(streamUpdate("task.plan_ready", eventPayload{Steps: "run long-task"}))
+	select {
+	case <-ctx.Done():
+		return TurnResult{}, ctx.Err()
+	case <-s.cancelled:
+		onEvent(streamUpdate("task.cancelled", eventPayload{Status: "cancelled", Message: "cancelled from test"}))
+		return TurnResult{AgentResult: agent.Result{Status: agent.StatusFailed, Summary: "cancelled"}}, nil
+	}
+}
+
+func TestStreamingLoopHandlesCommandWhileTaskRuns(t *testing.T) {
+	cancelled := make(chan struct{})
+	started := make(chan struct{})
+	submitter := &blockingStreamingSubmitter{cancelled: cancelled, started: started}
+	commandSeen := make(chan struct{})
+	handler := CommandHandlerFunc(func(_ context.Context, line string) (string, bool, error) {
+		if line != "/cancel" {
+			return "", false, nil
+		}
+		close(commandSeen)
+		close(cancelled)
+		return "Cancelled task task_test.", true, nil
+	})
+	var out strings.Builder
+	app := New(Config{Workspace: "/tmp/project", Model: "deepseek-v4-pro", Commands: handler}, submitter)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- app.Run(context.Background(), strings.NewReader("long task\n/cancel\n/exit\n"), &out)
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("streaming task did not start")
+	}
+	select {
+	case <-commandSeen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("running command was not handled")
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("interactive loop did not exit")
+	}
+	rendered := out.String()
+	for _, want := range []string{"Working", "Plan", "Cancelled task", "cancelled from test", "Bye"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected streaming command output to contain %q, got:\n%s", want, rendered)
+		}
 	}
 }
 

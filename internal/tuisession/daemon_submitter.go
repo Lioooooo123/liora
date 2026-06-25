@@ -267,7 +267,7 @@ func (s *DaemonSubmitter) resumeSession(ctx context.Context, sessionID string) (
 }
 
 func (s *DaemonSubmitter) cancelCurrent(ctx context.Context) (string, bool, error) {
-	taskID := s.currentTask()
+	taskID := s.waitCurrentTask(ctx, 500*time.Millisecond)
 	if taskID == "" {
 		return "No running daemon task.", true, nil
 	}
@@ -404,6 +404,25 @@ func (s *DaemonSubmitter) currentTask() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.currentTaskID
+}
+
+func (s *DaemonSubmitter) waitCurrentTask(ctx context.Context, timeout time.Duration) string {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if taskID := s.currentTask(); taskID != "" {
+			return taskID
+		}
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-deadline.C:
+			return ""
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *DaemonSubmitter) lastPatch() (string, string) {

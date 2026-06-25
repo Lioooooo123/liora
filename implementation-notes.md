@@ -149,3 +149,10 @@
 - daemon 新增 `POST /v1/tasks/{id}/approval`，`approve` 会给 task 写入 `approval_granted` 并重新异步运行该 task，`deny` 会把 task 取消并写入 `permission.denied` 事件。
 - daemon-backed TUI 新增 `/approve`、`/deny` 命令，处理最近 task 的审批。当前 line-based TUI 只能显示批准/拒绝结果，批准后的继续执行在 daemon 中进行；更自然的“批准后继续流式展示”需要全屏异步 TUI 的命令通道。
 - 当前授权粒度是 task 级，一旦批准，该 task 后续需要审批的步骤都会继续执行。这是为了用最小实现先打通 daemon/session/task/event/API 结构；后续 Mac 客户端或 Bubble Tea TUI 应升级为逐步授权队列。
+
+## 2026-06-26 Async Streaming TUI Commands
+
+- `internal/tui.App` 在 submitter 支持 `StreamingSubmitter` 时会把 stdin scanner 与 task stream 拆开：任务运行时继续读取输入，只即时处理 `/cancel`，其它输入按顺序排队到当前任务结束后再执行。
+- 这个改动解决了 line-based TUI 运行中无法取消的问题，同时避免管道输入里的 `/apply`、`/last`、`/exit` 抢在当前任务完成前执行。
+- `DaemonSubmitter.cancelCurrent` 会短暂等待 current task id 出现，规避管道输入极快时 `/cancel` 先于 daemon task id 设置的竞态。
+- 这仍不是完整 Bubble Tea 全屏 TUI；当前只是让最关键的运行中控制命令可用。后续全屏 TUI 还需要状态栏、可滚动 transcript、diff 面板和审批队列。
