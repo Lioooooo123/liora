@@ -364,7 +364,7 @@ curl http://127.0.0.1:18080/v1/tasks/<task-id>/apply \
   -d '{"patch":"--- a/file.txt\n+++ b/file.txt\n@@ -0,0 +1 @@\n+hello\n"}'
 ```
 
-`/apply` 会校验 patch 路径不能越过 workspace，并写入 `task.patch_applied` 事件。
+`/apply` 会校验 patch 路径不能越过 workspace，写入 `task.patch_applied` 事件，并在 TUI 中显示本次落盘的文件列表。
 
 ### 权限审批
 
@@ -391,7 +391,7 @@ curl http://127.0.0.1:18080/v1/tasks/<task-id>/approval \
   -d '{"decision":"deny","reason":"too risky"}'
 ```
 
-daemon-backed TUI 中可直接使用 `/approve` 和 `/deny` 处理最近一个等待审批的 task。当前是 task 级授权：批准后该 task 后续需要审批的步骤都会继续执行；逐步授权 UI 留给后续全屏 TUI / Mac 客户端。
+daemon-backed TUI 中可直接使用 `/approve` 和 `/deny` 处理最近一个等待审批的 task。命令结果会显示 task 状态和后续可查看的历史命令。当前是 task 级授权：批准后该 task 后续需要审批的步骤都会继续执行；逐步授权 UI 留给后续全屏 TUI / Mac 客户端。
 
 取消任务：
 

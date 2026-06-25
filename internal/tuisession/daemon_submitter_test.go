@@ -167,8 +167,10 @@ func TestDaemonSubmitterAppliesLastDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !handled || !strings.Contains(output, "Applied task") {
-		t.Fatalf("unexpected apply output handled=%v output=%q", handled, output)
+	for _, want := range []string{"Applied task", "Files:", "notes.txt", "Next:", "/timeline"} {
+		if !handled || !strings.Contains(output, want) {
+			t.Fatalf("expected apply output to contain %q handled=%v output=%q", want, handled, output)
+		}
 	}
 	data, err := os.ReadFile(filepath.Join(root, "notes.txt"))
 	if err != nil {
@@ -320,8 +322,10 @@ func TestDaemonSubmitterApprovesAndDeniesWaitingTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !handled || !strings.Contains(output, "Approved task") {
-		t.Fatalf("unexpected approve output handled=%v output=%q", handled, output)
+	for _, want := range []string{"Approved task", "Status:", "Next:", "/timeline"} {
+		if !handled || !strings.Contains(output, want) {
+			t.Fatalf("expected approve output to contain %q handled=%v output=%q", want, handled, output)
+		}
 	}
 	waitUntil(t, 3*time.Second, func() bool {
 		tasks, err := repo.List(t.Context(), 10)
@@ -340,8 +344,10 @@ func TestDaemonSubmitterApprovesAndDeniesWaitingTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !handled || !strings.Contains(output, "Denied task") {
-		t.Fatalf("unexpected deny output handled=%v output=%q", handled, output)
+	for _, want := range []string{"Denied task", "Status:", "Next:", "/timeline"} {
+		if !handled || !strings.Contains(output, want) {
+			t.Fatalf("expected deny output to contain %q handled=%v output=%q", want, handled, output)
+		}
 	}
 	denied, err := repo.Get(t.Context(), second.ID)
 	if err != nil {

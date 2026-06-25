@@ -31,6 +31,10 @@ type StreamEvent struct {
 	Event task.Event
 }
 
+type ApplyResult struct {
+	Files []string `json:"files"`
+}
+
 func New(baseURL string, options ...Option) (*Client, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
@@ -189,13 +193,13 @@ func (c *Client) Diff(ctx context.Context, taskID string) (string, error) {
 	return result.Diff, nil
 }
 
-func (c *Client) Apply(ctx context.Context, taskID string, patch string) (map[string]any, error) {
-	var result map[string]any
+func (c *Client) Apply(ctx context.Context, taskID string, patch string) (ApplyResult, error) {
+	var result ApplyResult
 	body := struct {
 		Patch string `json:"patch"`
 	}{Patch: patch}
 	if err := c.postJSON(ctx, "/v1/tasks/"+url.PathEscape(taskID)+"/apply", body, &result, http.StatusOK); err != nil {
-		return nil, err
+		return ApplyResult{}, err
 	}
 	return result, nil
 }

@@ -235,7 +235,11 @@ func (s *DaemonSubmitter) approveLast(ctx context.Context) (string, bool, error)
 	if err != nil {
 		return "", true, err
 	}
-	return "Approved task " + task.ID + ". It is continuing in the daemon.", true, nil
+	return strings.Join([]string{
+		"Approved task " + task.ID + ".",
+		"Status: " + string(task.Status),
+		"Next: use /last or /timeline to inspect the continued run.",
+	}, "\n"), true, nil
 }
 
 func (s *DaemonSubmitter) denyLast(ctx context.Context) (string, bool, error) {
@@ -247,7 +251,11 @@ func (s *DaemonSubmitter) denyLast(ctx context.Context) (string, bool, error) {
 	if err != nil {
 		return "", true, err
 	}
-	return "Denied task " + task.ID + ".", true, nil
+	return strings.Join([]string{
+		"Denied task " + task.ID + ".",
+		"Status: " + string(task.Status),
+		"Next: use /timeline to review the decision history.",
+	}, "\n"), true, nil
 }
 
 func (s *DaemonSubmitter) listSessions(ctx context.Context) (string, bool, error) {
@@ -349,10 +357,19 @@ func (s *DaemonSubmitter) applyLast(ctx context.Context) (string, bool, error) {
 	if strings.TrimSpace(diff) == "" {
 		return "No diff available for task " + taskID + ".", true, nil
 	}
-	if _, err := s.client.Apply(ctx, taskID, diff); err != nil {
+	result, err := s.client.Apply(ctx, taskID, diff)
+	if err != nil {
 		return "", true, err
 	}
-	return "Applied task " + taskID + ".", true, nil
+	lines := []string{"Applied task " + taskID + "."}
+	if len(result.Files) > 0 {
+		lines = append(lines, "Files:")
+		for _, file := range result.Files {
+			lines = append(lines, "- "+file)
+		}
+	}
+	lines = append(lines, "Next: use /timeline to review the applied patch event.")
+	return strings.Join(lines, "\n"), true, nil
 }
 
 func (s *DaemonSubmitter) listTasks(ctx context.Context) (string, bool, error) {

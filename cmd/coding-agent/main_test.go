@@ -442,7 +442,7 @@ func TestCLIInteractiveDaemonApplyCommand(t *testing.T) {
 		t.Fatalf("command failed: %v\n%s", err, string(output))
 	}
 	rendered := string(output)
-	for _, want := range []string{"Diff", "Next", "Applied task"} {
+	for _, want := range []string{"Diff", "Next", "Applied task", "Files:", "notes.txt"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected daemon apply output to contain %q, got:\n%s", want, rendered)
 		}

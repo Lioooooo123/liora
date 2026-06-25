@@ -187,3 +187,9 @@
 - TUI 首屏新增 `Core` 和 `Safety`，让用户能看到当前是 embedded/external daemon，以及写入策略是 patch-first 还是 direct-write。
 - streaming 事件里的 planning、workspace、tool.call、completed/cancelled 改为轻量日志行，避免每个小状态都渲染成卡片；Plan、Tools、Summary、Diff 仍保留区块，保证主要内容可读。
 - 本阶段没有引入 Bubble Tea 全屏 TUI，原因是当前 line-based TUI 已经承担 smoke/e2e 基线；先降低噪音和卡顿风险，再做可滚动 transcript、状态栏、diff 面板和快捷键。
+
+## 2026-06-26 TUI Action Feedback
+
+- `daemonclient.Apply` 从弱类型 `map[string]any` 改为结构化 `ApplyResult`，TUI `/apply` 现在会展示 applied task、落盘文件列表和下一步 `/timeline` 提示。
+- `/approve` 和 `/deny` 也补充 task status 与后续查看提示，避免确认动作只返回一句不可追踪的文本。
+- 这仍是 line-based action feedback，不是完整按钮式确认 UI；全屏 TUI 或 Mac 客户端应继续使用相同 apply/approval API，把这些动作升级成明确控件。
