@@ -61,6 +61,7 @@ func main() {
 	planner := llm.NewPlanner(llmClient)
 	persistentStore := store.New("")
 	sandboxExecutor := sandbox.FromEnv()
+	patchMode := truthyEnv("LIORA_PATCH_MODE")
 
 	if *daemonMode {
 		db, err := persistentStore.OpenDB()
@@ -72,9 +73,9 @@ func main() {
 		repo := taskpkg.NewRepository(db)
 		server := daemon.NewServer(daemon.Config{
 			Repository: repo,
-			Runner:     newTaskRunner(repo, planner, sandboxExecutor),
+			Runner:     newTaskRunner(repo, planner, sandboxExecutor, patchMode),
 		})
-		fmt.Printf("Liora daemon listening on %s (sandbox=%s)\n", *daemonAddr, sandbox.Label(sandboxExecutor))
+		fmt.Printf("Liora daemon listening on %s (sandbox=%s patch_mode=%t)\n", *daemonAddr, sandbox.Label(sandboxExecutor), patchMode)
 		if err := http.ListenAndServe(*daemonAddr, server); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -164,10 +165,20 @@ func main() {
 	}
 }
 
-func newTaskRunner(repo *taskpkg.Repository, planner *llm.Planner, executor sandbox.Executor) *taskpkg.Runner {
+func newTaskRunner(repo *taskpkg.Repository, planner *llm.Planner, executor sandbox.Executor, patchMode bool) *taskpkg.Runner {
 	runner := taskpkg.NewRunner(repo, planner)
 	runner.SetSandbox(executor)
+	runner.SetPatchMode(patchMode)
 	return runner
+}
+
+func truthyEnv(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func getenvAny(names ...string) string {

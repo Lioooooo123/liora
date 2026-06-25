@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKSPACE="${1:-$ROOT}"
 ADDR="${LIORA_DAEMON_ADDR:-127.0.0.1:18080}"
 
-go run ./cmd/coding-agent -daemon -daemon-addr "$ADDR" &
+LIORA_PATCH_MODE=1 go run ./cmd/coding-agent -daemon -daemon-addr "$ADDR" &
 PID="$!"
 trap 'kill "$PID" >/dev/null 2>&1 || true' EXIT
 
@@ -16,10 +16,11 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 
+PATCH_WORKSPACE="$(mktemp -d)"
 TASK_JSON="$(
   curl -fsS "http://$ADDR/v1/tasks" \
     -H 'Content-Type: application/json' \
-    -d "{\"workspace\":\"$WORKSPACE\",\"prompt\":\"run pwd\",\"natural\":false}"
+    -d "{\"workspace\":\"$PATCH_WORKSPACE\",\"prompt\":\"write proposed.txt hello\",\"natural\":false}"
 )"
 
 TASK_ID="$(printf '%s' "$TASK_JSON" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
@@ -29,7 +30,17 @@ if [[ -z "$TASK_ID" ]]; then
 fi
 
 curl -fsS "http://$ADDR/v1/tasks/$TASK_ID/events" >/dev/null
-curl -fsS "http://$ADDR/v1/tasks/$TASK_ID/events/stream" | grep -q 'event: sandbox.run'
+curl -fsS "http://$ADDR/v1/tasks/$TASK_ID/diff" | grep -q 'proposed.txt'
+if [[ -e "$PATCH_WORKSPACE/proposed.txt" ]]; then
+  echo "patch mode mutated workspace before apply" >&2
+  exit 1
+fi
+PATCH_JSON="$(curl -fsS "http://$ADDR/v1/tasks/$TASK_ID/diff")"
+PATCH_VALUE="$(printf '%s' "$PATCH_JSON" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["diff"]))')"
+curl -fsS "http://$ADDR/v1/tasks/$TASK_ID/apply" \
+  -H 'Content-Type: application/json' \
+  -d "$(printf '{"patch":%s}' "$PATCH_VALUE")" >/dev/null
+grep -q '^hello$' "$PATCH_WORKSPACE/proposed.txt"
 
 APPLY_WORKSPACE="$(mktemp -d)"
 APPLY_TASK_JSON="$(

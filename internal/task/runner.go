@@ -3,6 +3,8 @@ package task
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/Lioooooo123/liora/internal/agent"
@@ -17,6 +19,7 @@ type Runner struct {
 	repo       *Repository
 	planner    *llm.Planner
 	sandboxRun sandbox.Executor
+	patchMode  bool
 }
 
 func NewRunner(repo *Repository, planner *llm.Planner) *Runner {
@@ -25,6 +28,10 @@ func NewRunner(repo *Repository, planner *llm.Planner) *Runner {
 
 func (r *Runner) SetSandbox(executor sandbox.Executor) {
 	r.sandboxRun = executor
+}
+
+func (r *Runner) SetPatchMode(enabled bool) {
+	r.patchMode = enabled
 }
 
 func (r *Runner) Run(ctx context.Context, taskID string) error {
@@ -72,8 +79,17 @@ func (r *Runner) Run(ctx context.Context, taskID string) error {
 }
 
 func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) {
+	workspaceRoot := task.Workspace
+	if r.patchMode {
+		tempRoot, cleanup, err := copyWorkspace(task.Workspace)
+		if err != nil {
+			return runtimeResult{}, err
+		}
+		defer cleanup()
+		workspaceRoot = tempRoot
+	}
 	if task.Natural {
-		turnRuntime, err := runtime.New(task.Workspace, r.planner)
+		turnRuntime, err := runtime.New(workspaceRoot, r.planner)
 		if err != nil {
 			return runtimeResult{}, err
 		}
@@ -87,7 +103,7 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 			events:       result.Events,
 		}, err
 	}
-	workspace, err := tools.NewWorkspace(task.Workspace)
+	workspace, err := tools.NewWorkspace(workspaceRoot)
 	if err != nil {
 		return runtimeResult{}, err
 	}
@@ -103,6 +119,61 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 		diff:         result.Diff,
 		events:       recorder.Events(),
 	}, err
+}
+
+func copyWorkspace(source string) (string, func(), error) {
+	tempRoot, err := os.MkdirTemp("", "liora-task-*")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { _ = os.RemoveAll(tempRoot) }
+	err = filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil || rel == "." {
+			return err
+		}
+		if shouldSkipCopy(entry) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		target := filepath.Join(tempRoot, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode().Perm())
+	})
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return tempRoot, cleanup, nil
+}
+
+func shouldSkipCopy(entry os.DirEntry) bool {
+	name := entry.Name()
+	if name == ".git" || name == "node_modules" || name == "vendor" {
+		return true
+	}
+	return strings.HasPrefix(name, ".liora-task-")
 }
 
 func containsRunStep(steps string) bool {

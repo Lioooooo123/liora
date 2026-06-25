@@ -2,6 +2,8 @@ package task
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -153,6 +155,43 @@ func TestRunnerUsesSandboxExecutorForScriptTask(t *testing.T) {
 	}
 	if !containsEventType(eventTypes(events), EventSandboxRun) {
 		t.Fatalf("expected sandbox run event, got %#v", eventTypes(events))
+	}
+}
+
+func TestRunnerPatchModeProducesDiffWithoutMutatingWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	task, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "write notes.txt hello",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: ""}))
+	runner.SetPatchMode(true)
+	if err := runner.Run(t.Context(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "notes.txt")); !os.IsNotExist(err) {
+		t.Fatalf("patch mode should not mutate real workspace, stat err: %v", err)
+	}
+	events, err := repo.Events(t.Context(), task.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payloads strings.Builder
+	for _, event := range events {
+		payloads.WriteString(event.Payload)
+	}
+	if !strings.Contains(payloads.String(), "+++ b/notes.txt") || !strings.Contains(payloads.String(), "+hello") {
+		t.Fatalf("expected diff event for notes.txt, got %s", payloads.String())
 	}
 }
 

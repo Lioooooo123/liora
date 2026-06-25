@@ -24,3 +24,10 @@
 - daemon 新增 `GET /v1/tasks/{id}/diff` 和 `POST /v1/tasks/{id}/apply`。
 - `/apply` 会写入 `task.patch_applied` 事件，方便未来客户端在任务时间线中展示用户确认后的真实写入。
 - 当前 apply API 是显式调用，不会自动应用 sandbox 产物；后续要把文件写入默认迁移为“sandbox 产出 patch，用户确认后 apply”。
+
+## 2026-06-25 Task Patch Mode
+
+- 新增 `LIORA_PATCH_MODE=1`，daemon task runner 会把 workspace 复制到临时目录，在副本中执行 agent 文件写入，然后把 diff 作为 `task.diff` 事件回传。
+- patch mode 下真实 workspace 不会被任务执行阶段直接修改，必须通过 `/v1/tasks/{id}/apply` 显式应用 patch。
+- 当前 patch mode 复制时跳过 `.git`、`node_modules` 和 `vendor`，这是为了控制本地性能；后续需要把跳过规则做成配置并在 UI 中解释。
+- 这一步还不是完整 Docker sandbox apply：Docker 只覆盖 `run` 工具，文件工具是在临时副本中执行。下一步应把 Docker 临时 workspace 和 patch mode 合并成统一任务工作目录。
