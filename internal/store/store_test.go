@@ -102,6 +102,24 @@ func TestStoreMigratesLegacyJSONLMemoryToSQLite(t *testing.T) {
 	}
 }
 
+func TestStoreInitializesTaskTables(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	db, err := s.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	for _, table := range []string{"tasks", "task_events"} {
+		var name string
+		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
+		if err != nil {
+			t.Fatalf("expected table %s: %v", table, err)
+		}
+	}
+}
+
 func TestScanSkillsFromGlobalAndWorkspace(t *testing.T) {
 	root := t.TempDir()
 	workspace := t.TempDir()

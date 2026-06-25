@@ -113,7 +113,7 @@ func (s *Store) AddMemory(text string) error {
 	if text == "" {
 		return errors.New("memory text is required")
 	}
-	db, err := s.openDB()
+	db, err := s.OpenDB()
 	if err != nil {
 		return err
 	}
@@ -127,7 +127,7 @@ func (s *Store) AddMemory(text string) error {
 }
 
 func (s *Store) ListMemories(limit int) ([]Memory, error) {
-	db, err := s.openDB()
+	db, err := s.OpenDB()
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +136,7 @@ func (s *Store) ListMemories(limit int) ([]Memory, error) {
 }
 
 func (s *Store) SearchMemories(query string, limit int) ([]Memory, error) {
-	db, err := s.openDB()
+	db, err := s.OpenDB()
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +200,7 @@ func (s *Store) LoadMCPConfig() (MCPConfig, error) {
 	return config, nil
 }
 
-func (s *Store) openDB() (*sql.DB, error) {
+func (s *Store) OpenDB() (*sql.DB, error) {
 	if err := s.ensureRoot(); err != nil {
 		return nil, err
 	}
@@ -238,11 +238,36 @@ func initDB(db *sql.DB) error {
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS tasks (
+			id TEXT PRIMARY KEY,
+			title TEXT NOT NULL,
+			user_input TEXT NOT NULL,
+			natural INTEGER NOT NULL DEFAULT 1,
+			status TEXT NOT NULL,
+			workspace TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			completed_at TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`,
+		`CREATE TABLE IF NOT EXISTS task_events (
+			id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL,
+			type TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			FOREIGN KEY(task_id) REFERENCES tasks(id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_task_events_task_created ON task_events(task_id, created_at)`,
 	}
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {
 			return err
 		}
+	}
+	if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN natural INTEGER NOT NULL DEFAULT 1`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return err
 	}
 	return nil
 }

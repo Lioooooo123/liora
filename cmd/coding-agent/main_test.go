@@ -2,6 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCLINaturalModeUsesLLMPlan(t *testing.T) {
@@ -210,6 +214,46 @@ func TestCLIDefaultsToInteractiveCurrentDirectory(t *testing.T) {
 	}
 }
 
+func TestCLIDaemonModeServesHealth(t *testing.T) {
+	packageDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "liora")
+	build := exec.Command("go", "build", "-o", binary, packageDir)
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %v\n%s", err, string(output))
+	}
+	addr := freeLocalAddr(t)
+	cmd := exec.Command(binary, "-daemon", "-daemon-addr", addr, "-workspace", t.TempDir())
+	cmd.Env = append(os.Environ(), "LIORA_LLM_API_KEY=test-key")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	var body string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get("http://" + addr + "/healthz")
+		if err == nil {
+			data, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				body = string(data)
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !strings.Contains(body, `"status":"ok"`) {
+		t.Fatalf("daemon did not serve healthz, got %q", body)
+	}
+}
+
 func TestCLIInteractiveDirectoryListingShowsMultipleEntries(t *testing.T) {
 	workspace := t.TempDir()
 	for _, path := range []string{"README.md", "notes.txt"} {
@@ -255,6 +299,16 @@ func TestCLIInteractiveDirectoryListingShowsMultipleEntries(t *testing.T) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, rendered)
 		}
 	}
+}
+
+func freeLocalAddr(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	return fmt.Sprintf("127.0.0.1:%d", listener.Addr().(*net.TCPAddr).Port)
 }
 
 func TestCLIScriptModeRunsMCPTool(t *testing.T) {

@@ -4,15 +4,18 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
 	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/config"
+	"github.com/Lioooooo123/liora/internal/daemon"
 	"github.com/Lioooooo123/liora/internal/llm"
 	mcppkg "github.com/Lioooooo123/liora/internal/mcp"
 	"github.com/Lioooooo123/liora/internal/runtime"
 	"github.com/Lioooooo123/liora/internal/store"
+	taskpkg "github.com/Lioooooo123/liora/internal/task"
 	"github.com/Lioooooo123/liora/internal/tools"
 	"github.com/Lioooooo123/liora/internal/trace"
 	"github.com/Lioooooo123/liora/internal/tui"
@@ -28,6 +31,8 @@ func main() {
 	prompt := flag.String("prompt", "", "newline-separated agent steps")
 	interactive := flag.Bool("interactive", false, "start an interactive terminal UI")
 	natural := flag.Bool("natural", false, "treat prompt/stdin as natural language and ask an LLM to plan tool steps")
+	daemonMode := flag.Bool("daemon", false, "start the local Liora core daemon")
+	daemonAddr := flag.String("daemon-addr", "127.0.0.1:18080", "daemon listen address")
 	llmProvider := flag.String("llm-provider", getenvAny("LIORA_LLM_PROVIDER", "OPENAI_PROVIDER", ""), "LLM provider: openai-chat, openai-responses, deepseek, anthropic, gemini")
 	llmBaseURL := flag.String("llm-base-url", getenvAny("LIORA_LLM_BASE_URL", "OPENAI_BASE_URL", ""), "LLM API base URL")
 	llmAPIKey := flag.String("llm-api-key", getenvAny("LIORA_LLM_API_KEY", "OPENAI_API_KEY", ""), "LLM API key")
@@ -40,12 +45,6 @@ func main() {
 		steps = strings.Join(flag.Args(), " ")
 	}
 	defaultInteractive := steps == "" && !*natural && *traceOut == ""
-
-	workspace, err := tools.NewWorkspace(*workspacePath)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
-	}
 
 	llmConfig := llm.Config{
 		Provider: *llmProvider,
@@ -60,6 +59,32 @@ func main() {
 	}
 	planner := llm.NewPlanner(llmClient)
 	persistentStore := store.New("")
+
+	if *daemonMode {
+		db, err := persistentStore.OpenDB()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		defer db.Close()
+		repo := taskpkg.NewRepository(db)
+		server := daemon.NewServer(daemon.Config{
+			Repository: repo,
+			Runner:     taskpkg.NewRunner(repo, planner),
+		})
+		fmt.Println("Liora daemon listening on", *daemonAddr)
+		if err := http.ListenAndServe(*daemonAddr, server); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	workspace, err := tools.NewWorkspace(*workspacePath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 	turnRuntime := runtime.FromWorkspace(workspace, planner, persistentStore)
 
 	if *interactive || defaultInteractive {
