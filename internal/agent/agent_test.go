@@ -17,11 +17,22 @@ type fakeMCPExecutor struct {
 	args   map[string]any
 }
 
+type fakeShellExecutor struct {
+	workspace string
+	command   string
+}
+
 func (f *fakeMCPExecutor) Call(_ context.Context, server string, tool string, args map[string]any) (string, error) {
 	f.server = server
 	f.tool = tool
 	f.args = args
 	return "mcp output", nil
+}
+
+func (f *fakeShellExecutor) Run(_ context.Context, workspace string, command string) (tools.ShellResult, error) {
+	f.workspace = workspace
+	f.command = command
+	return tools.ShellResult{Stdout: "sandbox ok\n", ExitCode: 0}, nil
 }
 
 func TestAgentExecutesScriptedCodingTaskAndRecordsTrace(t *testing.T) {
@@ -94,6 +105,33 @@ write should-not-exist.txt skipped`)
 	}
 	if len(recorder.Events()) != 1 {
 		t.Fatalf("expected only failed first step to be recorded, got %#v", recorder.Events())
+	}
+}
+
+func TestAgentRunToolUsesInjectedShellExecutor(t *testing.T) {
+	root := t.TempDir()
+	workspace, err := tools.NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := trace.NewMemoryRecorder()
+	executor := &fakeShellExecutor{}
+	runner := New(workspace, recorder)
+	runner.SetShellExecutor(executor)
+
+	result, err := runner.Run(t.Context(), `run echo hello`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusCompleted {
+		t.Fatalf("expected completed, got %s", result.Status)
+	}
+	if executor.workspace != root || executor.command != "echo hello" {
+		t.Fatalf("unexpected shell call workspace=%q command=%q", executor.workspace, executor.command)
+	}
+	events := recorder.Events()
+	if len(events) != 1 || !strings.Contains(events[0].Output, "sandbox ok") {
+		t.Fatalf("unexpected trace events %#v", events)
 	}
 }
 

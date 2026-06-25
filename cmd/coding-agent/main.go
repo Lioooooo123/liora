@@ -14,6 +14,7 @@ import (
 	"github.com/Lioooooo123/liora/internal/llm"
 	mcppkg "github.com/Lioooooo123/liora/internal/mcp"
 	"github.com/Lioooooo123/liora/internal/runtime"
+	"github.com/Lioooooo123/liora/internal/sandbox"
 	"github.com/Lioooooo123/liora/internal/store"
 	taskpkg "github.com/Lioooooo123/liora/internal/task"
 	"github.com/Lioooooo123/liora/internal/tools"
@@ -59,6 +60,7 @@ func main() {
 	}
 	planner := llm.NewPlanner(llmClient)
 	persistentStore := store.New("")
+	sandboxExecutor := sandbox.FromEnv()
 
 	if *daemonMode {
 		db, err := persistentStore.OpenDB()
@@ -70,9 +72,9 @@ func main() {
 		repo := taskpkg.NewRepository(db)
 		server := daemon.NewServer(daemon.Config{
 			Repository: repo,
-			Runner:     taskpkg.NewRunner(repo, planner),
+			Runner:     newTaskRunner(repo, planner, sandboxExecutor),
 		})
-		fmt.Println("Liora daemon listening on", *daemonAddr)
+		fmt.Printf("Liora daemon listening on %s (sandbox=%s)\n", *daemonAddr, sandbox.Label(sandboxExecutor))
 		if err := http.ListenAndServe(*daemonAddr, server); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -86,6 +88,7 @@ func main() {
 		os.Exit(2)
 	}
 	turnRuntime := runtime.FromWorkspace(workspace, planner, persistentStore)
+	turnRuntime.SetSandbox(sandboxExecutor)
 
 	if *interactive || defaultInteractive {
 		app := tui.New(tui.Config{
@@ -127,6 +130,7 @@ func main() {
 
 	recorder := trace.NewMemoryRecorder()
 	runner := agent.New(workspace, recorder)
+	runner.SetShellExecutor(sandboxExecutor)
 	manager, err := mcpManagerFromStore(persistentStore)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -158,6 +162,12 @@ func main() {
 	if err != nil {
 		os.Exit(1)
 	}
+}
+
+func newTaskRunner(repo *taskpkg.Repository, planner *llm.Planner, executor sandbox.Executor) *taskpkg.Runner {
+	runner := taskpkg.NewRunner(repo, planner)
+	runner.SetSandbox(executor)
+	return runner
 }
 
 func getenvAny(names ...string) string {

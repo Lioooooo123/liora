@@ -9,6 +9,7 @@ import (
 	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/llm"
 	mcppkg "github.com/Lioooooo123/liora/internal/mcp"
+	"github.com/Lioooooo123/liora/internal/sandbox"
 	"github.com/Lioooooo123/liora/internal/store"
 	"github.com/Lioooooo123/liora/internal/tools"
 	"github.com/Lioooooo123/liora/internal/trace"
@@ -19,6 +20,7 @@ type Runtime struct {
 	workspace *tools.Workspace
 	planner   *llm.Planner
 	store     *store.Store
+	sandbox   sandbox.Executor
 }
 
 func New(workspacePath string, planner *llm.Planner, stores ...*store.Store) (*Runtime, error) {
@@ -37,6 +39,10 @@ func FromWorkspace(workspace *tools.Workspace, planner *llm.Planner, stores ...*
 	return &Runtime{workspace: workspace, planner: planner, store: persistentStore}
 }
 
+func (r *Runtime) SetSandbox(executor sandbox.Executor) {
+	r.sandbox = executor
+}
+
 func (r *Runtime) Submit(ctx context.Context, input string) (tui.TurnResult, error) {
 	turn, err := r.planner.PlanTurn(ctx, llm.PlanRequest{
 		WorkspaceSummary: r.workspaceSummary(),
@@ -50,6 +56,9 @@ func (r *Runtime) Submit(ctx context.Context, input string) (tui.TurnResult, err
 	}
 	recorder := trace.NewMemoryRecorder()
 	runner := agent.New(r.workspace, recorder)
+	if r.sandbox != nil {
+		runner.SetShellExecutor(r.sandbox)
+	}
 	if manager, err := r.mcpManager(); err == nil {
 		runner.SetMCP(manager)
 	}

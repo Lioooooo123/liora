@@ -24,6 +24,7 @@ const (
 	EventToolResult  EventType = "tool.result"
 	EventSummary     EventType = "task.summary"
 	EventDiff        EventType = "task.diff"
+	EventSandboxRun  EventType = "sandbox.run"
 	EventError       EventType = "task.error"
 	EventCompleted   EventType = "task.completed"
 	EventCancelled   EventType = "task.cancelled"

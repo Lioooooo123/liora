@@ -28,10 +28,15 @@ type Agent struct {
 	workspace *tools.Workspace
 	recorder  trace.Recorder
 	mcp       MCPExecutor
+	shell     ShellExecutor
 }
 
 type MCPExecutor interface {
 	Call(ctx context.Context, server string, tool string, args map[string]any) (string, error)
+}
+
+type ShellExecutor interface {
+	Run(ctx context.Context, workspace string, command string) (tools.ShellResult, error)
 }
 
 func New(workspace *tools.Workspace, recorder trace.Recorder) *Agent {
@@ -40,6 +45,10 @@ func New(workspace *tools.Workspace, recorder trace.Recorder) *Agent {
 
 func (a *Agent) SetMCP(executor MCPExecutor) {
 	a.mcp = executor
+}
+
+func (a *Agent) SetShellExecutor(executor ShellExecutor) {
+	a.shell = executor
 }
 
 func (a *Agent) Run(ctx context.Context, prompt string) (Result, error) {
@@ -234,7 +243,8 @@ func (a *Agent) execute(ctx context.Context, step Step) (output string, diff str
 		if len(step.Args) < 1 {
 			return "", "", fmt.Errorf("run expects a shell command")
 		}
-		result, err := a.workspace.RunShell(strings.Join(step.Args, " "))
+		command := strings.Join(step.Args, " ")
+		result, err := a.runShell(ctx, command)
 		output := result.Stdout + result.Stderr
 		if err != nil {
 			return output, "", err
@@ -261,6 +271,13 @@ func (a *Agent) execute(ctx context.Context, step Step) (output string, diff str
 	default:
 		return "", "", fmt.Errorf("unknown tool %q", step.Tool)
 	}
+}
+
+func (a *Agent) runShell(ctx context.Context, command string) (tools.ShellResult, error) {
+	if a.shell != nil {
+		return a.shell.Run(ctx, a.workspace.Root(), command)
+	}
+	return a.workspace.RunShell(command)
 }
 
 func (a *Agent) record(event trace.Event) {

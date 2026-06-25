@@ -8,17 +8,23 @@ import (
 	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/llm"
 	"github.com/Lioooooo123/liora/internal/runtime"
+	"github.com/Lioooooo123/liora/internal/sandbox"
 	"github.com/Lioooooo123/liora/internal/tools"
 	"github.com/Lioooooo123/liora/internal/trace"
 )
 
 type Runner struct {
-	repo    *Repository
-	planner *llm.Planner
+	repo       *Repository
+	planner    *llm.Planner
+	sandboxRun sandbox.Executor
 }
 
 func NewRunner(repo *Repository, planner *llm.Planner) *Runner {
 	return &Runner{repo: repo, planner: planner}
+}
+
+func (r *Runner) SetSandbox(executor sandbox.Executor) {
+	r.sandboxRun = executor
 }
 
 func (r *Runner) Run(ctx context.Context, taskID string) error {
@@ -34,6 +40,9 @@ func (r *Runner) Run(ctx context.Context, taskID string) error {
 	result, err := r.runTask(ctx, task)
 	if strings.TrimSpace(result.plannedSteps) != "" {
 		_ = r.repo.AppendEvent(ctx, task.ID, EventPlanReady, EventPayload{Steps: result.plannedSteps})
+	}
+	if r.sandboxRun != nil && containsRunStep(result.plannedSteps) {
+		_ = r.repo.AppendEvent(ctx, task.ID, EventSandboxRun, EventPayload{Message: "shell executor: " + sandbox.Label(r.sandboxRun)})
 	}
 	if strings.TrimSpace(result.answer) != "" {
 		_ = r.repo.AppendEvent(ctx, task.ID, EventSummary, EventPayload{Message: result.answer})
@@ -68,6 +77,7 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 		if err != nil {
 			return runtimeResult{}, err
 		}
+		turnRuntime.SetSandbox(r.sandboxRun)
 		result, err := turnRuntime.Submit(ctx, task.UserInput)
 		return runtimeResult{
 			answer:       result.Answer,
@@ -82,13 +92,26 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 		return runtimeResult{}, err
 	}
 	recorder := trace.NewMemoryRecorder()
-	result, err := agent.New(workspace, recorder).Run(ctx, task.UserInput)
+	runner := agent.New(workspace, recorder)
+	if r.sandboxRun != nil {
+		runner.SetShellExecutor(r.sandboxRun)
+	}
+	result, err := runner.Run(ctx, task.UserInput)
 	return runtimeResult{
 		plannedSteps: task.UserInput,
 		summary:      result.Summary,
 		diff:         result.Diff,
 		events:       recorder.Events(),
 	}, err
+}
+
+func containsRunStep(steps string) bool {
+	for _, line := range strings.Split(steps, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "run ") {
+			return true
+		}
+	}
+	return false
 }
 
 type runtimeResult struct {

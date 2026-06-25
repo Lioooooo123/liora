@@ -12,7 +12,7 @@ func TestDaemonSmokeScriptCoversDaemonAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
-	for _, want := range []string{"-daemon", "/healthz", "/v1/tasks", "/events/stream"} {
+	for _, want := range []string{"-daemon", "/healthz", "/v1/tasks", "/events/stream", "sandbox.run"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected daemon smoke script to contain %q, got:\n%s", want, content)
 		}

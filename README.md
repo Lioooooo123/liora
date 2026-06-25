@@ -19,6 +19,7 @@ Liora 是一个可运行的最小 Coding Agent MVP，用于验证“工具调用
 - 搜索和 glob 优先使用 `rg`，不可用时回退到 Go walker。
 - 支持持久化 `goal` 和 `memory`，用于给后续轮次补充上下文。
 - 支持 SQLite 持久化任务和任务事件。
+- 支持可配置 Shell sandbox executor，本机开发默认 `local`，可通过环境变量切到 Docker。
 - 支持扫描全局和项目级 `skill`。
 - 支持通过 stdio MCP server 列出和调用工具。
 - 记录每次工具调用的输入、输出和状态。
@@ -286,6 +287,27 @@ curl http://127.0.0.1:18080/v1/tasks/<task-id>/events
 curl http://127.0.0.1:18080/v1/tasks/<task-id>/events/stream
 ```
 
+### Sandbox 配置
+
+默认模式：
+
+```sh
+LIORA_SANDBOX=local liora -daemon
+```
+
+Docker 模式：
+
+```sh
+export LIORA_SANDBOX=docker
+export LIORA_DOCKER_IMAGE=golang:1.24-alpine
+export LIORA_DOCKER_NETWORK=none
+export LIORA_DOCKER_MEMORY=1g
+export LIORA_DOCKER_CPUS=2
+liora -daemon -daemon-addr 127.0.0.1:18080
+```
+
+Docker executor 会把 workspace 挂载到容器 `/workspace`，使用 `--rm`、`--network none`、内存和 CPU 限制运行 `run` 工具。文件读写工具仍由 Liora 的 workspace guard 负责限制路径；后续版本会把更多文件变更也迁移到 sandbox apply 流程。
+
 当前 v0.1 API：
 
 ```text
@@ -308,6 +330,7 @@ go test ./...
 - `cmd/coding-agent`：CLI 参数、配置加载和模式选择。
 - `internal/daemon`：本地 HTTP API 和 SSE 事件流。
 - `internal/task`：任务模型、SQLite 仓储和任务 runner。
+- `internal/sandbox`：Shell executor 抽象，支持 local 和 Docker。
 - `internal/tui`：交互循环和单轮结果渲染，不直接执行工具。
 - `internal/runtime`：连接 Planner 和 Agent，是交互模式的一轮执行编排层。
 - `internal/llm`：多供应商 LLM client 和自然语言 Planner。
@@ -337,13 +360,13 @@ go test ./...
 - Skill 当前以本地 `SKILL.md` 摘要形式注入 Planner，没有实现独立 skill 执行沙盒。
 - `list`、`tree`、`glob` 是安全目录查看工具；Planner 会优先用它们处理“看看文件夹里有什么”或“找文件”这类请求。
 - TUI 是轻量 Go 实现，借鉴 Kimi Code CLI 的信息结构，使用 Lip Gloss 做样式，不复用原 TypeScript/pi-tui 组件。
-- Shell 命令当前在 workspace 目录下执行，但还没有 Docker 隔离。
-- 文件工具已经做 workspace 路径限制；Shell 命令仍需要后续增加 Docker sandbox、危险命令审批、超时和资源限制策略。
+- Shell 命令可通过 `LIORA_SANDBOX=docker` 进入 Docker；默认 local 方便无 Docker 环境开发。
+- 文件工具已经做 workspace 路径限制；Docker 版本仍需要补危险命令审批、产物 apply 和更完整的资源隔离策略。
 - Trace 当前支持内存记录和 JSONL 落盘；任务和记忆已经进入本地 SQLite。
 
 ## 下一步
 
-- 增加 Docker sandbox 执行器。
+- 将 Docker sandbox 从可配置能力升级为任务默认执行策略。
 - 将 daemon SSE 扩展成实时事件订阅。
 - 将 task event 和 tool call 事件进一步结构化。
 - 建立一组 coding task eval case，支持回归评测。

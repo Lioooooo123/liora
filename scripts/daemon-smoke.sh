@@ -19,7 +19,7 @@ done
 TASK_JSON="$(
   curl -fsS "http://$ADDR/v1/tasks" \
     -H 'Content-Type: application/json' \
-    -d "{\"workspace\":\"$WORKSPACE\",\"prompt\":\"list .\",\"natural\":false}"
+    -d "{\"workspace\":\"$WORKSPACE\",\"prompt\":\"run pwd\",\"natural\":false}"
 )"
 
 TASK_ID="$(printf '%s' "$TASK_JSON" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
@@ -29,5 +29,5 @@ if [[ -z "$TASK_ID" ]]; then
 fi
 
 curl -fsS "http://$ADDR/v1/tasks/$TASK_ID/events" >/dev/null
-curl -fsS "http://$ADDR/v1/tasks/$TASK_ID/events/stream" | grep -q 'event: task.'
+curl -fsS "http://$ADDR/v1/tasks/$TASK_ID/events/stream" | grep -q 'event: sandbox.run'
 echo "daemon smoke ok: $TASK_ID"
