@@ -65,4 +65,10 @@
 
 - script task 不再用 `MemoryRecorder` 等任务结束后批量写工具事件；新增 task 层实时 recorder，每条工具执行完成后立即写入 `tool.call` 和 `tool.result`。
 - 实时 recorder 第一次收到工具事件时把任务状态更新为 `running`，这样客户端能更早展示任务已经进入执行阶段。
-- 当前改动先覆盖无 LLM 的 script task；natural task 仍经过 runtime 聚合返回，后续要进一步拆成 plan ready 和 tool event 的实时流。
+- 初始改动先覆盖无 LLM 的 script task；natural task 的实时 plan/tool 事件随后已补齐，详见下一节。
+
+## 2026-06-25 Live Natural Task Events
+
+- runtime 新增 `SubmitOptions`，允许调用方注入 recorder 和 plan hook；原 `Submit` / `SubmitWithRecorder` 保持兼容。
+- natural task 现在会在 planner 产出步骤后立刻写 `task.plan_ready`，随后工具事件通过同一个实时 recorder 落库。
+- 这样 daemon/SSE 客户端可以按顺序看到 planning、plan ready、tool call/result，而不是等自然语言任务全部结束后一次性刷新。

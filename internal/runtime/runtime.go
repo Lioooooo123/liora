@@ -23,6 +23,11 @@ type Runtime struct {
 	sandbox   sandbox.Executor
 }
 
+type SubmitOptions struct {
+	Recorder trace.Recorder
+	OnPlan   func(steps string)
+}
+
 func New(workspacePath string, planner *llm.Planner, stores ...*store.Store) (*Runtime, error) {
 	workspace, err := tools.NewWorkspace(workspacePath)
 	if err != nil {
@@ -44,6 +49,14 @@ func (r *Runtime) SetSandbox(executor sandbox.Executor) {
 }
 
 func (r *Runtime) Submit(ctx context.Context, input string) (tui.TurnResult, error) {
+	return r.SubmitWithOptions(ctx, input, SubmitOptions{Recorder: trace.NewMemoryRecorder()})
+}
+
+func (r *Runtime) SubmitWithRecorder(ctx context.Context, input string, recorder trace.Recorder) (tui.TurnResult, error) {
+	return r.SubmitWithOptions(ctx, input, SubmitOptions{Recorder: recorder})
+}
+
+func (r *Runtime) SubmitWithOptions(ctx context.Context, input string, options SubmitOptions) (tui.TurnResult, error) {
 	turn, err := r.planner.PlanTurn(ctx, llm.PlanRequest{
 		WorkspaceSummary: r.workspaceSummary(),
 		UserPrompt:       input,
@@ -54,7 +67,13 @@ func (r *Runtime) Submit(ctx context.Context, input string) (tui.TurnResult, err
 	if strings.TrimSpace(turn.Answer) != "" {
 		return tui.TurnResult{Answer: turn.Answer}, nil
 	}
-	recorder := trace.NewMemoryRecorder()
+	if options.OnPlan != nil {
+		options.OnPlan(turn.Steps)
+	}
+	recorder := options.Recorder
+	if recorder == nil {
+		recorder = trace.NewMemoryRecorder()
+	}
 	runner := agent.New(r.workspace, recorder)
 	if r.sandbox != nil {
 		runner.SetShellExecutor(r.sandbox)
@@ -66,8 +85,22 @@ func (r *Runtime) Submit(ctx context.Context, input string) (tui.TurnResult, err
 	return tui.TurnResult{
 		PlannedSteps: turn.Steps,
 		AgentResult:  result,
-		Events:       recorder.Events(),
+		Events:       recordedEvents(recorder),
 	}, err
+}
+
+type eventRecorder interface {
+	Events() []trace.Event
+}
+
+func recordedEvents(recorder trace.Recorder) []trace.Event {
+	if recorder == nil {
+		return nil
+	}
+	if events, ok := recorder.(eventRecorder); ok {
+		return events.Events()
+	}
+	return nil
 }
 
 func (r *Runtime) HandleCommand(ctx context.Context, line string) (string, bool, error) {

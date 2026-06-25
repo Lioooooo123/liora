@@ -9,12 +9,18 @@ LIORA_PATCH_MODE=1 go run ./cmd/coding-agent -daemon -daemon-addr "$ADDR" &
 PID="$!"
 trap 'kill "$PID" >/dev/null 2>&1 || true' EXIT
 
-for _ in $(seq 1 50); do
+READY=0
+for _ in $(seq 1 100); do
   if curl -fsS "http://$ADDR/healthz" >/dev/null 2>&1; then
+    READY=1
     break
   fi
   sleep 0.1
 done
+if [[ "$READY" != "1" ]]; then
+  echo "daemon did not become healthy at http://$ADDR/healthz" >&2
+  exit 1
+fi
 
 PATCH_WORKSPACE="$(mktemp -d)"
 TASK_JSON="$(

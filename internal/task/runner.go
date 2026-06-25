@@ -49,7 +49,9 @@ func (r *Runner) Run(ctx context.Context, taskID string) error {
 		return err
 	}
 	if strings.TrimSpace(result.plannedSteps) != "" {
-		_ = r.repo.AppendEvent(ctx, task.ID, EventPlanReady, EventPayload{Steps: result.plannedSteps})
+		if !result.planReadyEmitted {
+			_ = r.repo.AppendEvent(ctx, task.ID, EventPlanReady, EventPayload{Steps: result.plannedSteps})
+		}
 	}
 	if r.sandboxRun != nil && containsRunStep(result.plannedSteps) {
 		_ = r.repo.AppendEvent(ctx, task.ID, EventSandboxRun, EventPayload{Message: "shell executor: " + sandbox.Label(r.sandboxRun)})
@@ -104,13 +106,24 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 			return runtimeResult{}, err
 		}
 		turnRuntime.SetSandbox(r.sandboxRun)
-		result, err := turnRuntime.Submit(ctx, task.UserInput)
+		recorder := newRepositoryRecorder(ctx, r, task.ID)
+		planReadyEmitted := false
+		result, err := turnRuntime.SubmitWithOptions(ctx, task.UserInput, runtime.SubmitOptions{
+			Recorder: recorder,
+			OnPlan: func(steps string) {
+				if strings.TrimSpace(steps) == "" {
+					return
+				}
+				planReadyEmitted = true
+				_ = r.repo.AppendEvent(ctx, task.ID, EventPlanReady, EventPayload{Steps: steps})
+			},
+		})
 		return runtimeResult{
-			answer:       result.Answer,
-			plannedSteps: result.PlannedSteps,
-			summary:      result.AgentResult.Summary,
-			diff:         result.AgentResult.Diff,
-			events:       result.Events,
+			answer:           result.Answer,
+			plannedSteps:     result.PlannedSteps,
+			planReadyEmitted: planReadyEmitted,
+			summary:          result.AgentResult.Summary,
+			diff:             result.AgentResult.Diff,
 		}, err
 	}
 	workspace, err := tools.NewWorkspace(session.Root)
@@ -140,11 +153,12 @@ func containsRunStep(steps string) bool {
 }
 
 type runtimeResult struct {
-	answer       string
-	plannedSteps string
-	summary      string
-	diff         string
-	events       []trace.Event
+	answer           string
+	plannedSteps     string
+	planReadyEmitted bool
+	summary          string
+	diff             string
+	events           []trace.Event
 }
 
 type repositoryRecorder struct {

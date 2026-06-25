@@ -232,6 +232,102 @@ func TestRunnerPersistsScriptToolEventsWhileTaskIsRunning(t *testing.T) {
 	}
 }
 
+func TestRunnerPersistsNaturalToolEventsWhileTaskIsRunning(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	task, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "do it",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := newBlockingSecondCommandExecutor()
+	runner := NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "run first\nrun block"}))
+	runner.SetSandbox(executor)
+	done := make(chan error, 1)
+	go func() {
+		done <- runner.Run(t.Context(), task.ID)
+	}()
+
+	select {
+	case <-executor.firstDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first command did not run")
+	}
+	waitUntil(t, 3*time.Second, func() bool {
+		events, err := repo.Events(t.Context(), task.ID, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, event := range events {
+			if event.Type == EventToolResult && strings.Contains(event.Payload, "first ok") {
+				return true
+			}
+		}
+		return false
+	})
+
+	close(executor.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunnerPersistsNaturalPlanBeforeTaskCompletes(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	task, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "plan it",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := newBlockingSecondCommandExecutor()
+	runner := NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "run first\nrun block"}))
+	runner.SetSandbox(executor)
+	done := make(chan error, 1)
+	go func() {
+		done <- runner.Run(t.Context(), task.ID)
+	}()
+
+	select {
+	case <-executor.firstDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first command did not run")
+	}
+	waitUntil(t, 3*time.Second, func() bool {
+		events, err := repo.Events(t.Context(), task.ID, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, event := range events {
+			if event.Type == EventPlanReady && strings.Contains(event.Payload, "run first") {
+				return true
+			}
+		}
+		return false
+	})
+
+	close(executor.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunnerPatchModeProducesDiffWithoutMutatingWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	db, err := store.New(t.TempDir()).OpenDB()
