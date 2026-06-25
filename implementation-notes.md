@@ -169,3 +169,9 @@
 - 新增 `scripts/tui-smoke.sh`，用 Python 标准库启动临时 fake Chat Completions server，再启动 Core Daemon 和 `-tui-daemon` 入口。
 - smoke 覆盖两条用户入口：自然语言请求的 streaming 输出 + `/timeline`，以及 script task 运行中 `/cancel`。
 - 这个 smoke 不依赖真实 LLM API key，适合发布前和本地回归；它补足了 `daemon-smoke.sh` 只验证 HTTP API、不验证 TUI 输入/输出链路的问题。
+
+## 2026-06-26 Embedded Daemon TUI Default
+
+- 默认 `liora` / `liora -interactive` 不再走旧的进程内 runtime submitter，而是在本进程内监听临时 localhost 端口启动 embedded Core Daemon，然后 TUI 通过 `daemonclient` 和 SSE 消费任务事件。
+- 显式 `-tui-daemon` 仍表示连接用户已启动的外部 daemon；默认 embedded daemon 避免普通用户还要先手动运行 `liora -daemon`，也让 CLI 入口和未来 Mac 客户端更接近同一套 agent core。
+- embedded daemon 退出时会 shutdown HTTP server 并关闭 SQLite DB。当前没有暴露 daemon 地址，也不做跨进程复用；如果后续要做常驻后台进程，需要补本地 token、端口发现和生命周期管理。

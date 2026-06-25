@@ -46,7 +46,7 @@ Liora v0.1 是本地 Mac 上的轻量 agent 工坊。
 ### 5. API 与客户端可用性
 
 - daemon API 覆盖健康检查、创建任务、查询任务、查询事件、SSE、diff、apply、cancel、approval、session/history/timeline。
-- CLI 能启动 daemon，并能通过 smoke script 覆盖核心 API。
+- CLI 能启动独立 daemon；默认交互 TUI 也能自动拉起 embedded daemon，并通过 smoke script 覆盖核心 API。
 - TUI 可以作为开发入口，但 v0.1 结束不要求精致桌面 UI。
 - UI 最小要求是“能解释状态、展示进度、展示 diff、允许 apply/cancel”；二次元视觉、白板和 Mac 原生体验进入 v0.2。
 
@@ -57,7 +57,7 @@ Liora v0.1 是本地 Mac 上的轻量 agent 工坊。
 - `GOTOOLCHAIN=local go test -count=1 ./...` 通过。
 - `LIORA_HOME=$(mktemp -d) LIORA_DAEMON_ADDR=127.0.0.1:19089 ./scripts/daemon-smoke.sh "$PWD"` 通过。
 - `LIORA_TUI_SMOKE_DAEMON_ADDR=127.0.0.1:19090 LIORA_TUI_SMOKE_LLM_ADDR=127.0.0.1:19091 ./scripts/tui-smoke.sh "$PWD"` 通过。
-- smoke 覆盖至少一个 patch-mode task、一个 apply API 调用、一个 running cancel task、一个 SSE 事件流、一个 daemon-backed TUI timeline 和一个 TUI running cancel。
+- smoke 和 CLI 测试覆盖至少一个 patch-mode task、一个 apply API 调用、一个 running cancel task、一个 SSE 事件流、一个 daemon-backed TUI timeline、一个默认 embedded-daemon TUI timeline 和一个 TUI running cancel。
 - `implementation-notes.md` 已记录所有重要技术取舍和后续风险。
 - `git status --short --branch` 显示本地分支和 `origin/main` 同步且无未提交改动。
 

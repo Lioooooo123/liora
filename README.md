@@ -6,7 +6,7 @@ Liora 是一个可运行的最小 Coding Agent MVP，用于验证“工具调用
 
 - 脚本模式：直接输入工具步骤，便于稳定调试。
 - 自然语言模式：通过可切换供应商的 LLM client 将用户需求转换成工具步骤，再交给本地执行器运行。
-- 交互模式：启动一个轻量 TUI，连续输入自然语言任务并查看计划、工具调用、总结和 diff。
+- 交互模式：启动一个轻量 TUI，自动拉起本地 Core Daemon，连续输入自然语言任务并查看计划、工具调用、总结和 diff。
 - Daemon 模式：启动本地 Core Daemon，通过 HTTP API 和 SSE 暴露任务工坊能力，供未来 macOS 客户端接入。
 
 ## 功能
@@ -211,7 +211,9 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /exit
 ```
 
-在 daemon-backed TUI 中，任务 streaming 期间可以直接输入 `/cancel` 中止当前任务；其它命令会在当前任务结束后按顺序执行，避免 `/apply` 或 `/exit` 抢在结果和 diff 之前生效。
+默认交互入口会在本进程内启动临时 Core Daemon，并通过 HTTP/SSE 复用 daemon/session/task/event 主链路；如果已经有独立 daemon，可使用 `liora -interactive -tui-daemon -daemon-addr 127.0.0.1:18080` 连接它。
+
+任务 streaming 期间可以直接输入 `/cancel` 中止当前任务；其它命令会在当前任务结束后按顺序执行，避免 `/apply` 或 `/exit` 抢在结果和 diff 之前生效。
 
 交互界面会展示：
 
@@ -429,7 +431,7 @@ LIORA_TUI_SMOKE_DAEMON_ADDR=127.0.0.1:19090 LIORA_TUI_SMOKE_LLM_ADDR=127.0.0.1:1
 - `internal/daemon`：本地 HTTP API 和 SSE 事件流。
 - `internal/task`：任务模型、SQLite 仓储和任务 runner。
 - `internal/sandbox`：Shell executor 抽象，支持 local 和 Docker。
-- `internal/tui`：交互循环和单轮结果渲染，不直接执行工具。
+- `internal/tui`：交互循环和单轮结果渲染，不直接执行工具；默认通过 embedded daemon 访问任务事件流。
 - `internal/runtime`：连接 Planner 和 Agent，是交互模式的一轮执行编排层。
 - `internal/llm`：多供应商 LLM client 和自然语言 Planner。
 - `internal/store`：goal、memory、skill 和 MCP 配置的本地持久化。
@@ -457,7 +459,7 @@ LIORA_TUI_SMOKE_DAEMON_ADDR=127.0.0.1:19090 LIORA_TUI_SMOKE_LLM_ADDR=127.0.0.1:1
 - MCP 当前实现为 stdio JSON-RPC MVP，每次 list/call 会启动一次 server；后续可优化为长连接 session pool。
 - Skill 当前以本地 `SKILL.md` 摘要形式注入 Planner，没有实现独立 skill 执行沙盒。
 - `list`、`tree`、`glob` 是安全目录查看工具；Planner 会优先用它们处理“看看文件夹里有什么”或“找文件”这类请求。
-- TUI 是轻量 Go 实现，借鉴 Kimi Code CLI 的信息结构，使用 Lip Gloss 做样式，不复用原 TypeScript/pi-tui 组件。
+- TUI 是轻量 Go 实现，借鉴 Kimi Code CLI 的信息结构，使用 Lip Gloss 做样式，不复用原 TypeScript/pi-tui 组件；默认 `liora` 会自动拉起 embedded daemon，`-tui-daemon` 用于连接外部 daemon。
 - Shell 命令可通过 `LIORA_SANDBOX=docker` 进入 Docker；默认 local 方便无 Docker 环境开发。
 - 文件工具已经做 workspace 路径限制；daemon 支持 `LIORA_PATCH_MODE=1` 先产出 patch 再显式 apply，也支持 `LIORA_PERMISSION=prompt` 对危险 shell、非 patch 写操作和 MCP 外部调用做 task 级审批。完整逐步授权 UI 和更严格资源隔离仍留给后续版本。
 - Trace 当前支持内存记录和 JSONL 落盘；任务和记忆已经进入本地 SQLite。

@@ -223,14 +223,16 @@ func TestCLIDefaultsToInteractiveCurrentDirectory(t *testing.T) {
 	)
 	cmd.Dir = workspace
 	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=test-key")
-	cmd.Stdin = strings.NewReader("看一下当前目录\n/exit\n")
+	cmd.Stdin = strings.NewReader("看一下当前目录\n/timeline\n/exit\n")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("command failed: %v\n%s", err, string(output))
 	}
 	rendered := string(output)
-	if !strings.Contains(rendered, "Liora") || !strings.Contains(rendered, "agent >") {
-		t.Fatalf("expected default interactive TUI, got:\n%s", rendered)
+	for _, want := range []string{"Liora", "agent >", "Timeline session_", "user: 看一下当前目录", "tool.result"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected default daemon-backed TUI output to contain %q, got:\n%s", want, rendered)
+		}
 	}
 }
 

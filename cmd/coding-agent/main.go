@@ -4,9 +4,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/config"
@@ -106,20 +108,29 @@ func main() {
 	if *interactive || defaultInteractive {
 		submitter := tui.Submitter(turnRuntime)
 		commands := tui.CommandHandler(turnRuntime)
-		if *tuiDaemon {
-			client, err := daemonclient.New(daemonBaseURL(*daemonAddr))
+		baseURL := daemonBaseURL(*daemonAddr)
+		var embedded *embeddedDaemon
+		if !*tuiDaemon {
+			embedded, err = startEmbeddedDaemon(persistentStore, planner, sandboxExecutor, patchMode)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
-				os.Exit(2)
-			}
-			if err := client.Health(context.Background()); err != nil {
-				fmt.Fprintln(os.Stderr, "daemon is not reachable:", err)
 				os.Exit(1)
 			}
-			daemonSession := tuisession.NewDaemonSubmitter(client, workspace.Root(), true)
-			submitter = daemonSession
-			commands = tui.CommandChain{daemonSession, turnRuntime}
+			defer embedded.close()
+			baseURL = embedded.baseURL
 		}
+		client, err := daemonclient.New(baseURL)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if err := client.Health(context.Background()); err != nil {
+			fmt.Fprintln(os.Stderr, "daemon is not reachable:", err)
+			os.Exit(1)
+		}
+		daemonSession := tuisession.NewDaemonSubmitter(client, workspace.Root(), true)
+		submitter = daemonSession
+		commands = tui.CommandChain{daemonSession, turnRuntime}
 		app := tui.New(tui.Config{
 			Workspace: workspace.Root(),
 			Model:     llmLabel(llmConfig),
@@ -190,6 +201,54 @@ func main() {
 	}
 	if err != nil {
 		os.Exit(1)
+	}
+}
+
+type embeddedDaemon struct {
+	server  *http.Server
+	db      interface{ Close() error }
+	baseURL string
+}
+
+func startEmbeddedDaemon(persistentStore *store.Store, planner *llm.Planner, executor sandbox.Executor, patchMode bool) (*embeddedDaemon, error) {
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		return nil, err
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	repo := taskpkg.NewRepository(db)
+	server := &http.Server{Handler: daemon.NewServer(daemon.Config{
+		Repository: repo,
+		Runner:     newTaskRunner(repo, planner, executor, patchMode),
+	})}
+	embedded := &embeddedDaemon{
+		server:  server,
+		db:      db,
+		baseURL: "http://" + listener.Addr().String(),
+	}
+	go func() {
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			fmt.Fprintln(os.Stderr, "embedded daemon stopped:", err)
+		}
+	}()
+	return embedded, nil
+}
+
+func (d *embeddedDaemon) close() {
+	if d == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if d.server != nil {
+		_ = d.server.Shutdown(ctx)
+	}
+	if d.db != nil {
+		_ = d.db.Close()
 	}
 }
 
