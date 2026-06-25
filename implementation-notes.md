@@ -156,3 +156,10 @@
 - 这个改动解决了 line-based TUI 运行中无法取消的问题，同时避免管道输入里的 `/apply`、`/last`、`/exit` 抢在当前任务完成前执行。
 - `DaemonSubmitter.cancelCurrent` 会短暂等待 current task id 出现，规避管道输入极快时 `/cancel` 先于 daemon task id 设置的竞态。
 - 这仍不是完整 Bubble Tea 全屏 TUI；当前只是让最关键的运行中控制命令可用。后续全屏 TUI 还需要状态栏、可滚动 transcript、diff 面板和审批队列。
+
+## 2026-06-26 Session Timeline Projection
+
+- 新增 `Repository.Timeline` 和 `GET /v1/sessions/{id}/timeline`，把 `session_messages` 与 task events 按时间合成为客户端可直接渲染的 timeline。
+- timeline 当前包含 user message、assistant summary、tool call/result、diff、approval、status。它是按需投影，不新增 materialized transcript 表，因此兼容现有 SQLite 数据并避免迁移复杂度。
+- `internal/daemonclient` 新增 `SessionTimeline`，daemon-backed TUI 新增 `/timeline`/`/transcript`。未来 Mac 客户端应优先消费 timeline，而不是自己合并 messages/tasks/events。
+- 当前 timeline 适合渲染和恢复，不适合全文搜索、长期摘要和 compaction；这些能力后续应落到独立 transcript/search 表。

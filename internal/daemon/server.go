@@ -199,6 +199,21 @@ func (s *server) handleSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, tasks)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "timeline" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+			return
+		}
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		timeline, err := s.repo.Timeline(r.Context(), sessionID, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, timeline)
+		return
+	}
 	writeError(w, http.StatusNotFound, fmt.Errorf("unknown session route %q", r.URL.Path))
 }
 

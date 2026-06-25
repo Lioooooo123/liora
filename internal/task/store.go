@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -243,6 +244,131 @@ func (r *Repository) Messages(ctx context.Context, sessionID string, limit int) 
 		messages = append(messages, message)
 	}
 	return messages, rows.Err()
+}
+
+func (r *Repository) Timeline(ctx context.Context, sessionID string, limit int) ([]TimelineItem, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, fmt.Errorf("session id is required")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	messages, err := r.Messages(ctx, sessionID, 0)
+	if err != nil {
+		return nil, err
+	}
+	tasks, err := r.listBySessionAsc(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]TimelineItem, 0, len(messages)+len(tasks)*4)
+	for _, message := range messages {
+		items = append(items, TimelineItem{
+			ID:        message.ID,
+			SessionID: message.SessionID,
+			TaskID:    message.TaskID,
+			Kind:      "message",
+			Role:      message.Role,
+			Content:   message.Content,
+			CreatedAt: message.CreatedAt,
+		})
+	}
+	for _, task := range tasks {
+		events, err := r.Events(ctx, task.ID, 0)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, timelineItemsFromEvents(sessionID, task, events)...)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].CreatedAt.Before(items[j].CreatedAt)
+	})
+	if len(items) > limit {
+		items = items[len(items)-limit:]
+	}
+	return items, nil
+}
+
+func (r *Repository) listBySessionAsc(ctx context.Context, sessionID string) ([]Task, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, session_id, title, user_input, natural, status, workspace, approval_granted, created_at, updated_at, completed_at
+		FROM tasks
+		WHERE session_id = ?
+		ORDER BY created_at ASC, id ASC
+	`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
+func timelineItemsFromEvents(sessionID string, task Task, events []Event) []TimelineItem {
+	var items []TimelineItem
+	for _, event := range events {
+		item, ok := timelineItemFromEvent(sessionID, task, event)
+		if ok {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func timelineItemFromEvent(sessionID string, task Task, event Event) (TimelineItem, bool) {
+	var payload EventPayload
+	if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+		return TimelineItem{}, false
+	}
+	item := TimelineItem{
+		ID:        event.ID,
+		SessionID: sessionID,
+		TaskID:    task.ID,
+		Type:      string(event.Type),
+		Title:     task.Title,
+		CreatedAt: event.CreatedAt,
+	}
+	switch event.Type {
+	case EventSummary:
+		item.Kind = "message"
+		item.Role = "assistant"
+		item.Content = payload.Message
+	case EventToolCall:
+		item.Kind = "tool_call"
+		item.Tool = payload.Tool
+		item.Input = payload.Input
+	case EventToolResult:
+		item.Kind = "tool_result"
+		item.Tool = payload.Tool
+		item.Input = payload.Input
+		item.Output = payload.Output
+		item.Status = payload.Status
+	case EventDiff:
+		item.Kind = "diff"
+		item.Diff = payload.Diff
+	case EventPermissionRequest:
+		item.Kind = "approval"
+		item.Tool = payload.Tool
+		item.Input = payload.Input
+		item.Status = payload.Status
+		item.Risk = payload.Risk
+		item.Reason = payload.Reason
+		item.Content = payload.Message
+	case EventPermissionApproved, EventPermissionDenied:
+		item.Kind = "approval"
+		item.Status = payload.Status
+		item.Content = payload.Message
+	case EventCompleted, EventCancelled, EventError:
+		item.Kind = "status"
+		item.Status = payload.Status
+		item.Content = payload.Message
+	default:
+		return TimelineItem{}, false
+	}
+	return item, true
 }
 
 func (r *Repository) AppendMessage(ctx context.Context, sessionID string, role string, content string, taskID string) (Message, error) {

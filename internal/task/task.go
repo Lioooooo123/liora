@@ -88,6 +88,25 @@ type Message struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type TimelineItem struct {
+	ID        string    `json:"id"`
+	SessionID string    `json:"session_id"`
+	TaskID    string    `json:"task_id,omitempty"`
+	Kind      string    `json:"kind"`
+	Role      string    `json:"role,omitempty"`
+	Type      string    `json:"type,omitempty"`
+	Title     string    `json:"title,omitempty"`
+	Content   string    `json:"content,omitempty"`
+	Tool      string    `json:"tool,omitempty"`
+	Input     string    `json:"input,omitempty"`
+	Output    string    `json:"output,omitempty"`
+	Status    string    `json:"status,omitempty"`
+	Diff      string    `json:"diff,omitempty"`
+	Risk      string    `json:"risk,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type CreateSessionRequest struct {
 	Workspace string `json:"workspace"`
 	Title     string `json:"title,omitempty"`

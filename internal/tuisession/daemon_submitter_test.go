@@ -285,6 +285,15 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 	if !handled || !strings.Contains(resumeOutput, "Session "+sessionID) || !strings.Contains(resumeOutput, "second prompt") {
 		t.Fatalf("unexpected /resume-session output handled=%v output=%q", handled, resumeOutput)
 	}
+	timelineOutput, handled, err := fresh.HandleCommand(t.Context(), "/timeline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Timeline " + sessionID, "user: first prompt", "user: second prompt", "tool.result", "completed 1 step"} {
+		if !handled || !strings.Contains(timelineOutput, want) {
+			t.Fatalf("expected /timeline output to contain %q handled=%v output=%q", want, handled, timelineOutput)
+		}
+	}
 }
 
 func TestDaemonSubmitterApprovesAndDeniesWaitingTask(t *testing.T) {

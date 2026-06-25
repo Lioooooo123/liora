@@ -203,6 +203,7 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /mcp
 /tasks
 /sessions
+/timeline
 /approve
 /deny
 /apply
@@ -411,6 +412,7 @@ POST /v1/sessions
 GET  /v1/sessions/{id}
 GET  /v1/sessions/{id}/messages
 GET  /v1/sessions/{id}/tasks
+GET  /v1/sessions/{id}/timeline
 ```
 
 ## 测试

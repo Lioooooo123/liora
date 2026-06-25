@@ -71,10 +71,10 @@ Workspace / Docker / MCP / LLM Providers
 ### P3：会话与恢复
 
 - SQLite 保存 session/task/message/event 基线数据。
-- 支持 `/tasks`、`/resume`、`/last`、`/sessions`、`/session`、`/resume-session <session_id>`。
+- 支持 `/tasks`、`/resume`、`/last`、`/sessions`、`/session`、`/timeline`、`/resume-session <session_id>`。
 - TUI 重新启动后可以恢复旧 task，也可以重新绑定旧 session。
-- 客户端直接复用 daemon API 获取 session、task、message 历史和实时事件。
-- 待做：assistant answer 与 tool timeline 目前主要保存在 task_events，尚未投影成完整 transcript snapshot。
+- 客户端直接复用 daemon API 获取 session、task、message、timeline 历史和实时事件。
+- 待做：timeline 当前是按需投影，不是 materialized transcript snapshot；后续如果要全文搜索和长期压缩，需要落库专门 transcript 表。
 
 ### P4：产品化 TUI
 
@@ -103,6 +103,7 @@ Workspace / Docker / MCP / LLM Providers
 - 已在 daemon-backed session 层支持 `/apply` 调用 apply API。
 - 已在 daemon-backed session 层支持 `/tasks`、`/last`、`/resume <task_id>` 查询和回放 task/event 历史。
 - 已新增 session/message SQLite 模型与 daemon API，并在 daemon-backed TUI 中支持 `/sessions`、`/session`、`/resume-session <session_id>`。
+- 已新增 `GET /v1/sessions/{id}/timeline`，把 user message、assistant summary、tool result、diff、approval/status 事件投影成客户端可直接渲染的会话时间线；TUI 支持 `/timeline`。
 - 已新增 `LIORA_PERMISSION=prompt` 权限策略基线，危险 shell、非 patch 写操作和 MCP 外部调用会进入 `waiting_user`，daemon API 和 TUI 支持 `/approve`、`/deny` 继续或拒绝。
 - 已新增 line-based 异步输入层，daemon streaming 期间可以即时处理 `/cancel`，其它输入会排队等待当前任务结束。
 - 待做：真正的运行中快捷键、审批队列和多面板刷新仍需要 Bubble Tea/全屏异步 TUI。

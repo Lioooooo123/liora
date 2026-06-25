@@ -139,6 +139,18 @@ func (c *Client) SessionTasks(ctx context.Context, sessionID string, limit int) 
 	return result, nil
 }
 
+func (c *Client) SessionTimeline(ctx context.Context, sessionID string, limit int) ([]task.TimelineItem, error) {
+	path := "/v1/sessions/" + url.PathEscape(sessionID) + "/timeline"
+	if limit > 0 {
+		path += fmt.Sprintf("?limit=%d", limit)
+	}
+	var result []task.TimelineItem
+	if err := c.getJSON(ctx, path, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (c *Client) GetTask(ctx context.Context, taskID string) (task.Task, error) {
 	var result task.Task
 	if err := c.getJSON(ctx, "/v1/tasks/"+url.PathEscape(taskID), &result); err != nil {

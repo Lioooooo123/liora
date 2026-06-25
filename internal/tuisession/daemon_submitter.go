@@ -151,6 +151,8 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		return s.listSessions(ctx)
 	case "/session":
 		return s.showSession(ctx)
+	case "/timeline", "/transcript":
+		return s.showTimeline(ctx)
 	case "/last":
 		return s.replayLastTask(ctx)
 	default:
@@ -167,6 +169,60 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 			return "Usage: /resume <task_id>", true, nil
 		}
 		return "", false, nil
+	}
+}
+
+func (s *DaemonSubmitter) showTimeline(ctx context.Context) (string, bool, error) {
+	sessionID := s.currentSessionID()
+	if sessionID == "" {
+		return "No current daemon session.", true, nil
+	}
+	timeline, err := s.client.SessionTimeline(ctx, sessionID, 50)
+	if err != nil {
+		return "", true, err
+	}
+	if len(timeline) == 0 {
+		return "No timeline items found.", true, nil
+	}
+	var lines []string
+	lines = append(lines, "Timeline "+sessionID)
+	for _, item := range timeline {
+		line := formatTimelineItem(item)
+		if line != "" {
+			lines = append(lines, "- "+line)
+		}
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func formatTimelineItem(item taskpkg.TimelineItem) string {
+	switch item.Kind {
+	case "message":
+		role := item.Role
+		if role == "" {
+			role = "message"
+		}
+		return role + ": " + firstLine(item.Content)
+	case "tool_call":
+		return strings.TrimSpace("tool.call: " + item.Tool + " " + item.Input)
+	case "tool_result":
+		status := item.Status
+		if status == "" {
+			status = "ok"
+		}
+		return strings.TrimSpace("tool.result[" + status + "]: " + item.Tool + " " + item.Input + " " + firstLine(item.Output))
+	case "diff":
+		return "diff: " + firstLine(item.Diff)
+	case "approval":
+		return strings.TrimSpace("approval: " + item.Tool + " " + item.Input + " " + item.Status + " " + item.Risk + " " + item.Reason + " " + firstLine(item.Content))
+	case "status":
+		status := item.Status
+		if status == "" {
+			status = item.Type
+		}
+		return "status: " + strings.TrimSpace(status+" "+firstLine(item.Content))
+	default:
+		return strings.TrimSpace(item.Kind + ": " + firstLine(item.Content))
 	}
 }
 

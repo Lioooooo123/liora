@@ -45,7 +45,7 @@ Liora v0.1 是本地 Mac 上的轻量 agent 工坊。
 
 ### 5. API 与客户端可用性
 
-- daemon API 覆盖健康检查、创建任务、查询任务、查询事件、SSE、diff、apply、cancel、approval、session/history。
+- daemon API 覆盖健康检查、创建任务、查询任务、查询事件、SSE、diff、apply、cancel、approval、session/history/timeline。
 - CLI 能启动 daemon，并能通过 smoke script 覆盖核心 API。
 - TUI 可以作为开发入口，但 v0.1 结束不要求精致桌面 UI。
 - UI 最小要求是“能解释状态、展示进度、展示 diff、允许 apply/cancel”；二次元视觉、白板和 Mac 原生体验进入 v0.2。

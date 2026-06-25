@@ -173,6 +173,22 @@ func TestClientSessionLifecycle(t *testing.T) {
 	if got.LastTaskID != created.Task.ID {
 		t.Fatalf("unexpected session %#v", got)
 	}
+	if err := repo.AppendEvent(t.Context(), created.Task.ID, task.EventSummary, task.EventPayload{Message: "assignment read"}); err != nil {
+		t.Fatal(err)
+	}
+	timeline, err := client.SessionTimeline(t.Context(), sessionResponse.Session.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var combined strings.Builder
+	for _, item := range timeline {
+		combined.WriteString(item.Role)
+		combined.WriteString(item.Content)
+		combined.WriteByte('\n')
+	}
+	if !strings.Contains(combined.String(), "read assignment") || !strings.Contains(combined.String(), "assignment read") {
+		t.Fatalf("unexpected timeline %#v", timeline)
+	}
 }
 
 func TestClientCancelRunningTask(t *testing.T) {

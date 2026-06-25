@@ -219,6 +219,27 @@ func TestServerServesSessionTranscript(t *testing.T) {
 	if len(tasks) != 2 || tasks[0].SessionID != first.Task.SessionID {
 		t.Fatalf("unexpected session tasks %#v", tasks)
 	}
+	if err := repo.AppendEvent(t.Context(), first.Task.ID, taskpkg.EventSummary, taskpkg.EventPayload{Message: "first done"}); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.Get(server.URL + "/v1/sessions/" + first.Task.SessionID + "/timeline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var timeline []taskpkg.TimelineItem
+	if err := json.NewDecoder(resp.Body).Decode(&timeline); err != nil {
+		t.Fatal(err)
+	}
+	var timelineText strings.Builder
+	for _, item := range timeline {
+		timelineText.WriteString(item.Role)
+		timelineText.WriteString(item.Content)
+		timelineText.WriteByte('\n')
+	}
+	if !strings.Contains(timelineText.String(), "first") || !strings.Contains(timelineText.String(), "second") || !strings.Contains(timelineText.String(), "first done") {
+		t.Fatalf("unexpected timeline %#v", timeline)
+	}
 }
 
 func TestServerServesDiffAndAppliesPatch(t *testing.T) {

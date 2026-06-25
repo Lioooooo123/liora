@@ -118,6 +118,36 @@ func TestRepositoryCreatesAndReusesSessionTranscript(t *testing.T) {
 	if len(tasks) != 2 || tasks[0].ID != second.ID || tasks[1].ID != first.ID {
 		t.Fatalf("unexpected session tasks %#v", tasks)
 	}
+	if err := repo.AppendEvent(t.Context(), first.ID, EventToolResult, EventPayload{Tool: "read", Input: "notes.txt", Output: "hello", Status: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), first.ID, EventSummary, EventPayload{Message: "read done"}); err != nil {
+		t.Fatal(err)
+	}
+	timeline, err := repo.Timeline(t.Context(), first.SessionID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	var combined strings.Builder
+	for _, item := range timeline {
+		kinds = append(kinds, item.Kind)
+		combined.WriteString(item.Role)
+		combined.WriteString(item.Content)
+		combined.WriteString(item.Tool)
+		combined.WriteString(item.Output)
+		combined.WriteByte('\n')
+	}
+	for _, want := range []string{"message", "tool_result"} {
+		if !containsString(kinds, want) {
+			t.Fatalf("expected timeline kind %q in %#v", want, timeline)
+		}
+	}
+	for _, want := range []string{"first thought", "second thought", "read done", "hello"} {
+		if !strings.Contains(combined.String(), want) {
+			t.Fatalf("expected timeline to contain %q, got %#v", want, timeline)
+		}
+	}
 }
 
 func TestRepositoryCancelsTask(t *testing.T) {
@@ -223,4 +253,13 @@ func TestRepositoryReadsEventsAfterSequence(t *testing.T) {
 	if len(secondBatch) != 1 || secondBatch[0].Type != EventSummary || secondBatch[0].Seq <= firstBatch[0].Seq {
 		t.Fatalf("unexpected second batch %#v after %#v", secondBatch, firstBatch)
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
