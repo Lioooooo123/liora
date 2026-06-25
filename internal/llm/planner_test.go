@@ -45,7 +45,7 @@ func TestPlannerTurnsNaturalLanguageIntoToolSteps(t *testing.T) {
 }
 
 func TestPlannerRejectsUnsupportedGeneratedTool(t *testing.T) {
-	generator := &fakeGenerator{response: "delete app.txt"}
+	generator := &fakeGenerator{response: "teleport app.txt"}
 	planner := NewPlanner(generator)
 
 	_, err := planner.Plan(t.Context(), PlanRequest{UserPrompt: "delete file"})

@@ -8,10 +8,17 @@ import (
 
 var allowedTools = map[string]bool{
 	"list":    true,
+	"tree":    true,
+	"glob":    true,
+	"stat":    true,
 	"read":    true,
 	"search":  true,
 	"write":   true,
+	"append":  true,
+	"edit":    true,
 	"replace": true,
+	"mkdir":   true,
+	"delete":  true,
 	"run":     true,
 	"diff":    true,
 	"mcp":     true,
@@ -76,10 +83,17 @@ Output one of:
 
 Allowed tools:
 - list <path>
-- read <path>
+- tree <path> <max depth>
+- glob <pattern> <path>
+- stat <path>
+- read <path> [start line] [line count]
 - search <query>
 - write <path> <content>
+- append <path> <content>
+- edit <path> <old text> <new text> [all]
 - replace <path> <old> <new>
+- mkdir <path>
+- delete <path>
 - run <shell command>
 - diff
 - mcp <server> <tool> <json arguments>
@@ -87,7 +101,9 @@ Allowed tools:
 Rules:
 - Use relative paths only.
 - Prefer list <path> for folder listing or "what is in this directory" requests.
-- Prefer read/search before editing.
+- Prefer glob for finding files by pattern, search for finding text, and read with line ranges before editing.
+- Prefer edit for precise replacements; use write only for new files or full-file rewrites.
+- Prefer built-in file tools over shell commands when possible.
 - End with diff after file edits.
 - Do not output unsupported tools.
 - Use mcp only when the request explicitly needs a configured MCP server.

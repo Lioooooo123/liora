@@ -108,11 +108,66 @@ func (a *Agent) execute(ctx context.Context, step Step) (output string, diff str
 			return "", "", err
 		}
 		return strings.Join(entries, "\n"), "", nil
-	case "read":
-		if len(step.Args) != 1 {
-			return "", "", fmt.Errorf("read expects 1 argument")
+	case "tree":
+		path := "."
+		depth := 2
+		if len(step.Args) > 0 {
+			path = step.Args[0]
 		}
-		content, err := a.workspace.ReadFile(step.Args[0])
+		if len(step.Args) > 1 {
+			parsed, err := strconv.Atoi(step.Args[1])
+			if err != nil {
+				return "", "", fmt.Errorf("tree depth must be a number")
+			}
+			depth = parsed
+		}
+		entries, err := a.workspace.Tree(path, depth)
+		if err != nil {
+			return "", "", err
+		}
+		return strings.Join(entries, "\n"), "", nil
+	case "glob":
+		if len(step.Args) < 1 {
+			return "", "", fmt.Errorf("glob expects a pattern")
+		}
+		root := "."
+		if len(step.Args) > 1 {
+			root = step.Args[1]
+		}
+		matches, err := a.workspace.Glob(step.Args[0], root, true)
+		if err != nil {
+			return "", "", err
+		}
+		return strings.Join(matches, "\n"), "", nil
+	case "stat":
+		if len(step.Args) != 1 {
+			return "", "", fmt.Errorf("stat expects 1 argument")
+		}
+		info, err := a.workspace.Stat(step.Args[0])
+		if err != nil {
+			return "", "", err
+		}
+		return fmt.Sprintf("%s size=%d mode=%s dir=%t", info.Path, info.Size, info.Mode, info.IsDir), "", nil
+	case "read":
+		if len(step.Args) < 1 || len(step.Args) > 3 {
+			return "", "", fmt.Errorf("read expects path [start_line] [line_count]")
+		}
+		startLine := 1
+		lineCount := 1000
+		var err error
+		if len(step.Args) > 1 {
+			startLine, err = strconv.Atoi(step.Args[1])
+			if err != nil {
+				return "", "", fmt.Errorf("read start_line must be a number")
+			}
+		}
+		if len(step.Args) > 2 {
+			lineCount, err = strconv.Atoi(step.Args[2])
+			if err != nil {
+				return "", "", fmt.Errorf("read line_count must be a number")
+			}
+		}
+		content, err := a.workspace.ReadFileRange(step.Args[0], startLine, lineCount)
 		return content, "", err
 	case "search":
 		if len(step.Args) < 1 {
@@ -138,6 +193,36 @@ func (a *Agent) execute(ctx context.Context, step Step) (output string, diff str
 		}
 		err := a.workspace.WriteFile(step.Args[0], strings.Join(step.Args[1:], " ")+"\n")
 		return "written " + step.Args[0], "", err
+	case "append":
+		if len(step.Args) < 2 {
+			return "", "", fmt.Errorf("append expects a path and content")
+		}
+		err := a.workspace.AppendFile(step.Args[0], strings.Join(step.Args[1:], " ")+"\n")
+		return "appended " + step.Args[0], "", err
+	case "mkdir":
+		if len(step.Args) != 1 {
+			return "", "", fmt.Errorf("mkdir expects 1 argument")
+		}
+		err := a.workspace.Mkdir(step.Args[0])
+		return "created directory " + step.Args[0], "", err
+	case "delete":
+		if len(step.Args) != 1 {
+			return "", "", fmt.Errorf("delete expects 1 argument")
+		}
+		err := a.workspace.Delete(step.Args[0])
+		return "deleted " + step.Args[0], "", err
+	case "edit":
+		if len(step.Args) < 3 {
+			return "", "", fmt.Errorf("edit expects a path, old text and new text")
+		}
+		replaceAll := len(step.Args) > 3 && step.Args[len(step.Args)-1] == "all"
+		newArgsEnd := len(step.Args)
+		if replaceAll {
+			newArgsEnd--
+		}
+		err := a.workspace.Edit(step.Args[0], step.Args[1], strings.Join(step.Args[2:newArgsEnd], " "), replaceAll)
+		diff, _ := a.workspace.GitDiff()
+		return "edited " + step.Args[0], diff, err
 	case "replace":
 		if len(step.Args) < 3 {
 			return "", "", fmt.Errorf("replace expects a path, old text and new text")

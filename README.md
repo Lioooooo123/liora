@@ -14,6 +14,8 @@ Liora 是一个可运行的最小 Coding Agent MVP，用于验证“工具调用
 - 可通过 `-workspace` 指定其他 workspace。
 - 按步骤执行基础 coding 工具。
 - 支持读取、搜索、写入、替换、运行 Shell、输出 diff。
+- 支持 glob、tree、stat、append、edit、mkdir、delete 等更完整的本地工具。
+- 搜索和 glob 优先使用 `rg`，不可用时回退到 Go walker。
 - 支持持久化 `goal` 和 `memory`，用于给后续轮次补充上下文。
 - 支持扫描全局和项目级 `skill`。
 - 支持通过 stdio MCP server 列出和调用工具。
@@ -29,10 +31,17 @@ Liora 是一个可运行的最小 Coding Agent MVP，用于验证“工具调用
 
 ```text
 list <path>
-read <path>
+tree <path> <max depth>
+glob <pattern> <path>
+stat <path>
+read <path> [start line] [line count]
 search <query>
 write <path> <content>
+append <path> <content>
+edit <path> <old text> <new text> [all]
 replace <path> <old> <new>
+mkdir <path>
+delete <path>
 run <shell command>
 mcp <server> <tool> <json arguments>
 diff
@@ -42,8 +51,9 @@ diff
 
 ```text
 list .
-read app.txt
-replace app.txt old new
+glob *.go .
+read app.txt 1 80
+edit app.txt old new
 run grep -q "hello new agent" app.txt
 diff
 ```
@@ -263,13 +273,23 @@ go test ./...
 - `internal/tools`：workspace 内的文件、搜索、目录查看和 Shell 能力。
 - `internal/trace`：工具调用轨迹记录和 JSONL 落盘。
 
+## 工具性能策略
+
+- `search` 使用 `rg -F --line-number` 优先执行，大仓库里比纯 Go 递归扫描快；如果系统没有 `rg`，自动回退到 Go walker。
+- `glob` 使用 `rg --files -g` 优先执行，最多返回 100 条，避免大目录展开过量。
+- `read` 默认最多读取 1000 行 / 100KB，并给每行加行号；可以通过 `read <path> <start> <count>` 分页读取。
+- `tree` 默认深度 2，最大深度 6，最多返回 300 行。
+- Shell stdout/stderr 会截断，避免 TUI 因超大输出卡死。
+- 文件遍历会跳过 `.git`、`node_modules`、`vendor`、`.env*` 等目录或敏感文件。
+- 二进制文件读取会被拒绝，避免把不可读内容送进 Planner/TUI。
+
 ## 当前边界
 
 - LLM Planner 只允许输出受控工具步骤；如果模型输出未知工具，程序会拒绝执行。
 - 当前没有多轮自动反思。LLM 只负责生成初始计划，执行失败后不会再次请求模型重新规划。
 - MCP 当前实现为 stdio JSON-RPC MVP，每次 list/call 会启动一次 server；后续可优化为长连接 session pool。
 - Skill 当前以本地 `SKILL.md` 摘要形式注入 Planner，没有实现独立 skill 执行沙盒。
-- `list` 是安全目录查看工具；Planner 会优先用它处理“看看文件夹里有什么”这类请求。
+- `list`、`tree`、`glob` 是安全目录查看工具；Planner 会优先用它们处理“看看文件夹里有什么”或“找文件”这类请求。
 - TUI 是轻量 Go 实现，借鉴 Kimi Code CLI 的信息结构，使用 Lip Gloss 做样式，不复用原 TypeScript/pi-tui 组件。
 - Shell 命令当前在 workspace 目录下执行，但还没有 Docker 隔离。
 - 文件工具已经做 workspace 路径限制；Shell 命令仍需要后续增加 Docker sandbox、危险命令审批、超时和资源限制策略。

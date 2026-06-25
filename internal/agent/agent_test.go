@@ -125,6 +125,50 @@ func TestAgentExecutesListTool(t *testing.T) {
 	}
 }
 
+func TestAgentExecutesComplexWorkspaceTools(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := tools.NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := trace.NewMemoryRecorder()
+	runner := New(workspace, recorder)
+
+	result, err := runner.Run(t.Context(), `glob *.go src
+read src/main.go 1 1
+stat src/main.go
+mkdir docs
+append docs/log.txt hello
+edit docs/log.txt hello hi
+tree . 2
+delete docs/log.txt`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusCompleted {
+		t.Fatalf("expected completed, got %s", result.Status)
+	}
+	events := recorder.Events()
+	if len(events) != 8 {
+		t.Fatalf("expected 8 events, got %#v", events)
+	}
+	if !strings.Contains(events[0].Output, "src/main.go") {
+		t.Fatalf("unexpected glob output %#v", events[0])
+	}
+	if !strings.Contains(events[1].Output, "1\tpackage main") {
+		t.Fatalf("unexpected read output %#v", events[1])
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs", "log.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected file deleted, stat err %v", err)
+	}
+}
+
 func TestAgentExecutesMCPTool(t *testing.T) {
 	root := t.TempDir()
 	workspace, err := tools.NewWorkspace(root)
