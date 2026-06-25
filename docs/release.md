@@ -39,6 +39,16 @@ LIORA_TUI_SMOKE_LLM_ADDR=127.0.0.1:19091 \
 
 这个 smoke 会启动临时 fake LLM、Core Daemon 和 `-tui-daemon` 交互入口，覆盖 streaming 输出、`/timeline` 和运行中 `/cancel`。
 
+验证 coding task 能力基线：
+
+```sh
+LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 \
+LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 \
+./scripts/coding-eval.sh
+```
+
+这个 eval 会启动临时 fake LLM 和 Core Daemon，覆盖自然语言规划、patch-first 写入、apply 落盘、事件历史、timeline 和 cancel。
+
 ## 用户安装
 
 用户拿到 tarball 后执行：

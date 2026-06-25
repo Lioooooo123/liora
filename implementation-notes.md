@@ -193,3 +193,9 @@
 - `daemonclient.Apply` 从弱类型 `map[string]any` 改为结构化 `ApplyResult`，TUI `/apply` 现在会展示 applied task、落盘文件列表和下一步 `/timeline` 提示。
 - `/approve` 和 `/deny` 也补充 task status 与后续查看提示，避免确认动作只返回一句不可追踪的文本。
 - 这仍是 line-based action feedback，不是完整按钮式确认 UI；全屏 TUI 或 Mac 客户端应继续使用相同 apply/approval API，把这些动作升级成明确控件。
+
+## 2026-06-26 Coding Eval Baseline
+
+- 新增 `scripts/coding-eval.sh`，用临时 fake LLM、临时 daemon 和临时 workspace 跑真实 coding task eval，不依赖用户 API key，也不污染当前项目。
+- eval 覆盖自然语言规划、工具执行、patch-first 不直接写真实 workspace、apply 后文件落盘、`task.patch_applied` 事件、session timeline 和运行中 cancel。
+- 这不是完整 benchmark suite，只是 v0.1 防退化基线；后续可以继续增加多文件编辑、失败后 replan、权限审批、MCP 调用和大输出截断 case。

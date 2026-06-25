@@ -31,3 +31,16 @@ func TestTUISmokeScriptCoversDaemonBackedTUI(t *testing.T) {
 		}
 	}
 }
+
+func TestCodingEvalScriptCoversTaskQualityBaseline(t *testing.T) {
+	data, err := os.ReadFile("coding-eval.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{"Fake", "LIORA_PATCH_MODE=1", "natural", "run_async", "task.diff", "task.patch_applied", "/timeline", "task.cancelled", "coding eval ok"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected coding eval script to contain %q, got:\n%s", want, content)
+		}
+	}
+}
