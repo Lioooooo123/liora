@@ -1,0 +1,230 @@
+package daemonclient
+
+import (
+	"context"
+	"errors"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Lioooooo123/liora/internal/daemon"
+	"github.com/Lioooooo123/liora/internal/llm"
+	"github.com/Lioooooo123/liora/internal/store"
+	"github.com/Lioooooo123/liora/internal/task"
+	"github.com/Lioooooo123/liora/internal/tools"
+)
+
+type fakeGenerator struct {
+	response string
+}
+
+func (f *fakeGenerator) Generate(_ context.Context, _ []llm.Message) (string, error) {
+	return f.response, nil
+}
+
+type blockingShellExecutor struct {
+	started chan struct{}
+	done    chan struct{}
+}
+
+func newBlockingShellExecutor() *blockingShellExecutor {
+	return &blockingShellExecutor{
+		started: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+}
+
+func (e *blockingShellExecutor) Run(ctx context.Context, _ string, _ string) (tools.ShellResult, error) {
+	close(e.started)
+	<-ctx.Done()
+	close(e.done)
+	return tools.ShellResult{ExitCode: -1}, ctx.Err()
+}
+
+func TestClientCapabilitiesAndTaskLifecycle(t *testing.T) {
+	workspace := t.TempDir()
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	runner := task.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "write notes.txt hello\nread notes.txt"}))
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Runner: runner}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	if err := client.Health(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err := client.Capabilities(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capabilities.Tools) == 0 {
+		t.Fatal("expected capabilities")
+	}
+
+	created, err := client.CreateTask(t.Context(), task.CreateRequest{
+		Workspace: workspace,
+		Prompt:    "create notes",
+		Natural:   true,
+		RunAsync:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Task.ID == "" {
+		t.Fatalf("unexpected task %#v", created.Task)
+	}
+	stream, errs := client.StreamEvents(t.Context(), created.Task.ID)
+	var eventTypes []task.EventType
+	for event := range stream {
+		eventTypes = append(eventTypes, event.Type)
+		if event.Type == task.EventCompleted {
+			break
+		}
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []task.EventType{task.EventPlanning, task.EventPlanReady, task.EventToolResult, task.EventCompleted} {
+		if !containsEventType(eventTypes, want) {
+			t.Fatalf("expected %s in streamed events %#v", want, eventTypes)
+		}
+	}
+
+	got, err := client.GetTask(t.Context(), created.Task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != task.StatusCompleted {
+		t.Fatalf("expected completed, got %#v", got)
+	}
+	tasks, err := client.ListTasks(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) == 0 || tasks[0].ID != created.Task.ID {
+		t.Fatalf("unexpected task list %#v", tasks)
+	}
+	events, err := client.Events(t.Context(), created.Task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsEvent(events, task.EventCompleted) {
+		t.Fatalf("expected completed event, got %#v", events)
+	}
+}
+
+func TestClientCancelRunningTask(t *testing.T) {
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	executor := newBlockingShellExecutor()
+	runner := task.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "run sleep 100"}))
+	runner.SetSandbox(executor)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Runner: runner}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	created, err := client.CreateTask(t.Context(), task.CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "slow",
+		Natural:   true,
+		RunAsync:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-executor.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not start shell")
+	}
+	cancelled, err := client.Cancel(t.Context(), created.Task.ID, "test requested")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != task.StatusCancelled {
+		t.Fatalf("expected cancelled task, got %#v", cancelled)
+	}
+	select {
+	case <-executor.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancel did not stop shell")
+	}
+}
+
+func TestClientReturnsAPIError(t *testing.T) {
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	_, err := client.CreateTask(t.Context(), task.CreateRequest{Workspace: t.TempDir()})
+	if err == nil {
+		t.Fatal("expected API error")
+	}
+	if !strings.Contains(err.Error(), "prompt is required") {
+		t.Fatalf("unexpected error %v", err)
+	}
+}
+
+func TestClientStreamStopsOnContextCancel(t *testing.T) {
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	taskRecord, err := repo.Create(t.Context(), task.CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "wait",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	events, errs := client.StreamEvents(ctx, taskRecord.ID)
+	cancel()
+	for range events {
+	}
+	if err := <-errs; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("unexpected stream error %v", err)
+	}
+}
+
+func newTestClient(t *testing.T, baseURL string) *Client {
+	t.Helper()
+	client, err := New(baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+func newTestRepository(t *testing.T) (*task.Repository, func()) {
+	t.Helper()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return task.NewRepository(db), func() { _ = db.Close() }
+}
+
+func containsEvent(events []task.Event, want task.EventType) bool {
+	for _, event := range events {
+		if event.Type == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsEventType(events []task.EventType, want task.EventType) bool {
+	for _, event := range events {
+		if event == want {
+			return true
+		}
+	}
+	return false
+}

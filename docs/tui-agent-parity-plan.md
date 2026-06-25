@@ -89,6 +89,17 @@ Workspace / Docker / MCP / LLM Providers
 - 新增 `internal/capabilities`，集中维护内建工具清单。
 - planner allowed tools、`/tools` 命令、TUI welcome 使用同一份清单。
 - daemon API 暴露 `GET /v1/capabilities`，Mac 客户端直接读取工具能力和风险类型。
+- 新增 `internal/daemonclient`，封装 health、capabilities、create/list/get task、events、SSE stream、diff、apply、cancel。后续 TUI 和 Mac 客户端都应使用这个 client，而不是各自拼 HTTP 路径和 SSE 解析。
+
+## 第二阶段入口
+
+下一阶段优先把 TUI 从同步 in-process `Submit` 改成 daemon task 模式：
+
+- 启动或连接 daemon。
+- 创建 async task。
+- 用 `daemonclient.StreamEvents` 驱动实时渲染。
+- `/cancel` 或 Ctrl+C 调用 `daemonclient.Cancel`。
+- diff 出现后展示 apply/cancel/continue 的动作区。
 
 ## 验证门槛
 
