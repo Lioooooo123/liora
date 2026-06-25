@@ -207,6 +207,40 @@ delete docs/log.txt`)
 	}
 }
 
+func TestAgentParsesEscapedAndQuotedPathArguments(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "assignment question.pdf"), []byte("pdf placeholder\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "course notes.txt"), []byte("notes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := tools.NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := trace.NewMemoryRecorder()
+	runner := New(workspace, recorder)
+
+	result, err := runner.Run(t.Context(), `stat assignment\ question.pdf
+stat "course notes.txt"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusCompleted {
+		t.Fatalf("expected completed, got %s", result.Status)
+	}
+	events := recorder.Events()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %#v", events)
+	}
+	for _, event := range events {
+		if event.Status != trace.StatusOK || !strings.Contains(event.Output, "size=") {
+			t.Fatalf("unexpected stat event %#v", event)
+		}
+	}
+}
+
 func TestAgentExecutesMCPTool(t *testing.T) {
 	root := t.TempDir()
 	workspace, err := tools.NewWorkspace(root)

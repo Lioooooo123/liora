@@ -96,3 +96,8 @@
 - 新增 `scripts/package-release.sh`，产物为 `dist/liora_<version>_<goos>_<goarch>.tar.gz`，包含 `bin/liora`、`install.sh`、README 和 MVP benchmark。
 - CLI 新增 `-version`，打包时通过 `-ldflags "-X main.version=<version>"` 注入版本，方便发布包 smoke 和用户快速确认安装结果。
 - 新增 `scripts/release-smoke.sh`，会解包发布包、安装到临时目录并运行 `liora -version`。这个 smoke 只验证包可安装可启动，不验证用户自己的 LLM API key。
+
+## 2026-06-25 Step Argument Parsing
+
+- 修复 LLM 生成 `assignment\ question.pdf` 或 `"course notes.txt"` 时路径被按空格拆散的问题，文件类工具现在支持反斜杠转义和单/双引号参数。
+- `run` 和 `mcp` 不能使用同一套去引号逻辑：`run` 需要保留 shell 命令原文，`mcp` 需要保留 JSON 参数中的双引号，因此 parser 按工具类型处理后续参数。
