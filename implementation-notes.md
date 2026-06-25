@@ -84,3 +84,9 @@
 - 新增 `docs/mvp-exit-benchmark.md`，把当前长期目标收敛为 v0.1 能力底座验收标准。
 - 结束标准强调任务能力、实时事件、SQLite 持久化、patch/apply、cancel、sandbox 基线和可验证 smoke；精致 Mac App、角色系统、白板完整形态和 Docker 默认化进入 v0.2+。
 - 后续是否结束当前目标，应按该文档逐项验收，而不是继续做开放式优化。
+
+## 2026-06-25 Minimal Action Guidance
+
+- TUI 在展示 diff 后新增 `Next` 区块，提示用户先 review diff，再通过 daemon API apply 或 cancel。
+- 这不是完整桌面确认 UI，只是 v0.1 的最低可用引导；真正的按钮式 apply/cancel 应由未来 Mac 客户端消费 daemon API 实现。
+- README 中过期的“SSE 后续扩展实时订阅”描述已改为当前真实状态：同进程通知 + 增量游标 + 低频 fallback。

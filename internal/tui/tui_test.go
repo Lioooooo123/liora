@@ -141,6 +141,26 @@ func TestRenderTurnSeparatesSections(t *testing.T) {
 	}
 }
 
+func TestRenderTurnShowsNextActionsForDiff(t *testing.T) {
+	var out strings.Builder
+	RenderTurn(&out, TurnView{
+		Input: "修改 app",
+		TurnResult: TurnResult{
+			AgentResult: agent.Result{
+				Summary: "completed 1 step",
+				Diff:    "--- a/app.txt\n+++ b/app.txt\n",
+			},
+		},
+	})
+
+	rendered := out.String()
+	for _, want := range []string{"Diff", "Next", "apply", "cancel"} {
+		if !strings.Contains(strings.ToLower(rendered), strings.ToLower(want)) {
+			t.Fatalf("expected rendered output to contain %q, got:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestRenderTurnCanHideUserSection(t *testing.T) {
 	var out strings.Builder
 	RenderTurn(&out, TurnView{

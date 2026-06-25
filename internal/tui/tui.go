@@ -172,6 +172,7 @@ func RenderTurn(output io.Writer, view TurnView) {
 	}
 	if strings.TrimSpace(result.AgentResult.Diff) != "" {
 		renderSection(output, "Diff", strings.TrimRight(result.AgentResult.Diff, "\n"))
+		renderSection(output, "Next", "Review the diff before applying changes.\nDaemon API: POST /apply to confirm, POST /cancel to stop a running task.")
 	}
 }
 

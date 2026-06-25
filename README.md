@@ -392,7 +392,7 @@ go test ./...
 - LLM Planner 只允许输出受控工具步骤；如果模型输出未知工具，程序会拒绝执行。
 - 当前没有多轮自动反思。LLM 只负责生成初始计划，执行失败后不会再次请求模型重新规划。
 - Daemon 当前默认适合本机开发使用，尚未实现本地 token 或 Unix socket 鉴权。
-- SSE 当前先输出任务已有事件，后续可扩展为实时订阅式事件总线。
+- SSE 已使用同进程事件通知和增量游标；跨进程写库场景保留低频 fallback 轮询。
 - MCP 当前实现为 stdio JSON-RPC MVP，每次 list/call 会启动一次 server；后续可优化为长连接 session pool。
 - Skill 当前以本地 `SKILL.md` 摘要形式注入 Planner，没有实现独立 skill 执行沙盒。
 - `list`、`tree`、`glob` 是安全目录查看工具；Planner 会优先用它们处理“看看文件夹里有什么”或“找文件”这类请求。
@@ -404,7 +404,6 @@ go test ./...
 ## 下一步
 
 - 将 Docker sandbox 从可配置能力升级为任务默认执行策略。
-- 将 daemon SSE 扩展成实时事件订阅。
 - 将 task event 和 tool call 事件进一步结构化。
 - 把 patch mode 升级为默认任务策略，并接入桌面端确认 UI。
 - 建立一组 coding task eval case，支持回归评测。
