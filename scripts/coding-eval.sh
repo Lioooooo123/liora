@@ -69,6 +69,8 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length).decode()
         if "docx-case" in raw:
             content = "document assignment.docx"
+        elif "mcp-case" in raw:
+            content = "mcp fake echo {\"text\":\"hello from eval\"}"
         elif "Failure:" in raw and "missing-replan.txt" in raw:
             content = "read README.md"
         elif "replan-case" in raw:
@@ -96,6 +98,57 @@ class Handler(BaseHTTPRequestHandler):
 HTTPServer((host, int(port)), Handler).serve_forever()
 PY
 LLM_PID="$!"
+
+cat >"$TMP_DIR/fake_mcp.py" <<'PY'
+import json
+import sys
+
+for line in sys.stdin:
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    method = req.get("method")
+    req_id = req.get("id")
+    if method == "notifications/initialized":
+        continue
+    if method == "initialize":
+        result = {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "fake", "version": "0.0.1"},
+        }
+        print(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": result}), flush=True)
+    elif method == "tools/list":
+        result = {
+            "tools": [{
+                "name": "echo",
+                "description": "Echo text",
+                "inputSchema": {"type": "object"},
+            }]
+        }
+        print(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": result}), flush=True)
+    elif method == "tools/call":
+        params = req.get("params") or {}
+        args = params.get("arguments") or {}
+        text = args.get("text", "")
+        result = {"content": [{"type": "text", "text": f"mcp echo: {text}"}]}
+        print(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": result}), flush=True)
+    else:
+        error = {"code": -32601, "message": "method not found"}
+        print(json.dumps({"jsonrpc": "2.0", "id": req_id, "error": error}), flush=True)
+PY
+mkdir -p "$TMP_DIR/home"
+cat >"$TMP_DIR/home/mcp.json" <<JSON
+{
+  "servers": {
+    "fake": {
+      "command": "python3",
+      "args": ["$TMP_DIR/fake_mcp.py"]
+    }
+  }
+}
+JSON
 
 python3 - "$WORKSPACE/assignment.docx" <<'PY'
 import sys
@@ -228,6 +281,30 @@ DOCX_STREAM="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks/$DOCX_TASK_ID/events/stre
 [[ "$DOCX_STREAM" == *"Assignment Brief"* ]]
 [[ "$DOCX_STREAM" == *"event: task.completed"* ]]
 
+MCP_BODY="$(python3 - "$WORKSPACE" <<'PY'
+import json
+import sys
+print(json.dumps({
+    "workspace": sys.argv[1],
+    "prompt": "mcp-case: call the fake echo MCP tool",
+    "natural": True,
+    "run_async": True,
+}))
+PY
+)"
+MCP_JSON="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks" -H 'Content-Type: application/json' -d "$MCP_BODY")"
+MCP_TASK_ID="$(printf '%s' "$MCP_JSON" | json_get task.id)"
+MCP_STREAM="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks/$MCP_TASK_ID/events/stream")"
+[[ "$MCP_STREAM" == *"event: permission.requested"* ]]
+[[ "$MCP_STREAM" == *"external"* ]]
+curl -fsS "http://$DAEMON_ADDR/v1/tasks/$MCP_TASK_ID/approval" \
+  -H 'Content-Type: application/json' \
+  -d '{"decision":"approve"}' >/dev/null
+wait_task_status "$MCP_TASK_ID" "completed"
+MCP_EVENTS="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks/$MCP_TASK_ID/events")"
+[[ "$MCP_EVENTS" == *"permission.approved"* ]]
+[[ "$MCP_EVENTS" == *"mcp echo: hello from eval"* ]]
+
 REPLAN_BODY="$(python3 - "$WORKSPACE" <<'PY'
 import json
 import sys
@@ -330,4 +407,4 @@ curl -fsS "http://$DAEMON_ADDR/v1/tasks/$CANCEL_TASK_ID/cancel" \
   -d '{"reason":"eval stop"}' >/dev/null
 curl -fsS "http://$DAEMON_ADDR/v1/tasks/$CANCEL_TASK_ID/events/stream" | grep -q 'event: task.cancelled'
 
-echo "coding eval ok: task=$TASK_ID session=$SESSION_ID multi=$MULTI_TASK_ID docx=$DOCX_TASK_ID replan=$REPLAN_TASK_ID big_output=$BIG_OUTPUT_TASK_ID approve=$APPROVE_TASK_ID deny=$DENY_TASK_ID cancel=$CANCEL_TASK_ID"
+echo "coding eval ok: task=$TASK_ID session=$SESSION_ID multi=$MULTI_TASK_ID docx=$DOCX_TASK_ID mcp=$MCP_TASK_ID replan=$REPLAN_TASK_ID big_output=$BIG_OUTPUT_TASK_ID approve=$APPROVE_TASK_ID deny=$DENY_TASK_ID cancel=$CANCEL_TASK_ID"

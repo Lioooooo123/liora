@@ -19,6 +19,7 @@ Liora v0.1 是本地 Mac 上的轻量 agent 工坊。
 - 支持 natural task：用户用自然语言描述任务，Liora 能调用 LLM 规划步骤并执行工具。
 - 支持 script task：无需 LLM，直接执行显式步骤，便于调试、测试和自动化。
 - 支持工具事件：`list/read/search/write/edit/run/mcp` 等核心工具的 call/result 能被记录并通过 API 查询。
+- 支持 MCP 外部工具：配置在 `mcp.json` 中的 stdio MCP server 可被 natural/script task 调用，并进入统一审批、事件和历史链路。
 - 支持基础文档理解：PDF/DOCX 能通过受控 read-only 工具转成分页文本，而不是让模型临时猜 shell 命令。
 - 支持 bounded replan：natural task 的工具步骤失败后，能把失败上下文交回 LLM 生成一次修正计划，并在同一任务时间线内继续执行。
 - 支持 diff-first 写入：任务执行阶段默认可以在副本 workspace 生成 diff，用户确认后再 apply 到真实 workspace。
@@ -60,7 +61,7 @@ Liora v0.1 是本地 Mac 上的轻量 agent 工坊。
 - `LIORA_HOME=$(mktemp -d) LIORA_DAEMON_ADDR=127.0.0.1:19089 ./scripts/daemon-smoke.sh "$PWD"` 通过。
 - `LIORA_TUI_SMOKE_DAEMON_ADDR=127.0.0.1:19090 LIORA_TUI_SMOKE_LLM_ADDR=127.0.0.1:19091 ./scripts/tui-smoke.sh "$PWD"` 通过。
 - `LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scripts/coding-eval.sh` 通过。
-- smoke、eval 和 CLI 测试覆盖至少一个 natural coding task、一个 document-read task、一个 multi-file patch task、一个 failed-tool replan task、一个 apply API 调用、一个 large-output truncation task、一个 permission approve/deny task、一个 running cancel task、一个 child-process cleanup case、一个 SSE 事件流、一个 daemon-backed TUI timeline、一个默认 embedded-daemon TUI timeline 和一个 TUI running cancel。
+- smoke、eval 和 CLI 测试覆盖至少一个 natural coding task、一个 document-read task、一个 MCP external tool task、一个 multi-file patch task、一个 failed-tool replan task、一个 apply API 调用、一个 large-output truncation task、一个 permission approve/deny task、一个 running cancel task、一个 child-process cleanup case、一个 SSE 事件流、一个 daemon-backed TUI timeline、一个默认 embedded-daemon TUI timeline 和一个 TUI running cancel。
 - `implementation-notes.md` 已记录所有重要技术取舍和后续风险。
 - `git status --short --branch` 显示本地分支和 `origin/main` 同步且无未提交改动。
 

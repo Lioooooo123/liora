@@ -38,7 +38,7 @@ func TestCodingEvalScriptCoversTaskQualityBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
-	for _, want := range []string{"Fake", "LIORA_PATCH_MODE=1", "LIORA_PERMISSION=prompt", "natural", "run_async", "multi-file", "config/settings.txt", "docs/guide.txt", "docx-case", "assignment.docx", "Assignment Brief", "replan-case", "task.replanning", "missing-replan.txt", "600000", "truncated", "task.diff", "task.patch_applied", "/timeline", "permission.requested", "permission.approved", "permission.denied", "task.cancelled", "coding eval ok"} {
+	for _, want := range []string{"Fake", "LIORA_PATCH_MODE=1", "LIORA_PERMISSION=prompt", "natural", "run_async", "multi-file", "config/settings.txt", "docs/guide.txt", "docx-case", "assignment.docx", "Assignment Brief", "mcp-case", "fake_mcp.py", "mcp echo: hello from eval", "external", "replan-case", "task.replanning", "missing-replan.txt", "600000", "truncated", "task.diff", "task.patch_applied", "/timeline", "permission.requested", "permission.approved", "permission.denied", "task.cancelled", "coding eval ok"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected coding eval script to contain %q, got:\n%s", want, content)
 		}

@@ -234,3 +234,9 @@
 - DOCX 使用 Go 标准库 `archive/zip` + `encoding/xml` 直接解析 `word/document.xml`，不增加发布包依赖；当前只提取正文段落，页眉、批注、表格复杂结构会被简化为纯文本。
 - PDF 使用系统 `pdftotext -layout -enc UTF-8`，原因是 Go 标准库没有 PDF 文本提取能力，引入完整 PDF 解析库会明显扩大 MVP 依赖面。没有 `pdftotext` 时会返回明确错误，后续 macOS 安装包可考虑内置或检测提示。
 - `document` 复用 `read` 的分页和截断策略，避免大 PDF/DOCX 一次性冲垮事件流或 TUI。`scripts/coding-eval.sh` 用最小 DOCX 覆盖 daemon/SSE 的文档读取路径，PDF 路径先由单独环境能力承担。
+
+## 2026-06-26 MCP Eval Coverage
+
+- `scripts/coding-eval.sh` 新增临时 stdio fake MCP server，并在 `LIORA_HOME/mcp.json` 中配置 `fake/echo`，用 natural task 触发 `mcp fake echo {"text":"hello from eval"}`。
+- 因为当前权限策略把 MCP 归类为 external，eval 会先验证 `permission.requested` 和 `external` 风险，再调用 approval API，最终确认事件历史里出现 `permission.approved` 与 `mcp echo: hello from eval`。
+- 这条 case 证明 MCP 已进入 daemon/session/task/event 主链路，TUI 和未来 Mac 客户端可以复用同一套审批与事件机制。当前 MCP client 仍是每次 list/call 启动一次 stdio server；长连接池、server 生命周期管理和工具 schema UI 仍留到后续阶段。
