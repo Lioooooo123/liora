@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/daemon"
@@ -14,6 +15,7 @@ import (
 	"github.com/Lioooooo123/liora/internal/llm"
 	"github.com/Lioooooo123/liora/internal/store"
 	taskpkg "github.com/Lioooooo123/liora/internal/task"
+	"github.com/Lioooooo123/liora/internal/tools"
 	"github.com/Lioooooo123/liora/internal/tui"
 )
 
@@ -69,6 +71,124 @@ func TestDaemonSubmitterStreamsFromDaemon(t *testing.T) {
 	}
 }
 
+type blockingShellExecutor struct {
+	started chan struct{}
+	done    chan struct{}
+}
+
+func newBlockingShellExecutor() *blockingShellExecutor {
+	return &blockingShellExecutor{
+		started: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+}
+
+func (e *blockingShellExecutor) Run(ctx context.Context, _ string, _ string) (tools.ShellResult, error) {
+	close(e.started)
+	<-ctx.Done()
+	close(e.done)
+	return tools.ShellResult{ExitCode: -1}, ctx.Err()
+}
+
+func TestDaemonSubmitterCancelsCurrentTask(t *testing.T) {
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	executor := newBlockingShellExecutor()
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "run sleep 100"}))
+	runner.SetSandbox(executor)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Runner: runner}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, t.TempDir(), true)
+
+	done := make(chan submitOutcome, 1)
+	go func() {
+		result, err := submitter.SubmitStream(t.Context(), "slow task", nil)
+		done <- submitOutcome{result: result, err: err}
+	}()
+	select {
+	case <-executor.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not start")
+	}
+	output, handled, err := submitter.HandleCommand(t.Context(), "/cancel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(output, "Cancelled task") {
+		t.Fatalf("unexpected cancel output handled=%v output=%q", handled, output)
+	}
+	select {
+	case <-executor.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancel did not stop shell")
+	}
+	select {
+	case outcome := <-done:
+		if outcome.err != nil {
+			t.Fatalf("cancelled submit should not return an error, got %v", outcome.err)
+		}
+		if outcome.result.AgentResult.Summary != "cancelled" {
+			t.Fatalf("expected cancelled summary, got %#v", outcome.result.AgentResult)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("submit did not finish after cancel")
+	}
+}
+
+type submitOutcome struct {
+	result tui.TurnResult
+	err    error
+}
+
+func TestDaemonSubmitterAppliesLastDiff(t *testing.T) {
+	root := t.TempDir()
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "write notes.txt hello"}))
+	runner.SetPatchMode(true)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Runner: runner}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+
+	result, err := submitter.SubmitStream(t.Context(), "create notes", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(result.AgentResult.Diff) == "" {
+		t.Fatalf("expected diff, got %#v", result.AgentResult)
+	}
+	if _, err := os.Stat(filepath.Join(root, "notes.txt")); err == nil {
+		t.Fatal("patch mode should not mutate real workspace before apply")
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	output, handled, err := submitter.HandleCommand(t.Context(), "/apply")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(output, "Applied task") {
+		t.Fatalf("unexpected apply output handled=%v output=%q", handled, output)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "notes.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello\n" {
+		t.Fatalf("unexpected applied file %q", string(data))
+	}
+}
+
+func TestDaemonSubmitterApplyWithoutTask(t *testing.T) {
+	submitter := &DaemonSubmitter{client: nil}
+	output, handled, err := submitter.HandleCommand(t.Context(), "/apply")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(output, "No daemon task") {
+		t.Fatalf("unexpected output handled=%v output=%q", handled, output)
+	}
+}
+
 func findOnlyTaskID(t *testing.T, repo *taskpkg.Repository) string {
 	t.Helper()
 	tasks, err := repo.List(t.Context(), 10)
@@ -79,6 +199,24 @@ func findOnlyTaskID(t *testing.T, repo *taskpkg.Repository) string {
 		t.Fatalf("expected one task, got %#v", tasks)
 	}
 	return tasks[0].ID
+}
+
+func newTestRepository(t *testing.T) (*taskpkg.Repository, func()) {
+	t.Helper()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return taskpkg.NewRepository(db), func() { _ = db.Close() }
+}
+
+func newTestSubmitter(t *testing.T, serverURL string, root string, natural bool) *DaemonSubmitter {
+	t.Helper()
+	client, err := daemonclient.New(serverURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewDaemonSubmitter(client, root, natural)
 }
 
 func containsStreamType(events []string, want string) bool {

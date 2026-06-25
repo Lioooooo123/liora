@@ -98,8 +98,10 @@ Workspace / Docker / MCP / LLM Providers
 - 已新增 `-tui-daemon`，可连接已运行 daemon。
 - 已创建 async task。
 - 已用 `daemonclient.StreamEvents` 驱动实时渲染。
-- 待做：`/cancel` 或 Ctrl+C 调用 `daemonclient.Cancel`。
-- 待做：diff 出现后展示 apply/cancel/continue 的动作区，并接入 apply API。
+- 已在 daemon-backed session 层支持 `/cancel` 调用 `daemonclient.Cancel`。
+- 已在 daemon-backed session 层支持 `/apply` 调用 apply API。
+- 待做：line-based TUI 当前仍会在任务运行期间阻塞输入，真正的运行中快捷键取消需要 Bubble Tea/异步输入层。
+- 待做：diff 出现后的动作区需要升级为更明确的交互控件，而不是只依赖用户手输 `/apply`。
 
 当前实现仍是 line-based TUI，不是 Bubble Tea 全屏 UI。它已经把任务执行链路迁到 daemon/SSE，可作为下一步全屏 TUI 的数据通路验证。
 

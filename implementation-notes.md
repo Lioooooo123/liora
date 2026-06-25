@@ -120,3 +120,10 @@
 - `internal/tui` 不再直接依赖 daemonclient 或 task 包，避免 `runtime -> tui` 与 `tui -> task -> runtime` 的 import cycle；daemon 适配逻辑放在 `internal/tuisession`。
 - CLI 新增 `-tui-daemon`，连接 `-daemon-addr` 指向的已运行 daemon。当前不会自动拉起 daemon，也还不能在任务运行中通过输入 `/cancel` 取消；这两个能力留给后续阶段。
 - 修正 `daemonclient` SSE 解析：daemon 的 SSE `data:` 是事件 payload JSON，不是完整 task event。client 现在用 `event:` 填 type、`id:` 填 id、`data:` 填 payload，避免 UI 层拿不到 payload。
+
+## 2026-06-26 TUI Cancel and Apply Commands
+
+- `internal/tuisession.DaemonSubmitter` 现在记录 current task、last task 和 last diff，并实现 `HandleCommand` 支持 `/cancel` 与 `/apply`。CLI 在 `-tui-daemon` 模式下使用 `tui.CommandChain{daemonSession, turnRuntime}`，先处理 daemon session 命令，再回退到 runtime 命令。
+- `/cancel` 会调用 daemon cancel API 并停止当前 running task；主动取消不再作为 TUI 错误返回，避免用户取消后额外显示 Error。
+- `/apply` 会优先使用最近一次 stream 中保存的 diff，必要时回查 daemon diff API，再调用 apply API。patch-mode 下任务完成不会直接改真实 workspace，用户输入 `/apply` 后才落盘。
+- 当前 line-based TUI 在 task 运行期间仍阻塞在 `SubmitStream`，所以“运行中输入 `/cancel`”还不是完整交互体验；全屏 Bubble Tea/异步输入层需要继续把这个 command 能力绑定到快捷键或并发输入。

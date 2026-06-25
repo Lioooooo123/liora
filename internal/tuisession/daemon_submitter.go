@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/daemonclient"
@@ -13,9 +14,13 @@ import (
 )
 
 type DaemonSubmitter struct {
-	client    *daemonclient.Client
-	workspace string
-	natural   bool
+	client        *daemonclient.Client
+	workspace     string
+	natural       bool
+	mu            sync.Mutex
+	currentTaskID string
+	lastTaskID    string
+	lastDiff      string
 }
 
 func NewDaemonSubmitter(client *daemonclient.Client, workspace string, natural bool) *DaemonSubmitter {
@@ -39,9 +44,14 @@ func (s *DaemonSubmitter) SubmitStream(ctx context.Context, input string, onEven
 	if err != nil {
 		return tui.TurnResult{}, err
 	}
-	stream, errs := s.client.StreamEvents(ctx, created.Task.ID)
+	s.setCurrentTask(created.Task.ID)
+	defer s.clearCurrentTask(created.Task.ID)
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+	stream, errs := s.client.StreamEvents(streamCtx, created.Task.ID)
 	result := tui.TurnResult{AgentResult: agent.Result{Status: agent.StatusCompleted}}
 	var runErr error
+	terminalError := false
 	for update := range stream {
 		if onEvent != nil {
 			onEvent(tui.StreamUpdate{
@@ -49,15 +59,22 @@ func (s *DaemonSubmitter) SubmitStream(ctx context.Context, input string, onEven
 				PayloadJSON: update.Event.Payload,
 			})
 		}
+		if update.Type == taskpkg.EventDiff {
+			if payload, err := eventPayload(update.Event); err == nil {
+				s.rememberDiff(created.Task.ID, payload.Diff)
+			}
+		}
 		mergeStreamEvent(&result, update)
 		if update.Type == taskpkg.EventCompleted || update.Type == taskpkg.EventCancelled || update.Type == taskpkg.EventError {
+			terminalError = update.Type == taskpkg.EventError
+			cancelStream()
 			break
 		}
 	}
 	if err := <-errs; err != nil {
 		runErr = err
 	}
-	if result.AgentResult.Status == agent.StatusFailed && runErr == nil {
+	if result.AgentResult.Status == agent.StatusFailed && runErr == nil && terminalError {
 		runErr = fmt.Errorf("daemon task failed")
 	}
 	return result, runErr
@@ -101,5 +118,86 @@ func mergeStreamEvent(result *tui.TurnResult, update daemonclient.StreamEvent) {
 		result.AgentResult.Summary = "cancelled"
 	case taskpkg.EventCompleted:
 		result.AgentResult.Status = agent.StatusCompleted
+	}
+}
+
+func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (string, bool, error) {
+	line = strings.TrimSpace(line)
+	switch line {
+	case "/cancel":
+		return s.cancelCurrent(ctx)
+	case "/apply":
+		return s.applyLast(ctx)
+	default:
+		return "", false, nil
+	}
+}
+
+func (s *DaemonSubmitter) cancelCurrent(ctx context.Context) (string, bool, error) {
+	taskID := s.currentTask()
+	if taskID == "" {
+		return "No running daemon task.", true, nil
+	}
+	task, err := s.client.Cancel(ctx, taskID, "cancelled from TUI")
+	if err != nil {
+		return "", true, err
+	}
+	return "Cancelled task " + task.ID + ".", true, nil
+}
+
+func (s *DaemonSubmitter) applyLast(ctx context.Context) (string, bool, error) {
+	taskID, diff := s.lastPatch()
+	if taskID == "" {
+		return "No daemon task to apply.", true, nil
+	}
+	if strings.TrimSpace(diff) == "" {
+		fetched, err := s.client.Diff(ctx, taskID)
+		if err != nil {
+			return "", true, err
+		}
+		diff = fetched
+	}
+	if strings.TrimSpace(diff) == "" {
+		return "No diff available for task " + taskID + ".", true, nil
+	}
+	if _, err := s.client.Apply(ctx, taskID, diff); err != nil {
+		return "", true, err
+	}
+	return "Applied task " + taskID + ".", true, nil
+}
+
+func (s *DaemonSubmitter) setCurrentTask(taskID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.currentTaskID = taskID
+	s.lastTaskID = taskID
+	s.lastDiff = ""
+}
+
+func (s *DaemonSubmitter) clearCurrentTask(taskID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.currentTaskID == taskID {
+		s.currentTaskID = ""
+	}
+}
+
+func (s *DaemonSubmitter) currentTask() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.currentTaskID
+}
+
+func (s *DaemonSubmitter) lastPatch() (string, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastTaskID, s.lastDiff
+}
+
+func (s *DaemonSubmitter) rememberDiff(taskID string, diff string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastTaskID == taskID {
+		s.lastDiff = diff
 	}
 }

@@ -103,6 +103,7 @@ func main() {
 
 	if *interactive || defaultInteractive {
 		submitter := tui.Submitter(turnRuntime)
+		commands := tui.CommandHandler(turnRuntime)
 		if *tuiDaemon {
 			client, err := daemonclient.New(daemonBaseURL(*daemonAddr))
 			if err != nil {
@@ -113,12 +114,14 @@ func main() {
 				fmt.Fprintln(os.Stderr, "daemon is not reachable:", err)
 				os.Exit(1)
 			}
-			submitter = tuisession.NewDaemonSubmitter(client, workspace.Root(), true)
+			daemonSession := tuisession.NewDaemonSubmitter(client, workspace.Root(), true)
+			submitter = daemonSession
+			commands = tui.CommandChain{daemonSession, turnRuntime}
 		}
 		app := tui.New(tui.Config{
 			Workspace: workspace.Root(),
 			Model:     llmLabel(llmConfig),
-			Commands:  turnRuntime,
+			Commands:  commands,
 		}, submitter)
 		if err := app.Run(context.Background(), os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)

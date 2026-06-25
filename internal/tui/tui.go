@@ -50,6 +50,27 @@ type CommandHandler interface {
 	HandleCommand(ctx context.Context, line string) (string, bool, error)
 }
 
+type CommandHandlerFunc func(ctx context.Context, line string) (string, bool, error)
+
+func (f CommandHandlerFunc) HandleCommand(ctx context.Context, line string) (string, bool, error) {
+	return f(ctx, line)
+}
+
+type CommandChain []CommandHandler
+
+func (c CommandChain) HandleCommand(ctx context.Context, line string) (string, bool, error) {
+	for _, handler := range c {
+		if handler == nil {
+			continue
+		}
+		result, handled, err := handler.HandleCommand(ctx, line)
+		if handled || err != nil {
+			return result, handled, err
+		}
+	}
+	return "", false, nil
+}
+
 type SubmitterFunc func(ctx context.Context, input string) (TurnResult, error)
 
 func (f SubmitterFunc) Submit(ctx context.Context, input string) (TurnResult, error) {
