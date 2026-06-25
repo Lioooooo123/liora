@@ -1,0 +1,5 @@
+.env.local
+liora.db
+*.db
+*.db-shm
+*.db-wal
