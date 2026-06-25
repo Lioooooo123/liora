@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"archive/zip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,6 +106,46 @@ func TestWorkspaceReadRangeAndBinaryGuard(t *testing.T) {
 	}
 	if _, err := workspace.ReadFile("bin.dat"); err == nil {
 		t.Fatal("expected binary read to fail")
+	}
+}
+
+func TestWorkspaceReadsDOCXDocument(t *testing.T) {
+	root := t.TempDir()
+	docPath := filepath.Join(root, "Assignment Question.docx")
+	writeMinimalDOCX(t, docPath, []string{"Project brief", "Build a local coding agent"})
+	workspace, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := workspace.ReadDocumentRange("Assignment Question.docx", 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "1\tProject brief") || !strings.Contains(content, "2\tBuild a local coding agent") {
+		t.Fatalf("unexpected document content:\n%s", content)
+	}
+
+	ranged, err := workspace.ReadDocumentRange("Assignment Question.docx", 2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(ranged) != "2\tBuild a local coding agent" {
+		t.Fatalf("unexpected ranged document content %q", ranged)
+	}
+}
+
+func TestWorkspaceDocumentRejectsUnsupportedExtension(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspace.ReadDocumentRange("notes.txt", 1, 10); err == nil || !strings.Contains(err.Error(), "supports .pdf and .docx") {
+		t.Fatalf("expected unsupported extension error, got %v", err)
 	}
 }
 
@@ -265,6 +306,32 @@ func TestWorkspaceDiffTracksOnlyFilesTouchedByAgent(t *testing.T) {
 	}
 	if strings.Contains(diff, "external.txt") || strings.Contains(diff, "before") || strings.Contains(diff, "after") {
 		t.Fatalf("diff should ignore untouched external changes, got:\n%s", diff)
+	}
+}
+
+func writeMinimalDOCX(t *testing.T, path string, paragraphs []string) {
+	t.Helper()
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	zipWriter := zip.NewWriter(file)
+	defer zipWriter.Close()
+	writer, err := zipWriter.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var builder strings.Builder
+	builder.WriteString(`<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>`)
+	for _, paragraph := range paragraphs {
+		builder.WriteString("<w:p><w:r><w:t>")
+		builder.WriteString(paragraph)
+		builder.WriteString("</w:t></w:r></w:p>")
+	}
+	builder.WriteString("</w:body></w:document>")
+	if _, err := writer.Write([]byte(builder.String())); err != nil {
+		t.Fatal(err)
 	}
 }
 

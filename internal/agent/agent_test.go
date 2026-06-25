@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"archive/zip"
 	"context"
 	"os"
 	"path/filepath"
@@ -205,6 +206,55 @@ delete docs/log.txt`)
 	}
 	if _, err := os.Stat(filepath.Join(root, "docs", "log.txt")); !os.IsNotExist(err) {
 		t.Fatalf("expected file deleted, stat err %v", err)
+	}
+}
+
+func TestAgentExecutesDocumentTool(t *testing.T) {
+	root := t.TempDir()
+	writeAgentTestDOCX(t, filepath.Join(root, "assignment.docx"), []string{"Assignment brief", "Explain the architecture"})
+	workspace, err := tools.NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := trace.NewMemoryRecorder()
+	runner := New(workspace, recorder)
+
+	result, err := runner.Run(t.Context(), "document assignment.docx 1 2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusCompleted {
+		t.Fatalf("expected completed, got %s", result.Status)
+	}
+	events := recorder.Events()
+	if len(events) != 1 || events[0].Tool != "document" || !strings.Contains(events[0].Output, "Assignment brief") {
+		t.Fatalf("unexpected document event %#v", events)
+	}
+}
+
+func writeAgentTestDOCX(t *testing.T, path string, paragraphs []string) {
+	t.Helper()
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	zipWriter := zip.NewWriter(file)
+	defer zipWriter.Close()
+	writer, err := zipWriter.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var builder strings.Builder
+	builder.WriteString(`<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>`)
+	for _, paragraph := range paragraphs {
+		builder.WriteString("<w:p><w:r><w:t>")
+		builder.WriteString(paragraph)
+		builder.WriteString("</w:t></w:r></w:p>")
+	}
+	builder.WriteString("</w:body></w:document>")
+	if _, err := writer.Write([]byte(builder.String())); err != nil {
+		t.Fatal(err)
 	}
 }
 

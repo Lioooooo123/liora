@@ -13,13 +13,13 @@ func TestBuiltinToolsExposePlannerAndHumanViews(t *testing.T) {
 		t.Fatal("unexpected unsupported tool")
 	}
 	planner := PlannerToolList()
-	for _, want := range []string{"read <path>", "run <shell command>", "mcp <server> <tool> <json arguments>"} {
+	for _, want := range []string{"read <path>", "document <path>", "run <shell command>", "mcp <server> <tool> <json arguments>"} {
 		if !strings.Contains(planner, want) {
 			t.Fatalf("expected planner list to contain %q, got:\n%s", want, planner)
 		}
 	}
 	human := HumanToolList()
-	for _, want := range []string{"read_only", "write", "shell", "external", "精确文本替换"} {
+	for _, want := range []string{"read_only", "write", "shell", "external", "PDF/DOCX", "精确文本替换"} {
 		if !strings.Contains(human, want) {
 			t.Fatalf("expected human list to contain %q, got:\n%s", want, human)
 		}

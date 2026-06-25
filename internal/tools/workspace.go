@@ -1,11 +1,14 @@
 package tools
 
 import (
+	"archive/zip"
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -22,6 +25,7 @@ const maxReadBytes = 100 * 1024
 const maxLineLength = 2000
 const maxSearchMatches = 250
 const maxShellOutputBytes = 512 * 1024
+const maxDocumentBytes = 512 * 1024
 
 type Workspace struct {
 	root    string
@@ -133,6 +137,34 @@ func (w *Workspace) ReadFileRange(path string, startLine int, lineCount int) (st
 		builder.WriteString("[...truncated]\n")
 	}
 	return builder.String(), nil
+}
+
+func (w *Workspace) ReadDocumentRange(path string, startLine int, lineCount int) (string, error) {
+	abs, err := w.resolve(path)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("%s is a directory", path)
+	}
+	ext := strings.ToLower(filepath.Ext(abs))
+	var content string
+	switch ext {
+	case ".pdf":
+		content, err = extractPDFText(abs)
+	case ".docx":
+		content, err = extractDOCXText(abs)
+	default:
+		return "", fmt.Errorf("document supports .pdf and .docx, got %s", ext)
+	}
+	if err != nil {
+		return "", err
+	}
+	return formatNumberedRange(content, startLine, lineCount), nil
 }
 
 func (w *Workspace) List(path string) ([]string, error) {
@@ -698,4 +730,131 @@ func truncateString(value string, maxBytes int) string {
 		return value
 	}
 	return value[:maxBytes] + "\n[...truncated]\n"
+}
+
+func extractPDFText(abs string) (string, error) {
+	pdftotext, err := exec.LookPath("pdftotext")
+	if err != nil {
+		return "", fmt.Errorf("pdftotext is required to read PDF files")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, pdftotext, "-layout", "-enc", "UTF-8", abs, "-")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return "", fmt.Errorf("PDF extraction timed out")
+	}
+	if err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			detail = err.Error()
+		}
+		return "", fmt.Errorf("PDF extraction failed: %s", detail)
+	}
+	return truncateString(string(out), maxDocumentBytes), nil
+}
+
+func extractDOCXText(abs string) (string, error) {
+	reader, err := zip.OpenReader(abs)
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+	for _, file := range reader.File {
+		if file.Name == "word/document.xml" {
+			content, err := readZipFileText(file)
+			if err != nil {
+				return "", err
+			}
+			return truncateString(docxXMLToText(content), maxDocumentBytes), nil
+		}
+	}
+	return "", fmt.Errorf("word/document.xml not found in DOCX")
+}
+
+func readZipFileText(file *zip.File) (string, error) {
+	reader, err := file.Open()
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+	var builder strings.Builder
+	limited := io.LimitReader(reader, maxDocumentBytes+1)
+	if _, err := io.Copy(&builder, limited); err != nil {
+		return "", err
+	}
+	return builder.String(), nil
+}
+
+func docxXMLToText(content string) string {
+	decoder := xml.NewDecoder(strings.NewReader(content))
+	var builder strings.Builder
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			break
+		}
+		switch value := token.(type) {
+		case xml.CharData:
+			builder.WriteString(string(value))
+		case xml.EndElement:
+			if value.Name.Local == "p" {
+				builder.WriteString("\n")
+			}
+		case xml.StartElement:
+			switch value.Name.Local {
+			case "tab":
+				builder.WriteString("\t")
+			case "br", "cr":
+				builder.WriteString("\n")
+			}
+		}
+	}
+	return strings.TrimSpace(builder.String()) + "\n"
+}
+
+func formatNumberedRange(content string, startLine int, lineCount int) string {
+	if startLine < 1 {
+		startLine = 1
+	}
+	if lineCount <= 0 || lineCount > maxReadLines {
+		lineCount = maxReadLines
+	}
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	var builder strings.Builder
+	written := 0
+	truncated := false
+	for i, line := range lines {
+		lineNo := i + 1
+		if lineNo < startLine {
+			continue
+		}
+		if written >= lineCount {
+			truncated = true
+			break
+		}
+		if len(line) > maxLineLength {
+			line = line[:maxLineLength] + "[...truncated]"
+			truncated = true
+		}
+		next := strconv.Itoa(lineNo) + "\t" + line + "\n"
+		if builder.Len()+len(next) > maxReadBytes {
+			truncated = true
+			break
+		}
+		builder.WriteString(next)
+		written++
+	}
+	if truncated {
+		builder.WriteString("[...truncated]\n")
+	}
+	return builder.String()
 }

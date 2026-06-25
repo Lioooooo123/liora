@@ -202,6 +202,27 @@ func (a *Agent) execute(ctx context.Context, step Step) (output string, diff str
 		}
 		content, err := a.workspace.ReadFileRange(step.Args[0], startLine, lineCount)
 		return content, "", err
+	case "document":
+		if len(step.Args) < 1 || len(step.Args) > 3 {
+			return "", "", fmt.Errorf("document expects path [start_line] [line_count]")
+		}
+		startLine := 1
+		lineCount := 1000
+		var err error
+		if len(step.Args) > 1 {
+			startLine, err = strconv.Atoi(step.Args[1])
+			if err != nil {
+				return "", "", fmt.Errorf("document start_line must be a number")
+			}
+		}
+		if len(step.Args) > 2 {
+			lineCount, err = strconv.Atoi(step.Args[2])
+			if err != nil {
+				return "", "", fmt.Errorf("document line_count must be a number")
+			}
+		}
+		content, err := a.workspace.ReadDocumentRange(step.Args[0], startLine, lineCount)
+		return content, "", err
 	case "search":
 		if len(step.Args) < 1 {
 			return "", "", fmt.Errorf("search expects a query")

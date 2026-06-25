@@ -105,6 +105,7 @@ Allowed tools:
 Rules:
 - Use relative paths only.
 - Prefer list <path> for folder listing or "what is in this directory" requests.
+- Use document for .pdf and .docx files; use read for plain text and source code.
 - Prefer glob for finding files by pattern, search for finding text, and read with line ranges before editing.
 - Prefer edit for precise replacements; use write only for new files or full-file rewrites.
 - Prefer built-in file tools over shell commands when possible.
@@ -126,6 +127,7 @@ Rules:
 - Use relative paths only.
 - Do not repeat the exact failing step unless it is intentionally fixed by earlier steps.
 - Prefer observing the workspace with list, glob, search, stat, or read before editing.
+- Use document for .pdf and .docx files; use read for plain text and source code.
 - Prefer built-in file tools over shell commands when possible.
 - End with diff after file edits.
 - Do not output unsupported tools.

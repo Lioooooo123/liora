@@ -227,3 +227,10 @@
 - 新增 `task.replanning` 事件，daemon/TUI/未来客户端都能看到“正在修正计划”，随后会出现第二个 `task.plan_ready`。工具级失败现在仍使用 `tool.result` 且 `status=error`，`task.error` 只表示任务最终失败，避免 TUI 在可恢复错误上提前断流。
 - 当前不做无限循环或复杂 self-healing tree search，原因是本地 MVP 需要可预测的执行时间和清晰事件线。后续如要对齐更强的 Claude Code/Kimi Code 体验，可以把 replan 次数、错误分类和观察步骤预算做成策略配置。
 - `scripts/coding-eval.sh` 新增 `replan-case`，用 fake LLM 先规划错误文件，再根据 replan prompt 中的 failure context 返回正确读取步骤，验证 `task.replanning` 和最终 `task.completed`。
+
+## 2026-06-26 Document Read Tool
+
+- 新增 read-only `document <path> [start line] [line count]` 工具，专门处理 `.pdf` 和 `.docx`，解决用户在真实工作区里让 agent 看 assignment PDF/DOCX 时，模型只能误用 `stat/read/run` 的问题。
+- DOCX 使用 Go 标准库 `archive/zip` + `encoding/xml` 直接解析 `word/document.xml`，不增加发布包依赖；当前只提取正文段落，页眉、批注、表格复杂结构会被简化为纯文本。
+- PDF 使用系统 `pdftotext -layout -enc UTF-8`，原因是 Go 标准库没有 PDF 文本提取能力，引入完整 PDF 解析库会明显扩大 MVP 依赖面。没有 `pdftotext` 时会返回明确错误，后续 macOS 安装包可考虑内置或检测提示。
+- `document` 复用 `read` 的分页和截断策略，避免大 PDF/DOCX 一次性冲垮事件流或 TUI。`scripts/coding-eval.sh` 用最小 DOCX 覆盖 daemon/SSE 的文档读取路径，PDF 路径先由单独环境能力承担。

@@ -27,6 +27,7 @@ var builtinTools = []ToolSpec{
 	{Name: "glob", Usage: "glob <pattern> <path>", Description: "用 glob 查找文件路径。", Kind: ToolReadOnly},
 	{Name: "stat", Usage: "stat <path>", Description: "查看文件大小、权限和是否目录。", Kind: ToolReadOnly},
 	{Name: "read", Usage: "read <path> [start line] [line count]", Description: "按行读取文本文件，自动截断过长内容。", Kind: ToolReadOnly},
+	{Name: "document", Usage: "document <path> [start line] [line count]", Description: "读取 PDF/DOCX 文档文本，自动截断过长内容。", Kind: ToolReadOnly},
 	{Name: "search", Usage: "search <query>", Description: "优先使用 ripgrep 在 workspace 内搜索文本。", Kind: ToolReadOnly},
 	{Name: "write", Usage: "write <path> <content>", Description: "写入或覆盖文件内容。", Kind: ToolWrite},
 	{Name: "append", Usage: "append <path> <content>", Description: "追加文件内容。", Kind: ToolWrite},

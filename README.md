@@ -14,7 +14,7 @@ Liora 是一个可运行的最小 Coding Agent MVP，用于验证“工具调用
 - 默认使用当前目录作为 workspace。
 - 可通过 `-workspace` 指定其他 workspace。
 - 按步骤执行基础 coding 工具。
-- 支持读取、搜索、写入、替换、运行 Shell、输出 diff。
+- 支持读取文本/PDF/DOCX、搜索、写入、替换、运行 Shell、输出 diff。
 - 支持 glob、tree、stat、append、edit、mkdir、delete 等更完整的本地工具。
 - 搜索和 glob 优先使用 `rg`，不可用时回退到 Go walker。
 - 支持持久化 `goal` 和 `memory`，用于给后续轮次补充上下文。
@@ -42,6 +42,7 @@ tree <path> <max depth>
 glob <pattern> <path>
 stat <path>
 read <path> [start line] [line count]
+document <path> [start line] [line count]
 search <query>
 write <path> <content>
 append <path> <content>
@@ -60,6 +61,7 @@ diff
 list .
 glob *.go .
 read app.txt 1 80
+document "Assignment Question.docx" 1 80
 edit app.txt old new
 run grep -q "hello new agent" app.txt
 diff
@@ -453,6 +455,7 @@ LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scr
 - `search` 使用 `rg -F --line-number` 优先执行，大仓库里比纯 Go 递归扫描快；如果系统没有 `rg`，自动回退到 Go walker。
 - `glob` 使用 `rg --files -g` 优先执行，最多返回 100 条，避免大目录展开过量。
 - `read` 默认最多读取 1000 行 / 100KB，并给每行加行号；可以通过 `read <path> <start> <count>` 分页读取。
+- `document` 用同样的分页格式读取 `.pdf` 和 `.docx`；DOCX 使用内置 XML 解析，PDF 依赖系统可用的 `pdftotext`。
 - `tree` 默认深度 2，最大深度 6，最多返回 300 行。
 - Shell stdout/stderr 会截断，避免 TUI 因超大输出卡死。
 - 文件遍历会跳过 `.git`、`node_modules`、`vendor`、`.env*` 等目录或敏感文件。
@@ -461,7 +464,7 @@ LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scr
 ## 当前边界
 
 - LLM Planner 只允许输出受控工具步骤；如果模型输出未知工具，程序会拒绝执行。
-- 当前没有多轮自动反思。LLM 只负责生成初始计划，执行失败后不会再次请求模型重新规划。
+- natural task 工具失败后会最多触发一次 bounded replan；它不是无限自修复循环，避免本地任务失控运行。
 - Daemon 当前默认适合本机开发使用，尚未实现本地 token 或 Unix socket 鉴权。
 - SSE 已使用同进程事件通知和增量游标；跨进程写库场景保留低频 fallback 轮询。
 - MCP 当前实现为 stdio JSON-RPC MVP，每次 list/call 会启动一次 server；后续可优化为长连接 session pool。

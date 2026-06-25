@@ -67,7 +67,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length).decode()
-        if "Failure:" in raw and "missing-replan.txt" in raw:
+        if "docx-case" in raw:
+            content = "document assignment.docx"
+        elif "Failure:" in raw and "missing-replan.txt" in raw:
             content = "read README.md"
         elif "replan-case" in raw:
             content = "read missing-replan.txt"
@@ -94,6 +96,23 @@ class Handler(BaseHTTPRequestHandler):
 HTTPServer((host, int(port)), Handler).serve_forever()
 PY
 LLM_PID="$!"
+
+python3 - "$WORKSPACE/assignment.docx" <<'PY'
+import sys
+import zipfile
+
+path = sys.argv[1]
+xml = """<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Assignment Brief</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Build a local companion coding agent.</w:t></w:r></w:p>
+  </w:body>
+</w:document>
+"""
+with zipfile.ZipFile(path, "w") as docx:
+    docx.writestr("word/document.xml", xml)
+PY
 
 (
   cd "$ROOT"
@@ -189,6 +208,25 @@ printf '%s' "$MULTI_APPLY_JSON" | grep -q 'config/settings.txt'
 printf '%s' "$MULTI_APPLY_JSON" | grep -q 'docs/guide.txt'
 grep -q '^enabled$' "$WORKSPACE/config/settings.txt"
 grep -q '^ready$' "$WORKSPACE/docs/guide.txt"
+
+DOCX_BODY="$(python3 - "$WORKSPACE" <<'PY'
+import json
+import sys
+print(json.dumps({
+    "workspace": sys.argv[1],
+    "prompt": "docx-case: summarize assignment.docx",
+    "natural": True,
+    "run_async": True,
+}))
+PY
+)"
+DOCX_JSON="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks" -H 'Content-Type: application/json' -d "$DOCX_BODY")"
+DOCX_TASK_ID="$(printf '%s' "$DOCX_JSON" | json_get task.id)"
+DOCX_STREAM="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks/$DOCX_TASK_ID/events/stream")"
+[[ "$DOCX_STREAM" == *"event: tool.result"* ]]
+[[ "$DOCX_STREAM" == *"document"* ]]
+[[ "$DOCX_STREAM" == *"Assignment Brief"* ]]
+[[ "$DOCX_STREAM" == *"event: task.completed"* ]]
 
 REPLAN_BODY="$(python3 - "$WORKSPACE" <<'PY'
 import json
@@ -292,4 +330,4 @@ curl -fsS "http://$DAEMON_ADDR/v1/tasks/$CANCEL_TASK_ID/cancel" \
   -d '{"reason":"eval stop"}' >/dev/null
 curl -fsS "http://$DAEMON_ADDR/v1/tasks/$CANCEL_TASK_ID/events/stream" | grep -q 'event: task.cancelled'
 
-echo "coding eval ok: task=$TASK_ID session=$SESSION_ID multi=$MULTI_TASK_ID replan=$REPLAN_TASK_ID big_output=$BIG_OUTPUT_TASK_ID approve=$APPROVE_TASK_ID deny=$DENY_TASK_ID cancel=$CANCEL_TASK_ID"
+echo "coding eval ok: task=$TASK_ID session=$SESSION_ID multi=$MULTI_TASK_ID docx=$DOCX_TASK_ID replan=$REPLAN_TASK_ID big_output=$BIG_OUTPUT_TASK_ID approve=$APPROVE_TASK_ID deny=$DENY_TASK_ID cancel=$CANCEL_TASK_ID"
