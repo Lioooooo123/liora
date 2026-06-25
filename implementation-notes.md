@@ -127,3 +127,9 @@
 - `/cancel` 会调用 daemon cancel API 并停止当前 running task；主动取消不再作为 TUI 错误返回，避免用户取消后额外显示 Error。
 - `/apply` 会优先使用最近一次 stream 中保存的 diff，必要时回查 daemon diff API，再调用 apply API。patch-mode 下任务完成不会直接改真实 workspace，用户输入 `/apply` 后才落盘。
 - 当前 line-based TUI 在 task 运行期间仍阻塞在 `SubmitStream`，所以“运行中输入 `/cancel`”还不是完整交互体验；全屏 Bubble Tea/异步输入层需要继续把这个 command 能力绑定到快捷键或并发输入。
+
+## 2026-06-26 Daemon Task History Commands
+
+- `internal/tuisession.DaemonSubmitter` 新增 `/tasks`、`/last`、`/resume <task_id>`，直接通过 daemonclient 查询 task 列表和 event 历史，并把 task/event 回放成文本时间线。
+- `/last` 与 `/resume` 会把回放任务记录为 last task，并记住最近 diff，因此用户重启 TUI 后可以先 `/last` 或 `/resume <task_id>`，再 `/apply` 最近 diff。
+- 这一步只是 task/event 级恢复，不是完整多轮 session transcript。后续如果要对齐 Claude Code/Kimi Code 的 session resume，需要补 session/message 数据模型和更好的 transcript 渲染。

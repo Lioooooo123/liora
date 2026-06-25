@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/daemonclient"
@@ -128,7 +129,17 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		return s.cancelCurrent(ctx)
 	case "/apply":
 		return s.applyLast(ctx)
+	case "/tasks":
+		return s.listTasks(ctx)
+	case "/last":
+		return s.replayLastTask(ctx)
 	default:
+		if strings.HasPrefix(line, "/resume ") {
+			return s.replayTask(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/resume ")))
+		}
+		if line == "/resume" {
+			return "Usage: /resume <task_id>", true, nil
+		}
 		return "", false, nil
 	}
 }
@@ -166,12 +177,81 @@ func (s *DaemonSubmitter) applyLast(ctx context.Context) (string, bool, error) {
 	return "Applied task " + taskID + ".", true, nil
 }
 
+func (s *DaemonSubmitter) listTasks(ctx context.Context) (string, bool, error) {
+	tasks, err := s.client.ListTasks(ctx, 10)
+	if err != nil {
+		return "", true, err
+	}
+	if len(tasks) == 0 {
+		return "No daemon tasks found.", true, nil
+	}
+	var lines []string
+	for _, task := range tasks {
+		lines = append(lines, fmt.Sprintf("- %s [%s] %s (%s)", task.ID, task.Status, task.Title, formatTaskTime(task.UpdatedAt)))
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) replayLastTask(ctx context.Context) (string, bool, error) {
+	tasks, err := s.client.ListTasks(ctx, 1)
+	if err != nil {
+		return "", true, err
+	}
+	if len(tasks) == 0 {
+		return "No daemon tasks found.", true, nil
+	}
+	return s.replayTask(ctx, tasks[0].ID)
+}
+
+func (s *DaemonSubmitter) replayTask(ctx context.Context, taskID string) (string, bool, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return "Usage: /resume <task_id>", true, nil
+	}
+	task, err := s.client.GetTask(ctx, taskID)
+	if err != nil {
+		return "", true, err
+	}
+	events, err := s.client.Events(ctx, taskID)
+	if err != nil {
+		return "", true, err
+	}
+	var lines []string
+	lines = append(lines, fmt.Sprintf("Task %s [%s]", task.ID, task.Status))
+	lines = append(lines, "Title: "+task.Title)
+	lines = append(lines, "Workspace: "+task.Workspace)
+	if len(events) == 0 {
+		lines = append(lines, "No events.")
+	} else {
+		lines = append(lines, "Events:")
+	}
+	var latestDiff string
+	for _, event := range events {
+		payload, _ := eventPayload(event)
+		lines = append(lines, "- "+formatReplayEvent(event.Type, payload))
+		if event.Type == taskpkg.EventDiff {
+			latestDiff = payload.Diff
+		}
+	}
+	s.rememberTask(task.ID)
+	if strings.TrimSpace(latestDiff) != "" {
+		s.rememberDiff(task.ID, latestDiff)
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
 func (s *DaemonSubmitter) setCurrentTask(taskID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.currentTaskID = taskID
 	s.lastTaskID = taskID
 	s.lastDiff = ""
+}
+
+func (s *DaemonSubmitter) rememberTask(taskID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastTaskID = taskID
 }
 
 func (s *DaemonSubmitter) clearCurrentTask(taskID string) {
@@ -200,4 +280,47 @@ func (s *DaemonSubmitter) rememberDiff(taskID string, diff string) {
 	if s.lastTaskID == taskID {
 		s.lastDiff = diff
 	}
+}
+
+func formatReplayEvent(eventType taskpkg.EventType, payload taskpkg.EventPayload) string {
+	switch eventType {
+	case taskpkg.EventPlanReady:
+		return string(eventType) + ": " + firstLine(payload.Steps)
+	case taskpkg.EventToolCall, taskpkg.EventToolResult:
+		return strings.TrimSpace(string(eventType) + ": " + payload.Tool + " " + payload.Input + " " + firstLine(payload.Output))
+	case taskpkg.EventSummary:
+		return string(eventType) + ": " + payload.Message
+	case taskpkg.EventDiff:
+		return string(eventType) + ": " + firstLine(payload.Diff)
+	case taskpkg.EventCompleted, taskpkg.EventCancelled, taskpkg.EventError:
+		if payload.Status != "" {
+			return string(eventType) + ": " + payload.Status
+		}
+		if payload.Message != "" {
+			return string(eventType) + ": " + payload.Message
+		}
+	}
+	if payload.Message != "" {
+		return string(eventType) + ": " + payload.Message
+	}
+	return string(eventType)
+}
+
+func firstLine(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	line, _, _ := strings.Cut(value, "\n")
+	if len(line) > 120 {
+		return line[:117] + "..."
+	}
+	return line
+}
+
+func formatTaskTime(value time.Time) string {
+	if value.IsZero() {
+		return "unknown"
+	}
+	return value.Local().Format("2006-01-02 15:04")
 }

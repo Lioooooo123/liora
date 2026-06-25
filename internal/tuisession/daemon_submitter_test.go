@@ -189,6 +189,51 @@ func TestDaemonSubmitterApplyWithoutTask(t *testing.T) {
 	}
 }
 
+func TestDaemonSubmitterListsAndReplaysTasks(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "list ."}))
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Runner: runner}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+
+	result, err := submitter.SubmitStream(t.Context(), "list files", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PlannedSteps != "list ." {
+		t.Fatalf("unexpected plan %q", result.PlannedSteps)
+	}
+	tasksOutput, handled, err := submitter.HandleCommand(t.Context(), "/tasks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(tasksOutput, "list files") || !strings.Contains(tasksOutput, "completed") {
+		t.Fatalf("unexpected /tasks output handled=%v output=%q", handled, tasksOutput)
+	}
+	taskID := findOnlyTaskID(t, repo)
+	lastOutput, handled, err := submitter.HandleCommand(t.Context(), "/last")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Task " + taskID, "Events:", "task.plan_ready", "tool.result", "task.completed"} {
+		if !handled || !strings.Contains(lastOutput, want) {
+			t.Fatalf("expected /last output to contain %q handled=%v output=%q", want, handled, lastOutput)
+		}
+	}
+	resumeOutput, handled, err := submitter.HandleCommand(t.Context(), "/resume "+taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(resumeOutput, "Task "+taskID) {
+		t.Fatalf("unexpected /resume output handled=%v output=%q", handled, resumeOutput)
+	}
+}
+
 func findOnlyTaskID(t *testing.T, repo *taskpkg.Repository) string {
 	t.Helper()
 	tasks, err := repo.List(t.Context(), 10)
