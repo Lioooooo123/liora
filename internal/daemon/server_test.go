@@ -1,11 +1,14 @@
 package daemon
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -142,6 +145,61 @@ func TestServerServesCapabilities(t *testing.T) {
 	}
 	if !foundRead || !foundRunShell {
 		t.Fatalf("unexpected capabilities response %#v", body)
+	}
+}
+
+func TestServerServesMCPToolsInCapabilities(t *testing.T) {
+	if os.Getenv("LIORA_DAEMON_FAKE_MCP_SERVER") == "1" {
+		runDaemonFakeMCPServer()
+		return
+	}
+	storeRoot := t.TempDir()
+	s := store.New(storeRoot)
+	if err := s.SaveMCPConfig(store.MCPConfig{Servers: map[string]store.MCPServerConfig{
+		"fake": {
+			Command: os.Args[0],
+			Args:    []string{"-test.run=TestServerServesMCPToolsInCapabilities"},
+			Env:     map[string]string{"LIORA_DAEMON_FAKE_MCP_SERVER": "1"},
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := s.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := httptest.NewServer(NewServer(Config{Repository: taskpkg.NewRepository(db), Store: s}))
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/v1/capabilities")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status %d", resp.StatusCode)
+	}
+	var body struct {
+		MCPTools []struct {
+			Server string `json:"server"`
+			Name   string `json:"name"`
+			Usage  string `json:"usage"`
+			Kind   string `json:"kind"`
+		} `json:"mcp_tools"`
+		MCPError string `json:"mcp_error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.MCPError != "" {
+		t.Fatalf("unexpected mcp error %q", body.MCPError)
+	}
+	if len(body.MCPTools) != 1 || body.MCPTools[0].Server != "fake" || body.MCPTools[0].Name != "echo" || body.MCPTools[0].Kind != "external" {
+		t.Fatalf("unexpected mcp capabilities %#v", body.MCPTools)
+	}
+	if body.MCPTools[0].Usage != "mcp fake echo <json arguments>" {
+		t.Fatalf("unexpected mcp usage %q", body.MCPTools[0].Usage)
 	}
 }
 
@@ -587,4 +645,69 @@ func hasEvent(events []taskpkg.Event, eventType taskpkg.EventType) bool {
 		}
 	}
 	return false
+}
+
+func runDaemonFakeMCPServer() {
+	scanner := bufio.NewScanner(os.Stdin)
+	encoder := json.NewEncoder(os.Stdout)
+	for scanner.Scan() {
+		var req map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+			continue
+		}
+		method, _ := req["method"].(string)
+		id := req["id"]
+		if method == "notifications/initialized" {
+			continue
+		}
+		switch method {
+		case "initialize":
+			_ = encoder.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      id,
+				"result": map[string]any{
+					"protocolVersion": "2025-06-18",
+					"capabilities":    map[string]any{"tools": map[string]any{}},
+					"serverInfo":      map[string]any{"name": "fake", "version": "0.0.1"},
+				},
+			})
+		case "tools/list":
+			_ = encoder.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      id,
+				"result": map[string]any{
+					"tools": []map[string]any{{
+						"name":        "echo",
+						"description": "Echo text",
+						"inputSchema": map[string]any{"type": "object"},
+					}},
+				},
+			})
+		case "tools/call":
+			params, _ := req["params"].(map[string]any)
+			args, _ := params["arguments"].(map[string]any)
+			_ = encoder.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      id,
+				"result": map[string]any{
+					"content": []map[string]any{{"type": "text", "text": fmt.Sprint(args["text"])}},
+				},
+			})
+		default:
+			_ = encoder.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      id,
+				"error":   map[string]any{"code": -32601, "message": "method not found"},
+			})
+		}
+	}
+	os.Exit(0)
+}
+
+func TestMain(m *testing.M) {
+	if os.Getenv("LIORA_DAEMON_FAKE_MCP_SERVER") == "1" {
+		runDaemonFakeMCPServer()
+		return
+	}
+	os.Exit(m.Run())
 }

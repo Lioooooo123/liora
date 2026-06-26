@@ -62,6 +62,9 @@ func TestClientCapabilitiesAndTaskLifecycle(t *testing.T) {
 	if len(capabilities.Tools) == 0 {
 		t.Fatal("expected capabilities")
 	}
+	if len(capabilities.MCPTools) != 0 || capabilities.MCPError != "" {
+		t.Fatalf("expected no mcp tools by default, got %#v", capabilities)
+	}
 
 	created, err := client.CreateTask(t.Context(), task.CreateRequest{
 		Workspace: workspace,

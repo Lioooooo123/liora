@@ -21,6 +21,15 @@ type ToolSpec struct {
 	Kind        ToolKind `json:"kind"`
 }
 
+type MCPToolSpec struct {
+	Server      string         `json:"server"`
+	Name        string         `json:"name"`
+	Usage       string         `json:"usage"`
+	Description string         `json:"description"`
+	Kind        ToolKind       `json:"kind"`
+	InputSchema map[string]any `json:"input_schema,omitempty"`
+}
+
 var builtinTools = []ToolSpec{
 	{Name: "list", Usage: "list <path>", Description: "列出目录内容，默认隐藏点文件。", Kind: ToolReadOnly},
 	{Name: "tree", Usage: "tree <path> <max depth>", Description: "按深度查看目录树。", Kind: ToolReadOnly},

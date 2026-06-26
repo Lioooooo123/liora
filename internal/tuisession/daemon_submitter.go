@@ -137,6 +137,8 @@ func mergeStreamEvent(result *tui.TurnResult, update daemonclient.StreamEvent) {
 func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (string, bool, error) {
 	line = strings.TrimSpace(line)
 	switch line {
+	case "/tools":
+		return s.showTools(ctx)
 	case "/cancel":
 		return s.cancelCurrent(ctx)
 	case "/approve":
@@ -170,6 +172,47 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		}
 		return "", false, nil
 	}
+}
+
+func (s *DaemonSubmitter) showTools(ctx context.Context) (string, bool, error) {
+	capabilities, err := s.client.Capabilities(ctx)
+	if err != nil {
+		return "", true, err
+	}
+	var lines []string
+	if len(capabilities.Tools) > 0 {
+		lines = append(lines, "Built-in tools")
+		for _, tool := range capabilities.Tools {
+			line := "- " + tool.Usage + " [" + string(tool.Kind) + "]"
+			if strings.TrimSpace(tool.Description) != "" {
+				line += " - " + tool.Description
+			}
+			lines = append(lines, line)
+		}
+	}
+	if len(capabilities.MCPTools) > 0 {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, "MCP tools")
+		for _, tool := range capabilities.MCPTools {
+			line := "- " + tool.Usage + " [" + string(tool.Kind) + "]"
+			if strings.TrimSpace(tool.Description) != "" {
+				line += " - " + tool.Description
+			}
+			lines = append(lines, line)
+		}
+	}
+	if strings.TrimSpace(capabilities.MCPError) != "" {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, "MCP error: "+capabilities.MCPError)
+	}
+	if len(lines) == 0 {
+		return "No tools available.", true, nil
+	}
+	return strings.Join(lines, "\n"), true, nil
 }
 
 func (s *DaemonSubmitter) showTimeline(ctx context.Context) (string, bool, error) {

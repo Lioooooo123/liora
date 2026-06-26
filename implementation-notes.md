@@ -240,3 +240,9 @@
 - `scripts/coding-eval.sh` 新增临时 stdio fake MCP server，并在 `LIORA_HOME/mcp.json` 中配置 `fake/echo`，用 natural task 触发 `mcp fake echo {"text":"hello from eval"}`。
 - 因为当前权限策略把 MCP 归类为 external，eval 会先验证 `permission.requested` 和 `external` 风险，再调用 approval API，最终确认事件历史里出现 `permission.approved` 与 `mcp echo: hello from eval`。
 - 这条 case 证明 MCP 已进入 daemon/session/task/event 主链路，TUI 和未来 Mac 客户端可以复用同一套审批与事件机制。当前 MCP client 仍是每次 list/call 启动一次 stdio server；长连接池、server 生命周期管理和工具 schema UI 仍留到后续阶段。
+
+## 2026-06-26 Daemon Capabilities MCP Tools
+
+- `GET /v1/capabilities` 现在返回内建 `tools` 和可选 `mcp_tools`，后者来自 daemon 持有的同一个 `store.Store` 读取 `mcp.json` 并执行 MCP `tools/list`。TUI 和未来 Mac 客户端可以把这个 API 作为统一工具能力视图。
+- daemon-backed TUI 的 `/tools` 现在优先调用 daemon capabilities，而不是回退到 runtime 的本地 builtin 清单；输出中会分组展示 Built-in tools 和 MCP tools。
+- 如果 MCP server 启动或 list 失败，capabilities 仍返回内建工具，并附带 `mcp_error`。这是为了避免某个外部 server 坏掉时拖垮整个 TUI 首屏或客户端工具面板。

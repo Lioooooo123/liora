@@ -72,6 +72,46 @@ func TestDaemonSubmitterStreamsFromDaemon(t *testing.T) {
 	}
 }
 
+func TestDaemonSubmitterShowsDaemonCapabilitiesWithMCPTools(t *testing.T) {
+	root := t.TempDir()
+	storeRoot := t.TempDir()
+	mcpScript := filepath.Join(storeRoot, "fake_mcp.py")
+	if err := os.WriteFile(mcpScript, []byte(fakeMCPServerPython()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s := store.New(storeRoot)
+	if err := s.SaveMCPConfig(store.MCPConfig{Servers: map[string]store.MCPServerConfig{
+		"fake": {
+			Command: "python3",
+			Args:    []string{mcpScript},
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := s.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Store: s}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+
+	output, handled, err := submitter.HandleCommand(t.Context(), "/tools")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled {
+		t.Fatal("expected /tools to be handled by daemon submitter")
+	}
+	for _, want := range []string{"Built-in tools", "read <path>", "MCP tools", "mcp fake echo <json arguments>", "Echo text"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected /tools output to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
 type blockingShellExecutor struct {
 	started chan struct{}
 	done    chan struct{}
@@ -407,4 +447,39 @@ func waitUntil(t *testing.T, timeout time.Duration, condition func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition was not met before timeout")
+}
+
+func fakeMCPServerPython() string {
+	return `import json
+import sys
+
+for line in sys.stdin:
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    method = req.get("method")
+    req_id = req.get("id")
+    if method == "notifications/initialized":
+        continue
+    if method == "initialize":
+        result = {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "fake", "version": "0.0.1"},
+        }
+        print(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": result}), flush=True)
+    elif method == "tools/list":
+        result = {
+            "tools": [{
+                "name": "echo",
+                "description": "Echo text",
+                "inputSchema": {"type": "object"},
+            }]
+        }
+        print(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": result}), flush=True)
+    else:
+        error = {"code": -32601, "message": "method not found"}
+        print(json.dumps({"jsonrpc": "2.0", "id": req_id, "error": error}), flush=True)
+`
 }

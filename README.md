@@ -281,6 +281,8 @@ MCP 配置文件为：
 /mcp
 ```
 
+在默认 daemon-backed TUI 里，`/tools` 会同时展示内建工具和 daemon 从 `mcp.json` 读取到的 MCP 工具。
+
 Agent 可执行 MCP 工具步骤：
 
 ```text

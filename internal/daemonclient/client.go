@@ -23,7 +23,9 @@ type Client struct {
 type Option func(*Client)
 
 type Capabilities struct {
-	Tools []capabilities.ToolSpec `json:"tools"`
+	Tools    []capabilities.ToolSpec    `json:"tools"`
+	MCPTools []capabilities.MCPToolSpec `json:"mcp_tools,omitempty"`
+	MCPError string                     `json:"mcp_error,omitempty"`
 }
 
 type StreamEvent struct {

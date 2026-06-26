@@ -87,6 +87,7 @@ func main() {
 		server := daemon.NewServer(daemon.Config{
 			Repository: repo,
 			Runner:     newTaskRunner(repo, planner, sandboxExecutor, patchMode),
+			Store:      persistentStore,
 		})
 		fmt.Printf("Liora daemon listening on %s (sandbox=%s patch_mode=%t)\n", *daemonAddr, sandbox.Label(sandboxExecutor), patchMode)
 		if err := http.ListenAndServe(*daemonAddr, server); err != nil {
@@ -228,6 +229,7 @@ func startEmbeddedDaemon(persistentStore *store.Store, planner *llm.Planner, exe
 	server := &http.Server{Handler: daemon.NewServer(daemon.Config{
 		Repository: repo,
 		Runner:     newTaskRunner(repo, planner, executor, patchMode),
+		Store:      persistentStore,
 	})}
 	embedded := &embeddedDaemon{
 		server:  server,

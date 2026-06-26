@@ -46,6 +46,51 @@ HTTPServer((host, int(port)), Handler).serve_forever()
 PY
 LLM_PID="$!"
 
+cat >"$TMP_DIR/fake_mcp.py" <<'PY'
+import json
+import sys
+
+for line in sys.stdin:
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    method = req.get("method")
+    req_id = req.get("id")
+    if method == "notifications/initialized":
+        continue
+    if method == "initialize":
+        result = {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "fake", "version": "0.0.1"},
+        }
+        print(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": result}), flush=True)
+    elif method == "tools/list":
+        result = {
+            "tools": [{
+                "name": "echo",
+                "description": "Echo text",
+                "inputSchema": {"type": "object"},
+            }]
+        }
+        print(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": result}), flush=True)
+    else:
+        error = {"code": -32601, "message": "method not found"}
+        print(json.dumps({"jsonrpc": "2.0", "id": req_id, "error": error}), flush=True)
+PY
+mkdir -p "$TMP_DIR/home"
+cat >"$TMP_DIR/home/mcp.json" <<JSON
+{
+  "servers": {
+    "fake": {
+      "command": "python3",
+      "args": ["$TMP_DIR/fake_mcp.py"]
+    }
+  }
+}
+JSON
+
 (
   cd "$ROOT"
   LIORA_HOME="$TMP_DIR/home" go run ./cmd/coding-agent \
@@ -73,7 +118,7 @@ if [[ "$READY" != "1" ]]; then
 fi
 
 STREAM_OUT="$TMP_DIR/stream.out"
-printf '看看目录\n/timeline\n/exit\n' | (
+printf '/tools\n看看目录\n/timeline\n/exit\n' | (
   cd "$ROOT"
   LIORA_HOME="$TMP_DIR/home" go run ./cmd/coding-agent \
     -workspace "$WORKSPACE" \
@@ -87,6 +132,8 @@ printf '看看目录\n/timeline\n/exit\n' | (
 
 grep -q 'Plan' "$STREAM_OUT"
 grep -q 'Tools' "$STREAM_OUT"
+grep -q 'MCP tools' "$STREAM_OUT"
+grep -q 'mcp fake echo <json arguments>' "$STREAM_OUT"
 grep -q 'Timeline session_' "$STREAM_OUT"
 grep -q 'user: 看看目录' "$STREAM_OUT"
 grep -q 'tool.result' "$STREAM_OUT"
