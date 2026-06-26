@@ -37,7 +37,7 @@ LIORA_TUI_SMOKE_LLM_ADDR=127.0.0.1:19091 \
 ./scripts/tui-smoke.sh "$PWD"
 ```
 
-这个 smoke 会启动临时 fake LLM、fake MCP server、Core Daemon 和 `-tui-daemon` 交互入口，覆盖 `/tools` 的 MCP 工具展示、streaming 输出、`/tail` 历史回看、`/timeline` 和运行中 `/cancel`；`/diff` 预览、`/approvals` 审批队列、session auto-resume、`/new-session`、`/transcript` 展开回看、`/workbench` workspace 状态视图、TUI `/watch` 多任务观察和 daemonclient multi-task event stream 由 Go 测试覆盖。
+这个 smoke 会启动临时 fake LLM、fake MCP server、Core Daemon 和 `-tui-daemon` 交互入口，覆盖 `/tools` 的 MCP 工具展示、streaming 输出、`/tail` 历史回看、`/timeline` 和运行中 `/cancel`；`/diff` 预览、`/approvals` 审批队列、session auto-resume、`/new-session`、`/transcript` 展开回看、`/workbench` workspace 状态视图、TUI `/spawn` 后台任务、TUI `/watch` 多任务观察和 daemonclient multi-task event stream 由 Go 测试覆盖。
 
 验证 coding task 能力基线：
 

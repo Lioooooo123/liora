@@ -176,6 +176,51 @@ func TestDaemonSubmitterCancelsCurrentTask(t *testing.T) {
 	}
 }
 
+func TestDaemonSubmitterSpawnsBackgroundTask(t *testing.T) {
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	executor := newBlockingShellExecutor()
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "run sleep 100"}))
+	runner.SetSandbox(executor)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Runner: runner}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, t.TempDir(), true)
+
+	output, handled, err := submitter.HandleCommand(t.Context(), "/spawn slow task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled {
+		t.Fatal("expected /spawn to be handled")
+	}
+	taskID := findOnlyTaskID(t, repo)
+	for _, want := range []string{"Spawned task " + taskID, "Status:", "Session:", "/watch " + taskID, "/tail " + taskID} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected /spawn output to contain %q, got:\n%s", want, output)
+		}
+	}
+	select {
+	case <-executor.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("spawned task did not start in background")
+	}
+	taskRecord, err := repo.Get(t.Context(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if taskRecord.Status != taskpkg.StatusPlanning && taskRecord.Status != taskpkg.StatusRunning {
+		t.Fatalf("expected spawned task to stay active, got %#v", taskRecord)
+	}
+	if _, _, err := submitter.HandleCommand(t.Context(), "/cancel "+taskID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-executor.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancel did not stop spawned task")
+	}
+}
+
 type submitOutcome struct {
 	result tui.TurnResult
 	err    error

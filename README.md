@@ -204,6 +204,7 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /skill <name>
 /mcp
 /workbench
+/spawn <request>
 /watch [active|task_id...]
 /tasks
 /sessions
@@ -220,7 +221,7 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /approve [task_id]
 /deny [task_id]
 /apply
-/cancel
+/cancel [task_id]
 /exit
 ```
 
@@ -232,9 +233,11 @@ TUI 会自动继续当前 workspace 最近的 session，因此重启 `liora` 后
 
 `/workbench` 展示当前 workspace 下的 session、active tasks 和 recent tasks。`/tasks` 与 `/sessions` 默认也按当前 workspace 过滤，避免多个项目的任务混在一起。
 
+`/spawn <request>` 会在当前 workspace/session 后台启动一个 async task，并立即返回 task id。它适合同时发起多个任务，再用 `/watch` 聚合观察。
+
 `/watch` 会订阅当前 workspace 的 active tasks，直到这些任务的 daemon SSE 结束；也可以用 `/watch task_xxx task_yyy` 显式观察多个任务。它复用 Go client 的多 task event fan-in，适合 TUI 和未来 Mac 客户端共享。
 
-任务 streaming 期间可以直接输入 `/cancel` 中止当前任务；其它命令会在当前任务结束后按顺序执行，避免 `/apply` 或 `/exit` 抢在结果和 diff 之前生效。
+任务 streaming 期间可以直接输入 `/cancel` 中止当前任务；后台任务可用 `/cancel task_xxx` 指定取消。其它命令会在当前任务结束后按顺序执行，避免 `/apply` 或 `/exit` 抢在结果和 diff 之前生效。
 
 交互界面会展示：
 

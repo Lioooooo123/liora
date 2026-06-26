@@ -302,3 +302,10 @@
 - daemon-backed TUI 新增 `/watch [active|task_id...]`。无参或 `active` 时只订阅当前 workspace 的 active tasks；显式传 task id 时可以跨 workspace 观察指定任务。
 - `/watch` 复用 `daemonclient.StreamTaskEvents`，输出按 `task_id event_type` 前缀聚合。line-based TUI 仍是阻塞式命令，不做全屏持续刷新；这是为了保持现有交互模型稳定，同时把多任务观察能力下沉到可复用 agent core。
 - 单次 `/watch` 最多展示 120 个事件，避免大输出任务拖慢终端；完整历史仍通过 daemon event store 和 `/tail <task_id>` 回看。后续全屏 TUI 或 Mac 客户端可以基于同一 fan-in API 做实时列表、状态栏和可滚动 transcript。
+
+## 2026-06-26 TUI Background Spawn
+
+- daemon-backed TUI 新增 `/spawn <request>`，复用同一个 `CreateTask(... RunAsync: true)` 路径创建后台任务并立即返回 task id。前台普通输入仍会继续 stream 到完成，避免改变现有用户习惯。
+- `SubmitStream` 和 `/spawn` 共享 `createTask` helper，确保 session auto-resume、workspace、natural mode 和 last task 记录一致。这个设计让 TUI 与未来 Mac 客户端都围绕 daemon task API 组织并发任务，而不是各自维护一套任务状态。
+- `/spawn` 不直接输出事件；用户可以用 `/watch <task_id>` 观察实时事件，或任务结束后用 `/tail <task_id>` / `/timeline` 回看。这是 line-based TUI 下的可控并发 MVP，完整任务队列和非阻塞状态栏留给全屏 TUI 或桌面端。
+- 为了让后台任务有闭环控制，`/cancel` 同时支持 `/cancel <task_id>`。无参仍保留取消当前前台任务的语义，避免破坏原交互。

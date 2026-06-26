@@ -38,11 +38,19 @@ func (s *DaemonSubmitter) SubmitStream(ctx context.Context, input string, onEven
 	if s.client == nil {
 		return tui.TurnResult{}, fmt.Errorf("daemon client is required")
 	}
+	created, err := s.createTask(ctx, input)
+	if err != nil {
+		return tui.TurnResult{}, err
+	}
+	return s.streamTask(ctx, created.Task.ID, onEvent)
+}
+
+func (s *DaemonSubmitter) createTask(ctx context.Context, input string) (taskpkg.CreateResponse, error) {
 	sessionID := s.currentSessionID()
 	if sessionID == "" {
 		resumed, ok, err := s.resumeLatestWorkspaceSession(ctx)
 		if err != nil {
-			return tui.TurnResult{}, err
+			return taskpkg.CreateResponse{}, err
 		}
 		if ok {
 			sessionID = resumed.ID
@@ -56,10 +64,11 @@ func (s *DaemonSubmitter) SubmitStream(ctx context.Context, input string, onEven
 		RunAsync:  true,
 	})
 	if err != nil {
-		return tui.TurnResult{}, err
+		return taskpkg.CreateResponse{}, err
 	}
 	s.rememberSession(created.Task.SessionID)
-	return s.streamTask(ctx, created.Task.ID, onEvent)
+	s.rememberTask(created.Task.ID)
+	return created, nil
 }
 
 func (s *DaemonSubmitter) streamTask(ctx context.Context, taskID string, onEvent func(tui.StreamUpdate)) (tui.TurnResult, error) {
@@ -155,7 +164,7 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 	case "/tools":
 		return s.showTools(ctx)
 	case "/cancel":
-		return s.cancelCurrent(ctx)
+		return s.cancelTask(ctx, "")
 	case "/approve":
 		return s.approveTask(ctx, "")
 	case "/deny":
@@ -174,6 +183,8 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		return s.showWorkbench(ctx)
 	case "/watch":
 		return s.watchTasks(ctx, "")
+	case "/spawn":
+		return "Usage: /spawn <request>", true, nil
 	case "/session":
 		return s.showSession(ctx)
 	case "/resume-latest", "/continue":
@@ -190,6 +201,9 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		if line == "/tail" || strings.HasPrefix(line, "/tail ") || line == "/log" || strings.HasPrefix(line, "/log ") {
 			command := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, "/tail"), "/log"))
 			return s.tailTask(ctx, command)
+		}
+		if strings.HasPrefix(line, "/cancel ") {
+			return s.cancelTask(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/cancel ")))
 		}
 		if strings.HasPrefix(line, "/diff ") {
 			return s.showDiff(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/diff ")))
@@ -208,6 +222,9 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		}
 		if strings.HasPrefix(line, "/watch ") {
 			return s.watchTasks(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/watch ")))
+		}
+		if strings.HasPrefix(line, "/spawn ") {
+			return s.spawnTask(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/spawn ")))
 		}
 		if strings.HasPrefix(line, "/resume-session ") {
 			return s.resumeSession(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/resume-session ")))
@@ -725,6 +742,27 @@ func (s *DaemonSubmitter) watchTaskIDs(ctx context.Context, args string) ([]stri
 	return taskIDs, nil
 }
 
+func (s *DaemonSubmitter) spawnTask(ctx context.Context, input string) (string, bool, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "Usage: /spawn <request>", true, nil
+	}
+	if s.client == nil {
+		return "No daemon client.", true, nil
+	}
+	created, err := s.createTask(ctx, input)
+	if err != nil {
+		return "", true, err
+	}
+	lines := []string{
+		"Spawned task " + created.Task.ID + ".",
+		"Status: " + string(created.Task.Status),
+		"Session: " + emptyDash(created.Task.SessionID),
+		"Next: use /watch " + created.Task.ID + " to follow events, or /tail " + created.Task.ID + " after it finishes.",
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
 func (s *DaemonSubmitter) showSession(ctx context.Context) (string, bool, error) {
 	sessionID := s.currentSessionID()
 	if sessionID == "" {
@@ -807,8 +845,11 @@ func (s *DaemonSubmitter) resumeSession(ctx context.Context, sessionID string) (
 	return strings.Join(lines, "\n"), true, nil
 }
 
-func (s *DaemonSubmitter) cancelCurrent(ctx context.Context) (string, bool, error) {
-	taskID := s.waitCurrentTask(ctx, 500*time.Millisecond)
+func (s *DaemonSubmitter) cancelTask(ctx context.Context, taskID string) (string, bool, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		taskID = s.waitCurrentTask(ctx, 500*time.Millisecond)
+	}
 	if taskID == "" {
 		return "No running daemon task.", true, nil
 	}
@@ -816,6 +857,7 @@ func (s *DaemonSubmitter) cancelCurrent(ctx context.Context) (string, bool, erro
 	if err != nil {
 		return "", true, err
 	}
+	s.rememberTask(task.ID)
 	return "Cancelled task " + task.ID + ".", true, nil
 }
 
