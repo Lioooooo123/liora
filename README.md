@@ -452,6 +452,8 @@ GET  /v1/sessions/{id}/timeline
 
 `GET /v1/tasks` 和 `GET /v1/sessions` 支持 `?workspace=<absolute-path>&limit=N` 过滤，TUI 和未来客户端可用它构建多 workspace / 多 session 工作台。
 
+Go client 层提供 `StreamEvents(ctx, taskID)` 和 `StreamTaskEvents(ctx, taskIDs)`。后者会并发订阅多个 task SSE 并聚合成带 `TaskID` 的事件流，TUI 和未来 Mac 客户端可以直接复用它构建多 session / 多任务视图。
+
 ## 测试
 
 ```sh

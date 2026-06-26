@@ -341,6 +341,98 @@ func TestClientStreamsStructuredTaskErrorEvent(t *testing.T) {
 	}
 }
 
+func TestClientStreamsMultipleTasks(t *testing.T) {
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	first, err := repo.Create(t.Context(), task.CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "first",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.Create(t.Context(), task.CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "second",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range []struct {
+		id      string
+		message string
+	}{
+		{id: first.ID, message: "first done"},
+		{id: second.ID, message: "second done"},
+	} {
+		if err := repo.AppendEvent(t.Context(), record.id, task.EventSummary, task.EventPayload{Message: record.message}); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.AppendEvent(t.Context(), record.id, task.EventCompleted, task.EventPayload{Status: string(task.StatusCompleted)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	stream, errs := client.StreamTaskEvents(t.Context(), []string{first.ID, second.ID, first.ID, " "})
+	got := map[string][]task.EventType{}
+	for event := range stream {
+		got[event.TaskID] = append(got[event.TaskID], event.Type)
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{first.ID, second.ID} {
+		if !containsEventType(got[id], task.EventSummary) || !containsEventType(got[id], task.EventCompleted) {
+			t.Fatalf("expected summary and completed for %s, got %#v", id, got)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected duplicate task id to be streamed once, got %#v", got)
+	}
+}
+
+func TestClientStreamTaskEventsRequiresIDs(t *testing.T) {
+	client := newTestClient(t, "http://127.0.0.1:1")
+	stream, errs := client.StreamTaskEvents(t.Context(), []string{" ", ""})
+	for range stream {
+		t.Fatal("expected no events")
+	}
+	err := <-errs
+	if err == nil || !strings.Contains(err.Error(), "task ids are required") {
+		t.Fatalf("unexpected error %v", err)
+	}
+}
+
+func TestClientStreamTaskEventsStopsOnContextCancel(t *testing.T) {
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	taskRecord, err := repo.Create(t.Context(), task.CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "wait",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	stream, errs := client.StreamTaskEvents(ctx, []string{taskRecord.ID})
+	cancel()
+	for range stream {
+	}
+	if err := <-errs; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("unexpected stream error %v", err)
+	}
+}
+
 func TestClientStreamStopsOnContextCancel(t *testing.T) {
 	repo, closeDB := newTestRepository(t)
 	defer closeDB()

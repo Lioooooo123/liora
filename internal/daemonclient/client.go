@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/Lioooooo123/liora/internal/capabilities"
 	"github.com/Lioooooo123/liora/internal/task"
@@ -31,6 +32,11 @@ type Capabilities struct {
 type StreamEvent struct {
 	Type  task.EventType
 	Event task.Event
+}
+
+type TaskStreamEvent struct {
+	TaskID string
+	StreamEvent
 }
 
 type ApplyResult struct {
@@ -282,6 +288,66 @@ func (c *Client) StreamEvents(ctx context.Context, taskID string) (<-chan Stream
 		}
 	}()
 	return events, errs
+}
+
+func (c *Client) StreamTaskEvents(ctx context.Context, taskIDs []string) (<-chan TaskStreamEvent, <-chan error) {
+	events := make(chan TaskStreamEvent)
+	errs := make(chan error, 1)
+	ids := uniqueTaskIDs(taskIDs)
+	if len(ids) == 0 {
+		close(events)
+		errs <- fmt.Errorf("task ids are required")
+		close(errs)
+		return events, errs
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		taskID := id
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			stream, streamErrs := c.StreamEvents(streamCtx, taskID)
+			for event := range stream {
+				select {
+				case <-streamCtx.Done():
+					return
+				case events <- TaskStreamEvent{TaskID: taskID, StreamEvent: event}:
+				}
+			}
+			if err := <-streamErrs; err != nil && streamCtx.Err() == nil {
+				select {
+				case errs <- fmt.Errorf("stream task %s: %w", taskID, err):
+					cancel()
+				default:
+				}
+			}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		cancel()
+		close(events)
+		close(errs)
+	}()
+	return events, errs
+}
+
+func uniqueTaskIDs(taskIDs []string) []string {
+	seen := make(map[string]struct{}, len(taskIDs))
+	ids := make([]string, 0, len(taskIDs))
+	for _, id := range taskIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {

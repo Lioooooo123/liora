@@ -289,3 +289,10 @@
 - 参考 Kimi Code session store 的 workDir bucket 行为，daemon 的 `GET /v1/tasks` 和 `GET /v1/sessions` 新增 `workspace` query filter；TUI 的 `/tasks`、`/sessions` 默认只展示当前 workspace。
 - daemon-backed TUI 新增 `/workbench` 与别名 `/status`，展示当前 workspace 的 sessions、active tasks 和 recent tasks。实现上用两个 goroutine 并发拉取 sessions/tasks，并通过 context cancellation 传递错误。
 - 这一步让多 session 可见性留在 daemon/client 合同上，而不是写死在 TUI 私有状态；未来 Mac 客户端可以直接复用 workspace-scoped API 构建多项目工作台。
+
+## 2026-06-26 Multi Task Event Stream
+
+- daemonclient 新增 `StreamTaskEvents(ctx, taskIDs)`，用每个 task 一个 goroutine 消费现有 SSE，再聚合成带 `TaskID` 的 channel。这样 TUI、CLI 自动化和未来 Mac 客户端都可以复用同一套多任务事件订阅能力。
+- 设计参考了 Claude Code 的 per-conversation engine 隔离思路，以及 Kimi Code 按 workspace/session 管理历史的方向：核心状态仍在 daemon/session/task/event，入口层只负责投影和交互。
+- 聚合流使用 child context 统一取消；任一子流出现传输错误时会取消整组订阅并通过 buffered error channel 返回首个错误。调用方停止消费时必须取消 context，否则 channel send 仍会等待，这是 Go channel API 的显式背压语义。
+- 当前没有新增 daemon 批量 SSE API，原因是 client-side fan-in 已能满足 TUI/Mac 客户端共享需求，且不改变已有 HTTP 合同。后续如果任务数量很多，再考虑 daemon 原生 `/v1/tasks/events/stream?ids=...` 来降低连接数。
