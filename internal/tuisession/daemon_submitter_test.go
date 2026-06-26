@@ -277,6 +277,50 @@ func TestDaemonSubmitterListsAndReplaysTasks(t *testing.T) {
 	}
 }
 
+func TestDaemonSubmitterReplayShowsFailureDiagnostics(t *testing.T) {
+	root := t.TempDir()
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	taskRecord, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: root,
+		Prompt:    "read missing.txt",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), taskRecord.ID, taskpkg.StatusFailed); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), taskRecord.ID, taskpkg.EventToolResult, taskpkg.EventPayload{
+		Tool:   "read",
+		Input:  "missing.txt",
+		Output: "missing.txt: no such file or directory",
+		Status: "error",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), taskRecord.ID, taskpkg.EventError, taskpkg.EventPayload{
+		Message: "failed at step 1/1: read missing.txt",
+		Status:  string(taskpkg.StatusFailed),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, false)
+
+	output, handled, err := submitter.HandleCommand(t.Context(), "/last")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Task " + taskRecord.ID, "[failed]", "tool.result: [error] read missing.txt", "missing.txt: no such file", "task.error: failed failed at step 1/1"} {
+		if !handled || !strings.Contains(output, want) {
+			t.Fatalf("expected /last output to contain %q handled=%v output=%q", want, handled, output)
+		}
+	}
+}
+
 func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 	root := t.TempDir()
 	repo, closeDB := newTestRepository(t)

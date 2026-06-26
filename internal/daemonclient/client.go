@@ -319,7 +319,7 @@ func scanSSE(ctx context.Context, reader io.Reader, events chan<- StreamEvent) e
 			return nil
 		}
 		payload := strings.TrimSuffix(data.String(), "\n")
-		if eventType == "task.error" {
+		if eventType == "task.error" && !json.Valid([]byte(payload)) {
 			return fmt.Errorf("daemon stream error: %s", payload)
 		}
 		if !json.Valid([]byte(payload)) {

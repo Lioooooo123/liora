@@ -342,6 +342,26 @@ BIG_OUTPUT_STREAM="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks/$BIG_OUTPUT_TASK_ID
 [[ "$BIG_OUTPUT_STREAM" == *"truncated"* ]]
 [[ "$BIG_OUTPUT_STREAM" == *"event: task.completed"* ]]
 
+FAIL_BODY="$(python3 - "$WORKSPACE" <<'PY'
+import json
+import sys
+print(json.dumps({
+    "workspace": sys.argv[1],
+    "prompt": "read missing-eval.txt",
+    "natural": False,
+    "run_async": True,
+}))
+PY
+)"
+FAIL_JSON="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks" -H 'Content-Type: application/json' -d "$FAIL_BODY")"
+FAIL_TASK_ID="$(printf '%s' "$FAIL_JSON" | json_get task.id)"
+FAIL_STREAM="$(curl -fsS "http://$DAEMON_ADDR/v1/tasks/$FAIL_TASK_ID/events/stream")"
+[[ "$FAIL_STREAM" == *"event: tool.result"* ]]
+[[ "$FAIL_STREAM" == *'"status":"error"'* ]]
+[[ "$FAIL_STREAM" == *"event: task.error"* ]]
+[[ "$FAIL_STREAM" == *"missing-eval.txt"* ]]
+wait_task_status "$FAIL_TASK_ID" "failed"
+
 APPROVE_BODY="$(python3 - "$WORKSPACE" <<'PY'
 import json
 import sys
@@ -407,4 +427,4 @@ curl -fsS "http://$DAEMON_ADDR/v1/tasks/$CANCEL_TASK_ID/cancel" \
   -d '{"reason":"eval stop"}' >/dev/null
 curl -fsS "http://$DAEMON_ADDR/v1/tasks/$CANCEL_TASK_ID/events/stream" | grep -q 'event: task.cancelled'
 
-echo "coding eval ok: task=$TASK_ID session=$SESSION_ID multi=$MULTI_TASK_ID docx=$DOCX_TASK_ID mcp=$MCP_TASK_ID replan=$REPLAN_TASK_ID big_output=$BIG_OUTPUT_TASK_ID approve=$APPROVE_TASK_ID deny=$DENY_TASK_ID cancel=$CANCEL_TASK_ID"
+echo "coding eval ok: task=$TASK_ID session=$SESSION_ID multi=$MULTI_TASK_ID docx=$DOCX_TASK_ID mcp=$MCP_TASK_ID replan=$REPLAN_TASK_ID big_output=$BIG_OUTPUT_TASK_ID fail=$FAIL_TASK_ID approve=$APPROVE_TASK_ID deny=$DENY_TASK_ID cancel=$CANCEL_TASK_ID"

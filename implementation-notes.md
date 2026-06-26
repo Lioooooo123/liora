@@ -246,3 +246,9 @@
 - `GET /v1/capabilities` 现在返回内建 `tools` 和可选 `mcp_tools`，后者来自 daemon 持有的同一个 `store.Store` 读取 `mcp.json` 并执行 MCP `tools/list`。TUI 和未来 Mac 客户端可以把这个 API 作为统一工具能力视图。
 - daemon-backed TUI 的 `/tools` 现在优先调用 daemon capabilities，而不是回退到 runtime 的本地 builtin 清单；输出中会分组展示 Built-in tools 和 MCP tools。
 - 如果 MCP server 启动或 list 失败，capabilities 仍返回内建工具，并附带 `mcp_error`。这是为了避免某个外部 server 坏掉时拖垮整个 TUI 首屏或客户端工具面板。
+
+## 2026-06-26 Failure Diagnostics
+
+- daemonclient 不再把所有 `task.error` SSE 帧都当作传输错误；只有非 JSON payload 的 `task.error` 才表示 stream 级错误。正常任务失败事件会进入 TUI 和未来客户端的事件模型。
+- daemon-backed TUI 的 `/last`/`/resume` 回放现在会显示 `tool.result` 的 `status`，并在 `task.error` 中同时展示终态和失败原因，便于用户看到失败工具、输入和下一步恢复线索。
+- `scripts/coding-eval.sh` 新增 `read missing-eval.txt` 失败任务，验证 SSE 里同时出现 `tool.result status=error`、`task.error` 和 failed 终态，防止失败路径退化成不可解释的 generic error。

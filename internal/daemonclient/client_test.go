@@ -277,6 +277,48 @@ func TestClientReturnsAPIError(t *testing.T) {
 	}
 }
 
+func TestClientStreamsStructuredTaskErrorEvent(t *testing.T) {
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	taskRecord, err := repo.Create(t.Context(), task.CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "read missing.txt",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), taskRecord.ID, task.EventToolResult, task.EventPayload{
+		Tool:   "read",
+		Input:  "missing.txt",
+		Output: "missing.txt: no such file or directory",
+		Status: "error",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), taskRecord.ID, task.EventError, task.EventPayload{
+		Message: "failed at step 1/1: read missing.txt",
+		Status:  string(task.StatusFailed),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	stream, errs := client.StreamEvents(t.Context(), taskRecord.ID)
+	var types []task.EventType
+	for event := range stream {
+		types = append(types, event.Type)
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	if !containsEventType(types, task.EventToolResult) || !containsEventType(types, task.EventError) {
+		t.Fatalf("expected tool result and task error, got %#v", types)
+	}
+}
+
 func TestClientStreamStopsOnContextCancel(t *testing.T) {
 	repo, closeDB := newTestRepository(t)
 	defer closeDB()

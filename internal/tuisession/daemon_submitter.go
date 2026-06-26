@@ -83,7 +83,11 @@ func (s *DaemonSubmitter) streamTask(ctx context.Context, taskID string, onEvent
 		runErr = err
 	}
 	if result.AgentResult.Status == agent.StatusFailed && runErr == nil && terminalError {
-		runErr = fmt.Errorf("daemon task failed")
+		summary := strings.TrimSpace(result.AgentResult.Summary)
+		if summary == "" {
+			summary = "daemon task failed"
+		}
+		runErr = fmt.Errorf("%s", summary)
 	}
 	return result, runErr
 }
@@ -566,18 +570,17 @@ func formatReplayEvent(eventType taskpkg.EventType, payload taskpkg.EventPayload
 	case taskpkg.EventPlanReady:
 		return string(eventType) + ": " + firstLine(payload.Steps)
 	case taskpkg.EventToolCall, taskpkg.EventToolResult:
-		return strings.TrimSpace(string(eventType) + ": " + payload.Tool + " " + payload.Input + " " + firstLine(payload.Output))
+		status := payload.Status
+		if status != "" {
+			status = "[" + status + "] "
+		}
+		return strings.TrimSpace(string(eventType) + ": " + status + payload.Tool + " " + payload.Input + " " + firstLine(payload.Output))
 	case taskpkg.EventSummary:
 		return string(eventType) + ": " + payload.Message
 	case taskpkg.EventDiff:
 		return string(eventType) + ": " + firstLine(payload.Diff)
 	case taskpkg.EventCompleted, taskpkg.EventCancelled, taskpkg.EventError:
-		if payload.Status != "" {
-			return string(eventType) + ": " + payload.Status
-		}
-		if payload.Message != "" {
-			return string(eventType) + ": " + payload.Message
-		}
+		return strings.TrimSpace(string(eventType) + ": " + payload.Status + " " + firstLine(payload.Message))
 	case taskpkg.EventPermissionRequest:
 		return strings.TrimSpace(string(eventType) + ": " + payload.Tool + " " + payload.Input + " " + payload.Risk + " " + payload.Reason)
 	case taskpkg.EventPermissionApproved, taskpkg.EventPermissionDenied:
