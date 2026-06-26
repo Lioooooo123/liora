@@ -208,6 +208,7 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /timeline
 /last
 /tail [lines|task_id lines]
+/diff [task_id]
 /resume <task_id>
 /approve
 /deny
@@ -231,6 +232,8 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 - `Diff`：文件变更。
 
 长输出或历史任务可以用 `/tail` 回看最近事件输出，例如 `/tail 80` 查看最近任务的最后 80 行，或 `/tail task_xxx 80` 查看指定任务。
+
+patch-first 任务完成后可以先用 `/diff` 预览最近任务的变更，或用 `/diff task_xxx` 查看指定任务；确认后再输入 `/apply` 写入真实 workspace。
 
 ## Goal、Memory 和 Skill
 

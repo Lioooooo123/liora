@@ -39,7 +39,7 @@ func TestRenderWelcomeShowsWorkspaceAndModel(t *testing.T) {
 		Safety:    "patch-first",
 	})
 
-	for _, want := range []string{"Liora", "Workspace", "/tmp/project", "Model", "deepseek-v4-pro", "Core", "embedded daemon", "Safety", "patch-first", "/help", "/tools", "/tail", "/exit"} {
+	for _, want := range []string{"Liora", "Workspace", "/tmp/project", "Model", "deepseek-v4-pro", "Core", "embedded daemon", "Safety", "patch-first", "/help", "/tools", "/tail", "/diff", "/exit"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected welcome output to contain %q, got:\n%s", want, output)
 		}

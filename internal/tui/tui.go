@@ -122,7 +122,7 @@ func RenderWelcome(config Config) string {
 	if len(runtime) > 0 {
 		status += "\n" + strings.Join(runtime, "\n")
 	}
-	commands := mutedStyle.Render("Commands  /help  /tools  /tasks  /sessions  /timeline  /last  /tail  /resume  /resume-session  /approve  /deny  /apply  /cancel  /exit")
+	commands := mutedStyle.Render("Commands  /help  /tools  /tasks  /sessions  /timeline  /last  /tail  /diff  /resume  /resume-session  /approve  /deny  /apply  /cancel  /exit")
 	return header + "\n" + status + "\n\n" + commands + "\n"
 }
 
@@ -150,7 +150,7 @@ func (a *App) runBlocking(ctx context.Context, input io.Reader, output io.Writer
 			fmt.Fprintln(output, "Bye")
 			return nil
 		case "/help":
-			fmt.Fprintln(output, "Type a coding request in natural language. Commands: /tools, /tasks, /sessions, /timeline, /last, /tail [lines|task_id lines], /resume <task_id>, /resume-session <session_id>, /approve, /deny, /apply, /cancel, /goal, /memory, /skills, /skill, /mcp, /exit.")
+			fmt.Fprintln(output, "Type a coding request in natural language. Commands: /tools, /tasks, /sessions, /timeline, /last, /tail [lines|task_id lines], /diff [task_id], /resume <task_id>, /resume-session <session_id>, /approve, /deny, /apply, /cancel, /goal, /memory, /skills, /skill, /mcp, /exit.")
 			continue
 		}
 		if strings.HasPrefix(line, "/") && a.config.Commands != nil {
@@ -285,7 +285,7 @@ func (a *App) handleStreamingLine(ctx context.Context, line string, output io.Wr
 		return true
 	case "/help":
 		write(func() {
-			fmt.Fprintln(output, "Type a coding request in natural language. Commands: /tools, /tasks, /sessions, /timeline, /last, /tail [lines|task_id lines], /resume <task_id>, /resume-session <session_id>, /approve, /deny, /apply, /cancel, /goal, /memory, /skills, /skill, /mcp, /exit.")
+			fmt.Fprintln(output, "Type a coding request in natural language. Commands: /tools, /tasks, /sessions, /timeline, /last, /tail [lines|task_id lines], /diff [task_id], /resume <task_id>, /resume-session <session_id>, /approve, /deny, /apply, /cancel, /goal, /memory, /skills, /skill, /mcp, /exit.")
 		})
 		return false
 	}

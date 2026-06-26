@@ -259,3 +259,9 @@
 - 这是 line-based TUI 的长输出回看 MVP，避免为了长输出立即重写 Bubble Tea；默认 40 行，最多 200 行。
 - `/tail` 使用 daemon event history，不依赖终端滚屏；未来全屏 TUI 或 Mac 客户端可以基于同一套 event/timeline 数据做可滚动 transcript。
 - `scripts/tui-smoke.sh` 覆盖 `/tail 8`，防止长输出回看入口从 daemon-backed TUI 退化。
+
+## 2026-06-26 TUI Diff Preview Command
+
+- daemon-backed TUI 新增 `/diff [task_id]`，复用 daemon diff API 展示最近或指定任务的 patch 预览，并把该 diff 缓存给后续 `/apply`。
+- 这是 patch-first 工作流的最低确认体验：用户可以先 review diff，再显式 apply 到真实 workspace。完整 split-pane diff、逐文件勾选和按钮式确认留给全屏 TUI 或 Mac 客户端。
+- diff 预览默认最多展示 180 行，避免超大 patch 再次拖慢 line-based TUI；完整 patch 仍保存在 daemon task event/diff API 中。

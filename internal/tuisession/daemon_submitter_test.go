@@ -203,6 +203,16 @@ func TestDaemonSubmitterAppliesLastDiff(t *testing.T) {
 	} else if !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
+	taskID := findOnlyTaskID(t, repo)
+	diffOutput, handled, err := submitter.HandleCommand(t.Context(), "/diff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Diff " + taskID, "+++ b/notes.txt", "+hello", "Next:", "/apply"} {
+		if !handled || !strings.Contains(diffOutput, want) {
+			t.Fatalf("expected diff output to contain %q handled=%v output=%q", want, handled, diffOutput)
+		}
+	}
 	output, handled, err := submitter.HandleCommand(t.Context(), "/apply")
 	if err != nil {
 		t.Fatal(err)
@@ -224,6 +234,17 @@ func TestDaemonSubmitterAppliesLastDiff(t *testing.T) {
 func TestDaemonSubmitterApplyWithoutTask(t *testing.T) {
 	submitter := &DaemonSubmitter{client: nil}
 	output, handled, err := submitter.HandleCommand(t.Context(), "/apply")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(output, "No daemon task") {
+		t.Fatalf("unexpected output handled=%v output=%q", handled, output)
+	}
+}
+
+func TestDaemonSubmitterDiffWithoutTask(t *testing.T) {
+	submitter := &DaemonSubmitter{client: nil}
+	output, handled, err := submitter.HandleCommand(t.Context(), "/diff")
 	if err != nil {
 		t.Fatal(err)
 	}

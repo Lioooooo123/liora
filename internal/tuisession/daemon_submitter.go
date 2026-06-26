@@ -149,6 +149,8 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		return s.approveLast(ctx)
 	case "/deny":
 		return s.denyLast(ctx)
+	case "/diff":
+		return s.showDiff(ctx, "")
 	case "/apply":
 		return s.applyLast(ctx)
 	case "/tasks":
@@ -165,6 +167,9 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		if line == "/tail" || strings.HasPrefix(line, "/tail ") || line == "/log" || strings.HasPrefix(line, "/log ") {
 			command := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, "/tail"), "/log"))
 			return s.tailTask(ctx, command)
+		}
+		if strings.HasPrefix(line, "/diff ") {
+			return s.showDiff(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/diff ")))
 		}
 		if strings.HasPrefix(line, "/resume-session ") {
 			return s.resumeSession(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/resume-session ")))
@@ -442,6 +447,43 @@ func (s *DaemonSubmitter) cancelCurrent(ctx context.Context) (string, bool, erro
 	return "Cancelled task " + task.ID + ".", true, nil
 }
 
+func (s *DaemonSubmitter) showDiff(ctx context.Context, taskID string) (string, bool, error) {
+	taskID = strings.TrimSpace(taskID)
+	lastTaskID, diff := s.lastPatch()
+	if taskID == "" {
+		taskID = lastTaskID
+	}
+	if taskID == "" {
+		if s.client == nil {
+			return "No daemon task to diff.", true, nil
+		}
+		tasks, err := s.client.ListTasks(ctx, 1)
+		if err != nil {
+			return "", true, err
+		}
+		if len(tasks) == 0 {
+			return "No daemon task to diff.", true, nil
+		}
+		taskID = tasks[0].ID
+	}
+	if taskID != lastTaskID || strings.TrimSpace(diff) == "" {
+		fetched, err := s.client.Diff(ctx, taskID)
+		if err != nil {
+			return "", true, err
+		}
+		diff = fetched
+	}
+	if strings.TrimSpace(diff) == "" {
+		return "No diff available for task " + taskID + ".", true, nil
+	}
+	s.rememberTask(taskID)
+	s.rememberDiff(taskID, diff)
+	lines := []string{"Diff " + taskID}
+	lines = append(lines, previewLines(diff, 180)...)
+	lines = append(lines, "Next: review this diff, then use /apply to write it to the workspace.")
+	return strings.Join(lines, "\n"), true, nil
+}
+
 func (s *DaemonSubmitter) applyLast(ctx context.Context) (string, bool, error) {
 	taskID, diff := s.lastPatch()
 	if taskID == "" {
@@ -707,6 +749,24 @@ func parsePositiveInt(value string) (int, bool) {
 		return 0, false
 	}
 	return parsed, true
+}
+
+func previewLines(value string, maxLines int) []string {
+	value = strings.TrimRight(value, "\n")
+	if value == "" {
+		return nil
+	}
+	lines := strings.Split(value, "\n")
+	if maxLines > 0 && len(lines) > maxLines {
+		omitted := len(lines) - maxLines
+		lines = append(lines[:maxLines], fmt.Sprintf("... %d more lines omitted", omitted))
+	}
+	for i, line := range lines {
+		if len(line) > 220 {
+			lines[i] = line[:217] + "..."
+		}
+	}
+	return lines
 }
 
 func firstLine(value string) string {
