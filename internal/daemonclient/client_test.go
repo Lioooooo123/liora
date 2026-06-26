@@ -214,6 +214,22 @@ func TestClientSessionLifecycle(t *testing.T) {
 	if !strings.Contains(combined.String(), "read assignment") || !strings.Contains(combined.String(), "assignment read") {
 		t.Fatalf("unexpected timeline %#v", timeline)
 	}
+	matches, err := client.SearchTimeline(t.Context(), workspace, "assignment", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("expected timeline search matches")
+	}
+	var searchText strings.Builder
+	for _, item := range matches {
+		searchText.WriteString(item.Content)
+		searchText.WriteString(item.Title)
+		searchText.WriteString(item.Input)
+	}
+	if !strings.Contains(searchText.String(), "assignment") {
+		t.Fatalf("unexpected timeline search matches %#v", matches)
+	}
 	if err := repo.UpdateStatus(t.Context(), created.Task.ID, task.StatusWaitingUser); err != nil {
 		t.Fatal(err)
 	}

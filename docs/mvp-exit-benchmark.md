@@ -39,6 +39,7 @@ Liora v0.1 是本地 Mac 上的轻量 agent 工坊。
 - 使用 SQLite 保存任务、事件、记忆和配置相关数据。
 - 基础记忆能力可用：添加、列出、搜索记忆，并能注入 planner 上下文。
 - 任务历史可查询，事件可回放，客户端重连后能恢复任务时间线。
+- 会话历史可按 workspace 搜索，客户端不需要自己遍历 sessions/tasks/events 拼搜索。
 - TUI 重启后应默认接回同 workspace 最近 session；用户也能显式 `/new-session` 从新上下文开始。
 
 ### 4. Sandbox 与安全边界
@@ -50,12 +51,13 @@ Liora v0.1 是本地 Mac 上的轻量 agent 工坊。
 
 ### 5. API 与客户端可用性
 
-- daemon API 覆盖健康检查、capabilities、workspace workbench snapshot、创建任务、按 workspace 查询任务、查询事件、SSE、diff、apply、cancel、approval、session/history/timeline；Go daemon client 需要覆盖 workbench snapshot 和多 task event fan-in；capabilities 需要包含内建工具和可用 MCP 工具。
+- daemon API 覆盖健康检查、capabilities、workspace workbench snapshot、workspace timeline search、创建任务、按 workspace 查询任务、查询事件、SSE、diff、apply、cancel、approval、session/history/timeline；Go daemon client 需要覆盖 workbench snapshot、timeline search 和多 task event fan-in；capabilities 需要包含内建工具和可用 MCP 工具。
 - CLI 能启动独立 daemon；默认交互 TUI 也能自动拉起 embedded daemon，并通过 smoke script 覆盖核心 API。
 - TUI 可以作为开发入口，但 v0.1 结束不要求精致桌面 UI。
 - UI 最小要求是“能解释状态、展示进度、允许独立预览 diff、允许 apply/cancel、能列出等待审批任务”；二次元视觉、白板和 Mac 原生体验进入 v0.2。
 - TUI 必须有长输出回看入口，line-based MVP 至少支持 `/tail` 从 daemon event 历史查看最近任务输出尾部。
 - TUI 必须有展开 transcript 入口，line-based MVP 至少支持 `/transcript [limit]` 从 session timeline API 回看多轮会话。
+- TUI 必须有历史搜索入口，line-based MVP 至少支持 `/history <query>` 搜索当前 workspace timeline。
 - TUI 必须有 workspace-scoped workbench 入口，line-based MVP 至少支持 `/workbench` 展示当前 workspace 的 sessions、active tasks 和 recent tasks。
 - TUI 必须有后台任务入口，line-based MVP 至少支持 `/spawn <request>` 创建 async task 并立即返回 task id。
 - TUI 必须有多任务观察入口，line-based MVP 至少支持 `/watch` 订阅当前 workspace active tasks，或 `/watch <task_id...>` 订阅指定任务。
@@ -68,7 +70,7 @@ Liora v0.1 是本地 Mac 上的轻量 agent 工坊。
 - `LIORA_HOME=$(mktemp -d) LIORA_DAEMON_ADDR=127.0.0.1:19089 ./scripts/daemon-smoke.sh "$PWD"` 通过。
 - `LIORA_TUI_SMOKE_DAEMON_ADDR=127.0.0.1:19090 LIORA_TUI_SMOKE_LLM_ADDR=127.0.0.1:19091 ./scripts/tui-smoke.sh "$PWD"` 通过。
 - `LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scripts/coding-eval.sh` 通过。
-- smoke、eval 和 CLI 测试覆盖至少一个 natural coding task、一个 document-read task、一个 MCP external tool task、一个 daemon capabilities MCP tools view、一个 daemon workbench snapshot path、一个 failed task diagnostic path、一个 multi-file patch task、一个 failed-tool replan task、一个 apply API 调用、一个 TUI `/diff` preview path、一个 large-output truncation task、一个 permission approve/deny task、一个 TUI approval queue path、一个 TUI auto-resume session path、一个 TUI new-session path、一个 TUI expanded transcript path、一个 TUI workspace-scoped workbench path、一个 TUI background spawn path、一个 TUI multi-task watch path、一个 running cancel task、一个 child-process cleanup case、一个 SSE 事件流、一个 daemonclient multi-task event stream、一个 daemon-backed TUI timeline、一个 TUI `/tail` history view、一个默认 embedded-daemon TUI timeline 和一个 TUI running cancel。
+- smoke、eval 和 CLI 测试覆盖至少一个 natural coding task、一个 document-read task、一个 MCP external tool task、一个 daemon capabilities MCP tools view、一个 daemon workbench snapshot path、一个 daemon timeline search path、一个 failed task diagnostic path、一个 multi-file patch task、一个 failed-tool replan task、一个 apply API 调用、一个 TUI `/diff` preview path、一个 large-output truncation task、一个 permission approve/deny task、一个 TUI approval queue path、一个 TUI auto-resume session path、一个 TUI new-session path、一个 TUI expanded transcript path、一个 TUI history search path、一个 TUI workspace-scoped workbench path、一个 TUI background spawn path、一个 TUI multi-task watch path、一个 running cancel task、一个 child-process cleanup case、一个 SSE 事件流、一个 daemonclient multi-task event stream、一个 daemon-backed TUI timeline、一个 TUI `/tail` history view、一个默认 embedded-daemon TUI timeline 和一个 TUI running cancel。
 - `implementation-notes.md` 已记录所有重要技术取舍和后续风险。
 - `git status --short --branch` 显示本地分支和 `origin/main` 同步且无未提交改动。
 

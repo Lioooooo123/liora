@@ -173,6 +173,22 @@ func (c *Client) SessionTimeline(ctx context.Context, sessionID string, limit in
 	return result, nil
 }
 
+func (c *Client) SearchTimeline(ctx context.Context, workspace string, query string, limit int) ([]task.TimelineItem, error) {
+	values := url.Values{}
+	values.Set("q", query)
+	if strings.TrimSpace(workspace) != "" {
+		values.Set("workspace", workspace)
+	}
+	if limit > 0 {
+		values.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	var result []task.TimelineItem
+	if err := c.getJSON(ctx, "/v1/timeline/search?"+values.Encode(), &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (c *Client) GetTask(ctx context.Context, taskID string) (task.Task, error) {
 	var result task.Task
 	if err := c.getJSON(ctx, "/v1/tasks/"+url.PathEscape(taskID), &result); err != nil {

@@ -195,6 +195,8 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		return s.showTimeline(ctx, "")
 	case "/transcript":
 		return s.showTranscript(ctx, "")
+	case "/history", "/search-history":
+		return "Usage: /history <query>", true, nil
 	case "/last":
 		return s.replayLastTask(ctx)
 	default:
@@ -219,6 +221,12 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		}
 		if strings.HasPrefix(line, "/transcript ") {
 			return s.showTranscript(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/transcript ")))
+		}
+		if strings.HasPrefix(line, "/history ") {
+			return s.searchHistory(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/history ")))
+		}
+		if strings.HasPrefix(line, "/search-history ") {
+			return s.searchHistory(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/search-history ")))
 		}
 		if strings.HasPrefix(line, "/watch ") {
 			return s.watchTasks(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/watch ")))
@@ -381,6 +389,33 @@ func (s *DaemonSubmitter) showTranscript(ctx context.Context, args string) (stri
 		if len(formatted) > 0 {
 			lines = append(lines, formatted...)
 		}
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) searchHistory(ctx context.Context, query string) (string, bool, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "Usage: /history <query>", true, nil
+	}
+	items, err := s.client.SearchTimeline(ctx, s.workspace, query, 30)
+	if err != nil {
+		return "", true, err
+	}
+	if len(items) == 0 {
+		return "No history matches for " + query + ".", true, nil
+	}
+	lines := []string{fmt.Sprintf("History %q", query)}
+	for _, item := range items {
+		line := formatTimelineItem(item)
+		if line == "" {
+			continue
+		}
+		prefix := item.SessionID
+		if item.TaskID != "" {
+			prefix += " " + item.TaskID
+		}
+		lines = append(lines, "- "+strings.TrimSpace(prefix+": "+line))
 	}
 	return strings.Join(lines, "\n"), true, nil
 }

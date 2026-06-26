@@ -345,6 +345,60 @@ func (r *Repository) Timeline(ctx context.Context, sessionID string, limit int) 
 	return items, nil
 }
 
+func (r *Repository) SearchTimeline(ctx context.Context, workspace string, query string, limit int) ([]TimelineItem, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("timeline search query is required")
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	sessions, err := r.ListSessionsByWorkspace(ctx, workspace, 200)
+	if err != nil {
+		return nil, err
+	}
+	needle := strings.ToLower(query)
+	var matches []TimelineItem
+	for _, session := range sessions {
+		timeline, err := r.Timeline(ctx, session.ID, 500)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range timeline {
+			if strings.Contains(strings.ToLower(timelineItemSearchText(item)), needle) {
+				matches = append(matches, item)
+			}
+		}
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].CreatedAt.Equal(matches[j].CreatedAt) {
+			return matches[i].ID > matches[j].ID
+		}
+		return matches[i].CreatedAt.After(matches[j].CreatedAt)
+	})
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	return matches, nil
+}
+
+func timelineItemSearchText(item TimelineItem) string {
+	return strings.Join([]string{
+		item.Kind,
+		item.Role,
+		item.Type,
+		item.Title,
+		item.Content,
+		item.Tool,
+		item.Input,
+		item.Output,
+		item.Status,
+		item.Diff,
+		item.Risk,
+		item.Reason,
+	}, "\n")
+}
+
 func (r *Repository) listBySessionAsc(ctx context.Context, sessionID string) ([]Task, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, session_id, title, user_input, natural, status, workspace, approval_granted, created_at, updated_at, completed_at

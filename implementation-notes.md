@@ -315,3 +315,9 @@
 - daemon 新增 `GET /v1/workbench?workspace=...&limit=N`，一次返回当前 workspace 的 sessions、active tasks、recent tasks 和 pending approvals。这个 projection 属于 agent core API，避免 TUI 和未来 Mac 客户端各自用多次 HTTP 调用拼工作台。
 - daemonclient 新增 `Workbench(ctx, workspace, limit)`；daemon-backed TUI 的 `/workbench` 和 `/approvals` 都改为消费这个 API。此前 `/approvals` 用全局 task list，可能把其它 workspace 的等待审批任务混进当前目录，现在已经按 workspace 隔离。
 - pending approval 里直接包含最新 `permission.requested` payload。当前仍是 task 级审批；如果后续升级逐步授权 UI，可以在同一个 workbench snapshot 里扩展 approval item，而不用改变 TUI/Mac 客户端的入口模型。
+
+## 2026-06-26 Timeline Search
+
+- repository 新增 `SearchTimeline(workspace, query, limit)`，daemon 暴露 `GET /v1/timeline/search?q=...&workspace=...`，daemonclient 暴露 `SearchTimeline`。搜索覆盖 user message、assistant summary、tool input/output、diff、approval/status 等 timeline 投影文本。
+- daemon-backed TUI 新增 `/history <query>` 和 `/search-history <query>`。这让用户重启后可以按关键词找回历史任务，而不是只能知道 session id 后手动 `/timeline` 翻页。
+- 当前搜索是基于现有 session/timeline 投影的轻量实现，不新增 materialized transcript 表；结果按时间倒序返回。后续如果要做长期全文搜索、embedding 或 compaction，再单独落 transcript/search 表。

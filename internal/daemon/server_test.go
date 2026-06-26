@@ -299,6 +299,27 @@ func TestServerServesSessionTranscript(t *testing.T) {
 	if !strings.Contains(timelineText.String(), "first") || !strings.Contains(timelineText.String(), "second") || !strings.Contains(timelineText.String(), "first done") {
 		t.Fatalf("unexpected timeline %#v", timeline)
 	}
+
+	resp, err = http.Get(server.URL + "/v1/timeline/search?workspace=" + url.QueryEscape(workspace) + "&q=first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var matches []taskpkg.TimelineItem
+	if err := json.NewDecoder(resp.Body).Decode(&matches); err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("expected timeline search matches")
+	}
+	var searchText strings.Builder
+	for _, item := range matches {
+		searchText.WriteString(item.Content)
+		searchText.WriteString(item.Title)
+	}
+	if !strings.Contains(searchText.String(), "first") {
+		t.Fatalf("unexpected timeline search matches %#v", matches)
+	}
 }
 
 func TestServerServesWorkspaceWorkbench(t *testing.T) {

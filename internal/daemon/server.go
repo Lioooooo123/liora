@@ -42,6 +42,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
 	mux.HandleFunc("/v1/workbench", s.handleWorkbench)
+	mux.HandleFunc("/v1/timeline/search", s.handleTimelineSearch)
 	mux.HandleFunc("/v1/sessions", s.handleSessions)
 	mux.HandleFunc("/v1/sessions/", s.handleSession)
 	mux.HandleFunc("/v1/tasks", s.handleTasks)
@@ -186,6 +187,23 @@ func isActiveStatus(status taskpkg.Status) bool {
 	default:
 		return false
 	}
+}
+
+func (s *server) handleTimelineSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		return
+	}
+	query := r.URL.Query().Get("q")
+	workspace := r.URL.Query().Get("workspace")
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := s.repo.SearchTimeline(r.Context(), workspace, query, limit)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (s *server) handleTasks(w http.ResponseWriter, r *http.Request) {

@@ -210,6 +210,7 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /sessions
 /timeline [limit]
 /transcript [limit]
+/history <query>
 /last
 /tail [lines|task_id lines]
 /diff [task_id]
@@ -230,6 +231,8 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 TUI 会自动继续当前 workspace 最近的 session，因此重启 `liora` 后可以直接 `/timeline` 或继续输入任务。需要手动接回最近 session 时可用 `/resume-latest`；想从干净上下文开始下一轮任务时可用 `/new-session`。
 
 `/timeline [limit]` 展示紧凑会话事件线，`/transcript [limit]` 展开 user、assistant、tool、diff、approval 和 status 内容，适合回看长会话；两者都来自 daemon 的 session timeline API。
+
+`/history <query>` 会在当前 workspace 的会话 timeline 中搜索 user、assistant、tool、diff、approval 和 status 内容，适合重启后找回之前的任务线索。
 
 `/workbench` 展示当前 workspace 下的 session、active tasks 和 recent tasks。`/tasks` 与 `/sessions` 默认也按当前 workspace 过滤，避免多个项目的任务混在一起。
 
@@ -440,6 +443,7 @@ curl http://127.0.0.1:18080/v1/tasks/<task-id>/cancel \
 ```text
 GET  /healthz
 GET  /v1/workbench
+GET  /v1/timeline/search
 POST /v1/tasks
 GET  /v1/tasks
 GET  /v1/tasks/{id}
@@ -457,7 +461,7 @@ GET  /v1/sessions/{id}/tasks
 GET  /v1/sessions/{id}/timeline
 ```
 
-`GET /v1/tasks`、`GET /v1/sessions` 和 `GET /v1/workbench` 支持 `?workspace=<absolute-path>&limit=N` 过滤。`/v1/workbench` 会一次返回 sessions、active tasks、recent tasks 和 pending approvals，TUI 和未来客户端可用它构建多 workspace / 多 session 工作台。
+`GET /v1/tasks`、`GET /v1/sessions`、`GET /v1/workbench` 和 `GET /v1/timeline/search?q=<query>` 支持 `?workspace=<absolute-path>&limit=N` 过滤。`/v1/workbench` 会一次返回 sessions、active tasks、recent tasks 和 pending approvals，TUI 和未来客户端可用它构建多 workspace / 多 session 工作台。
 
 Go client 层提供 `StreamEvents(ctx, taskID)` 和 `StreamTaskEvents(ctx, taskIDs)`。后者会并发订阅多个 task SSE 并聚合成带 `TaskID` 的事件流，TUI 和未来 Mac 客户端可以直接复用它构建多 session / 多任务视图。
 

@@ -624,6 +624,15 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 			t.Fatalf("expected /transcript output to contain %q handled=%v output=%q", want, handled, transcriptOutput)
 		}
 	}
+	historyOutput, handled, err := fresh.HandleCommand(t.Context(), "/history second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"History \"second\"", sessionID, "user: second prompt"} {
+		if !handled || !strings.Contains(historyOutput, want) {
+			t.Fatalf("expected /history output to contain %q handled=%v output=%q", want, handled, historyOutput)
+		}
+	}
 	resumeLatestOutput, handled, err := fresh.HandleCommand(t.Context(), "/resume-latest")
 	if err != nil {
 		t.Fatal(err)
