@@ -678,6 +678,21 @@ func TestDaemonSubmitterApprovesAndDeniesWaitingTask(t *testing.T) {
 		t.Fatalf("expected waiting approval result=%#v streamed=%#v", result.AgentResult, streamed)
 	}
 	taskID := findOnlyTaskID(t, repo)
+	otherWorkspaceTask, err := repo.Create(t.Context(), taskpkg.CreateRequest{Workspace: t.TempDir(), Prompt: "run rm -rf elsewhere", Natural: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), otherWorkspaceTask.ID, taskpkg.StatusWaitingUser); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), otherWorkspaceTask.ID, taskpkg.EventPermissionRequest, taskpkg.EventPayload{
+		Tool:   "run",
+		Input:  "rm -rf elsewhere",
+		Risk:   "dangerous_shell",
+		Reason: "other workspace",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	pendingOutput, handled, err := submitter.HandleCommand(t.Context(), "/approvals")
 	if err != nil {
 		t.Fatal(err)
@@ -686,6 +701,9 @@ func TestDaemonSubmitterApprovesAndDeniesWaitingTask(t *testing.T) {
 		if !handled || !strings.Contains(pendingOutput, want) {
 			t.Fatalf("expected approvals output to contain %q handled=%v output=%q", want, handled, pendingOutput)
 		}
+	}
+	if strings.Contains(pendingOutput, otherWorkspaceTask.ID) || strings.Contains(pendingOutput, "elsewhere") {
+		t.Fatalf("/approvals should be scoped to current workspace, got %q", pendingOutput)
 	}
 	output, handled, err := submitter.HandleCommand(t.Context(), "/approve "+taskID)
 	if err != nil {
@@ -697,11 +715,11 @@ func TestDaemonSubmitterApprovesAndDeniesWaitingTask(t *testing.T) {
 		}
 	}
 	waitUntil(t, 3*time.Second, func() bool {
-		tasks, err := repo.List(t.Context(), 10)
+		taskRecord, err := repo.Get(t.Context(), taskID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return len(tasks) == 1 && tasks[0].Status == taskpkg.StatusCompleted
+		return taskRecord.Status == taskpkg.StatusCompleted
 	})
 
 	second, err := repo.Create(t.Context(), taskpkg.CreateRequest{Workspace: root, Prompt: "run rm -rf other", Natural: false})

@@ -91,6 +91,15 @@ func (c *Client) Capabilities(ctx context.Context) (Capabilities, error) {
 	return result, nil
 }
 
+func (c *Client) Workbench(ctx context.Context, workspace string, limit int) (task.Workbench, error) {
+	path := listPath("/v1/workbench", workspace, limit)
+	var result task.Workbench
+	if err := c.getJSON(ctx, path, &result); err != nil {
+		return task.Workbench{}, err
+	}
+	return result, nil
+}
+
 func (c *Client) CreateTask(ctx context.Context, request task.CreateRequest) (task.CreateResponse, error) {
 	var result task.CreateResponse
 	if err := c.postJSON(ctx, "/v1/tasks", request, &result, http.StatusCreated, http.StatusAccepted); err != nil {

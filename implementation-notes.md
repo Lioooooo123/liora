@@ -309,3 +309,9 @@
 - `SubmitStream` 和 `/spawn` 共享 `createTask` helper，确保 session auto-resume、workspace、natural mode 和 last task 记录一致。这个设计让 TUI 与未来 Mac 客户端都围绕 daemon task API 组织并发任务，而不是各自维护一套任务状态。
 - `/spawn` 不直接输出事件；用户可以用 `/watch <task_id>` 观察实时事件，或任务结束后用 `/tail <task_id>` / `/timeline` 回看。这是 line-based TUI 下的可控并发 MVP，完整任务队列和非阻塞状态栏留给全屏 TUI 或桌面端。
 - 为了让后台任务有闭环控制，`/cancel` 同时支持 `/cancel <task_id>`。无参仍保留取消当前前台任务的语义，避免破坏原交互。
+
+## 2026-06-26 Daemon Workbench Snapshot
+
+- daemon 新增 `GET /v1/workbench?workspace=...&limit=N`，一次返回当前 workspace 的 sessions、active tasks、recent tasks 和 pending approvals。这个 projection 属于 agent core API，避免 TUI 和未来 Mac 客户端各自用多次 HTTP 调用拼工作台。
+- daemonclient 新增 `Workbench(ctx, workspace, limit)`；daemon-backed TUI 的 `/workbench` 和 `/approvals` 都改为消费这个 API。此前 `/approvals` 用全局 task list，可能把其它 workspace 的等待审批任务混进当前目录，现在已经按 workspace 隔离。
+- pending approval 里直接包含最新 `permission.requested` payload。当前仍是 task 级审批；如果后续升级逐步授权 UI，可以在同一个 workbench snapshot 里扩展 approval item，而不用改变 TUI/Mac 客户端的入口模型。

@@ -214,6 +214,30 @@ func TestClientSessionLifecycle(t *testing.T) {
 	if !strings.Contains(combined.String(), "read assignment") || !strings.Contains(combined.String(), "assignment read") {
 		t.Fatalf("unexpected timeline %#v", timeline)
 	}
+	if err := repo.UpdateStatus(t.Context(), created.Task.ID, task.StatusWaitingUser); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), created.Task.ID, task.EventPermissionRequest, task.EventPayload{
+		Tool:   "run",
+		Input:  "rm -rf build",
+		Risk:   "dangerous_shell",
+		Reason: "Command contains rm -rf.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	workbench, err := client.Workbench(t.Context(), workspace, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workbench.Sessions) != 1 || workbench.Sessions[0].ID != sessionResponse.Session.ID {
+		t.Fatalf("unexpected workbench sessions %#v", workbench.Sessions)
+	}
+	if !containsTask(workbench.ActiveTasks, created.Task.ID) || !containsTask(workbench.RecentTasks, created.Task.ID) {
+		t.Fatalf("unexpected workbench tasks %#v", workbench)
+	}
+	if len(workbench.PendingApprovals) != 1 || workbench.PendingApprovals[0].Task.ID != created.Task.ID {
+		t.Fatalf("unexpected workbench pending approvals %#v", workbench.PendingApprovals)
+	}
 }
 
 func TestClientCancelRunningTask(t *testing.T) {
@@ -488,6 +512,15 @@ func containsEvent(events []task.Event, want task.EventType) bool {
 func containsEventType(events []task.EventType, want task.EventType) bool {
 	for _, event := range events {
 		if event == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsTask(tasks []task.Task, want string) bool {
+	for _, task := range tasks {
+		if task.ID == want {
 			return true
 		}
 	}

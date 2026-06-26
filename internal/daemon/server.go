@@ -41,6 +41,7 @@ func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
+	mux.HandleFunc("/v1/workbench", s.handleWorkbench)
 	mux.HandleFunc("/v1/sessions", s.handleSessions)
 	mux.HandleFunc("/v1/sessions/", s.handleSession)
 	mux.HandleFunc("/v1/tasks", s.handleTasks)
@@ -113,6 +114,78 @@ func (s *server) mcpTools(ctx context.Context) ([]capabilities.MCPToolSpec, erro
 		})
 	}
 	return specs, nil
+}
+
+func (s *server) handleWorkbench(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 50
+	}
+	workspace := r.URL.Query().Get("workspace")
+	sessions, err := s.repo.ListSessionsByWorkspace(r.Context(), workspace, 20)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	tasks, err := s.repo.ListByWorkspace(r.Context(), workspace, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	workbench := taskpkg.Workbench{
+		Workspace:   workspace,
+		Sessions:    sessions,
+		RecentTasks: tasks,
+	}
+	for _, task := range tasks {
+		if isActiveStatus(task.Status) {
+			workbench.ActiveTasks = append(workbench.ActiveTasks, task)
+		}
+		if task.Status == taskpkg.StatusWaitingUser {
+			request, err := s.latestPermissionRequest(r.Context(), task.ID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			workbench.PendingApprovals = append(workbench.PendingApprovals, taskpkg.PendingApproval{
+				Task:    task,
+				Request: request,
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, workbench)
+}
+
+func (s *server) latestPermissionRequest(ctx context.Context, taskID string) (taskpkg.EventPayload, error) {
+	events, err := s.repo.Events(ctx, taskID, 0)
+	if err != nil {
+		return taskpkg.EventPayload{}, err
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type != taskpkg.EventPermissionRequest {
+			continue
+		}
+		var payload taskpkg.EventPayload
+		if err := json.Unmarshal([]byte(events[i].Payload), &payload); err != nil {
+			return taskpkg.EventPayload{}, err
+		}
+		return payload, nil
+	}
+	return taskpkg.EventPayload{}, nil
+}
+
+func isActiveStatus(status taskpkg.Status) bool {
+	switch status {
+	case taskpkg.StatusDraft, taskpkg.StatusPlanning, taskpkg.StatusRunning, taskpkg.StatusWaitingUser:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *server) handleTasks(w http.ResponseWriter, r *http.Request) {

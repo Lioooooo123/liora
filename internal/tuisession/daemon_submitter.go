@@ -496,57 +496,32 @@ func (s *DaemonSubmitter) listApprovals(ctx context.Context) (string, bool, erro
 	if s.client == nil {
 		return "No pending approvals.", true, nil
 	}
-	tasks, err := s.client.ListTasks(ctx, 50)
+	workbench, err := s.client.Workbench(ctx, s.workspace, 50)
 	if err != nil {
 		return "", true, err
 	}
-	var lines []string
-	lines = append(lines, "Pending approvals")
-	for _, task := range tasks {
-		if task.Status != taskpkg.StatusWaitingUser {
-			continue
-		}
-		payload, err := s.latestPermissionRequest(ctx, task.ID)
-		if err != nil {
-			return "", true, err
-		}
-		if len(lines) == 1 {
-			s.rememberTask(task.ID)
-		}
-		lines = append(lines, fmt.Sprintf("- %s [%s] %s", task.ID, task.Status, task.Title))
-		if strings.TrimSpace(payload.Tool+payload.Input) != "" {
-			lines = append(lines, "  request: "+strings.TrimSpace(payload.Tool+" "+payload.Input))
-		}
-		if strings.TrimSpace(payload.Risk) != "" {
-			lines = append(lines, "  risk: "+payload.Risk)
-		}
-		if strings.TrimSpace(payload.Reason) != "" {
-			lines = append(lines, "  reason: "+payload.Reason)
-		}
-		lines = append(lines, "  commands: /approve "+task.ID+"  /deny "+task.ID)
-	}
-	if len(lines) == 1 {
+	if len(workbench.PendingApprovals) == 0 {
 		return "No pending approvals.", true, nil
 	}
+	var lines []string
+	lines = append(lines, "Pending approvals")
+	for _, approval := range workbench.PendingApprovals {
+		if len(lines) == 1 {
+			s.rememberTask(approval.Task.ID)
+		}
+		lines = append(lines, fmt.Sprintf("- %s [%s] %s", approval.Task.ID, approval.Task.Status, approval.Task.Title))
+		if strings.TrimSpace(approval.Request.Tool+approval.Request.Input) != "" {
+			lines = append(lines, "  request: "+strings.TrimSpace(approval.Request.Tool+" "+approval.Request.Input))
+		}
+		if strings.TrimSpace(approval.Request.Risk) != "" {
+			lines = append(lines, "  risk: "+approval.Request.Risk)
+		}
+		if strings.TrimSpace(approval.Request.Reason) != "" {
+			lines = append(lines, "  reason: "+approval.Request.Reason)
+		}
+		lines = append(lines, "  commands: /approve "+approval.Task.ID+"  /deny "+approval.Task.ID)
+	}
 	return strings.Join(lines, "\n"), true, nil
-}
-
-func (s *DaemonSubmitter) latestPermissionRequest(ctx context.Context, taskID string) (taskpkg.EventPayload, error) {
-	events, err := s.client.Events(ctx, taskID)
-	if err != nil {
-		return taskpkg.EventPayload{}, err
-	}
-	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Type != taskpkg.EventPermissionRequest {
-			continue
-		}
-		payload, err := eventPayload(events[i])
-		if err != nil {
-			return taskpkg.EventPayload{}, err
-		}
-		return payload, nil
-	}
-	return taskpkg.EventPayload{}, nil
 }
 
 func (s *DaemonSubmitter) approveTask(ctx context.Context, taskID string) (string, bool, error) {
@@ -613,43 +588,17 @@ func (s *DaemonSubmitter) showWorkbench(ctx context.Context) (string, bool, erro
 	if s.client == nil {
 		return "No daemon client.", true, nil
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	type sessionsResult struct {
-		sessions []taskpkg.Session
-		err      error
-	}
-	type tasksResult struct {
-		tasks []taskpkg.Task
-		err   error
-	}
-	sessionsCh := make(chan sessionsResult, 1)
-	tasksCh := make(chan tasksResult, 1)
-	go func() {
-		sessions, err := s.client.ListSessionsForWorkspace(ctx, s.workspace, 20)
-		sessionsCh <- sessionsResult{sessions: sessions, err: err}
-	}()
-	go func() {
-		tasks, err := s.client.ListTasksForWorkspace(ctx, s.workspace, 50)
-		tasksCh <- tasksResult{tasks: tasks, err: err}
-	}()
-	sessionRes := <-sessionsCh
-	if sessionRes.err != nil {
-		cancel()
-		<-tasksCh
-		return "", true, sessionRes.err
-	}
-	taskRes := <-tasksCh
-	if taskRes.err != nil {
-		return "", true, taskRes.err
+	workbench, err := s.client.Workbench(ctx, s.workspace, 50)
+	if err != nil {
+		return "", true, err
 	}
 	current := s.currentSessionID()
 	lines := []string{"Workbench " + s.workspace}
 	lines = append(lines, "Sessions:")
-	if len(sessionRes.sessions) == 0 {
+	if len(workbench.Sessions) == 0 {
 		lines = append(lines, "- none")
 	} else {
-		for _, session := range sessionRes.sessions {
+		for _, session := range workbench.Sessions {
 			marker := " "
 			if session.ID == current {
 				marker = "*"
@@ -657,24 +606,35 @@ func (s *DaemonSubmitter) showWorkbench(ctx context.Context) (string, bool, erro
 			lines = append(lines, fmt.Sprintf("- %s %s %s last=%s (%s)", marker, session.ID, session.Title, emptyDash(session.LastTaskID), formatTaskTime(session.UpdatedAt)))
 		}
 	}
-	active := filterActiveTasks(taskRes.tasks)
 	lines = append(lines, "Active tasks:")
-	if len(active) == 0 {
+	if len(workbench.ActiveTasks) == 0 {
 		lines = append(lines, "- none")
 	} else {
-		for _, task := range active {
+		for _, task := range workbench.ActiveTasks {
 			lines = append(lines, fmt.Sprintf("- %s [%s] %s session=%s", task.ID, task.Status, task.Title, emptyDash(task.SessionID)))
 		}
 	}
-	lines = append(lines, "Recent tasks:")
-	if len(taskRes.tasks) == 0 {
+	lines = append(lines, "Pending approvals:")
+	if len(workbench.PendingApprovals) == 0 {
 		lines = append(lines, "- none")
 	} else {
-		limit := len(taskRes.tasks)
+		for _, approval := range workbench.PendingApprovals {
+			request := strings.TrimSpace(approval.Request.Tool + " " + approval.Request.Input)
+			if request == "" {
+				request = approval.Task.Title
+			}
+			lines = append(lines, fmt.Sprintf("- %s %s", approval.Task.ID, request))
+		}
+	}
+	lines = append(lines, "Recent tasks:")
+	if len(workbench.RecentTasks) == 0 {
+		lines = append(lines, "- none")
+	} else {
+		limit := len(workbench.RecentTasks)
 		if limit > 8 {
 			limit = 8
 		}
-		for _, task := range taskRes.tasks[:limit] {
+		for _, task := range workbench.RecentTasks[:limit] {
 			lines = append(lines, fmt.Sprintf("- %s [%s] %s (%s)", task.ID, task.Status, task.Title, formatTaskTime(task.UpdatedAt)))
 		}
 	}

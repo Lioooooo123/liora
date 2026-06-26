@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -297,6 +298,96 @@ func TestServerServesSessionTranscript(t *testing.T) {
 	}
 	if !strings.Contains(timelineText.String(), "first") || !strings.Contains(timelineText.String(), "second") || !strings.Contains(timelineText.String(), "first done") {
 		t.Fatalf("unexpected timeline %#v", timeline)
+	}
+}
+
+func TestServerServesWorkspaceWorkbench(t *testing.T) {
+	workspace := t.TempDir()
+	otherWorkspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	session, err := repo.CreateSession(t.Context(), taskpkg.CreateSessionRequest{Workspace: workspace, Title: "main session"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: workspace,
+		Prompt:    "active task",
+		SessionID: session.ID,
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), active.ID, taskpkg.StatusRunning); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: workspace,
+		Prompt:    "run rm -rf build",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), pending.ID, taskpkg.StatusWaitingUser); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), pending.ID, taskpkg.EventPermissionRequest, taskpkg.EventPayload{
+		Tool:   "run",
+		Input:  "rm -rf build",
+		Risk:   "dangerous_shell",
+		Reason: "Command contains rm -rf.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	other, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: otherWorkspace,
+		Prompt:    "other task",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), other.ID, taskpkg.StatusWaitingUser); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(NewServer(Config{Repository: repo}))
+	defer server.Close()
+	resp, err := http.Get(server.URL + "/v1/workbench?workspace=" + url.QueryEscape(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected workbench status %d", resp.StatusCode)
+	}
+	var workbench taskpkg.Workbench
+	if err := json.NewDecoder(resp.Body).Decode(&workbench); err != nil {
+		t.Fatal(err)
+	}
+	if workbench.Workspace != workspace {
+		t.Fatalf("unexpected workspace %q", workbench.Workspace)
+	}
+	if !hasSession(workbench.Sessions, session.ID) {
+		t.Fatalf("unexpected sessions %#v", workbench.Sessions)
+	}
+	if !hasTask(workbench.ActiveTasks, active.ID) || !hasTask(workbench.ActiveTasks, pending.ID) {
+		t.Fatalf("expected active and pending tasks in active list, got %#v", workbench.ActiveTasks)
+	}
+	if !hasTask(workbench.RecentTasks, active.ID) || !hasTask(workbench.RecentTasks, pending.ID) || hasTask(workbench.RecentTasks, other.ID) {
+		t.Fatalf("unexpected recent tasks %#v", workbench.RecentTasks)
+	}
+	if len(workbench.PendingApprovals) != 1 || workbench.PendingApprovals[0].Task.ID != pending.ID {
+		t.Fatalf("unexpected pending approvals %#v", workbench.PendingApprovals)
+	}
+	if workbench.PendingApprovals[0].Request.Risk != "dangerous_shell" {
+		t.Fatalf("unexpected approval request %#v", workbench.PendingApprovals[0].Request)
 	}
 }
 
@@ -641,6 +732,24 @@ func quote(value string) string {
 func hasEvent(events []taskpkg.Event, eventType taskpkg.EventType) bool {
 	for _, event := range events {
 		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTask(tasks []taskpkg.Task, taskID string) bool {
+	for _, task := range tasks {
+		if task.ID == taskID {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSession(sessions []taskpkg.Session, sessionID string) bool {
+	for _, session := range sessions {
+		if session.ID == sessionID {
 			return true
 		}
 	}

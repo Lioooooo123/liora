@@ -117,6 +117,19 @@ type CreateSessionResponse struct {
 	Session Session `json:"session"`
 }
 
+type Workbench struct {
+	Workspace        string            `json:"workspace,omitempty"`
+	Sessions         []Session         `json:"sessions"`
+	ActiveTasks      []Task            `json:"active_tasks"`
+	RecentTasks      []Task            `json:"recent_tasks"`
+	PendingApprovals []PendingApproval `json:"pending_approvals"`
+}
+
+type PendingApproval struct {
+	Task    Task         `json:"task"`
+	Request EventPayload `json:"request"`
+}
+
 type EventPayload struct {
 	Message string `json:"message,omitempty"`
 	Tool    string `json:"tool,omitempty"`
