@@ -73,6 +73,39 @@ func TestPlannerSupportsDirectAnswer(t *testing.T) {
 	}
 }
 
+func TestPlannerExtractsStepsFromMarkdownOutput(t *testing.T) {
+	generator := &fakeGenerator{response: `可以，我会先看文件：
+
+1. list .
+2. stat "Assignment Question.pdf"
+3. document "Assignment Question.pdf"
+
+然后总结。`}
+	planner := NewPlanner(generator)
+
+	steps, err := planner.Plan(t.Context(), PlanRequest{UserPrompt: "帮我看看 Assignment Question.pdf"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "list .\nstat \"Assignment Question.pdf\"\ndocument \"Assignment Question.pdf\""
+	if steps != want {
+		t.Fatalf("unexpected steps %q", steps)
+	}
+}
+
+func TestPlannerExtractsStepsFromFencedList(t *testing.T) {
+	generator := &fakeGenerator{response: "```plan\n- read README.md\n- run go test ./...\n```"}
+	planner := NewPlanner(generator)
+
+	steps, err := planner.Plan(t.Context(), PlanRequest{UserPrompt: "跑测试"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steps != "read README.md\nrun go test ./..." {
+		t.Fatalf("unexpected steps %q", steps)
+	}
+}
+
 func TestPlannerReplansWithFailureContext(t *testing.T) {
 	generator := &fakeGenerator{response: "list .\nread app.txt"}
 	planner := NewPlanner(generator)

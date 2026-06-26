@@ -165,6 +165,35 @@ func TestAgentExecutesListTool(t *testing.T) {
 	}
 }
 
+func TestAgentAcceptsMarkdownPlanAndEscapedSpacePath(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "Assignment Question.pdf"), []byte("%PDF test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := tools.NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := trace.NewMemoryRecorder()
+	runner := New(workspace, recorder)
+
+	result, err := runner.Run(t.Context(), `1. list .
+- stat Assignment\ Question.pdf`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusCompleted {
+		t.Fatalf("expected completed, got %s", result.Status)
+	}
+	events := recorder.Events()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %#v", events)
+	}
+	if events[1].Tool != "stat" || !strings.Contains(events[1].Output, "Assignment Question.pdf") {
+		t.Fatalf("unexpected stat event %#v", events[1])
+	}
+}
+
 func TestAgentExecutesComplexWorkspaceTools(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {

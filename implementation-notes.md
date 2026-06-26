@@ -359,3 +359,10 @@
 - 首屏从一长串 commands 改为紧凑 workbench 面板，只展示 workspace/model/core/safety 和高频命令；完整命令移动到分组 `/help`，降低首次进入时的信息噪音。
 - section 渲染从大圆角盒子改为左边界轻量区块，保留 Plan/Tools/Summary/Diff/Approval 的语义标题；工具状态改为统一 status chip，后续迁移全屏 TUI 时可复用同一组语义渲染函数。
 - 实测发现完整圆角框会被长 workspace/model 行撑宽，观感反而接近“日志盒子”。本轮改成无右边框的左轨 panel，保留标题和层级，同时避免长路径导致整屏横向扩张。
+
+## 2026-06-26 Coding Agent Usability Baseline
+
+- 用户指出当前 coding agent 仍处在“不可用”阶段，希望对标 Claude Code。这里先把目标收敛为 v0.1 可用性基线：真实模型即使输出 Markdown、编号列表、代码块或少量解释文字，也能提取出可执行工具步骤，而不是因为 planner 行协议过窄直接失败。
+- planner 清洗现在会识别 `ANSWER:`、跳过 fenced code marker、剥离 `-` / `*` / `1.` / `1)` 等常见列表前缀，并只提取已注册工具开头的行；如果没有可执行行，仍保留原错误路径，避免把未知输出静默吞掉。
+- agent 自身也接受编号/项目符号步骤，作为 CLI/scripted 输入的兜底。针对带空格路径，planner prompt 明确要求加引号，agent 继续支持反斜杠转义，覆盖 `Assignment Question.pdf` 这类实际文件名。
+- 这仍不是 Claude Code 的完整 tool-use agent loop；后续真正对标需要模型原生工具调用、多轮观察-执行循环、全屏审批和可中断 UI。本轮先解决“模型返回稍不规整就不能用”的阻塞问题。

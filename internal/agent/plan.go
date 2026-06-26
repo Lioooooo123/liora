@@ -14,7 +14,7 @@ type Step struct {
 func parseSteps(prompt string) []Step {
 	var steps []Step
 	for _, line := range strings.Split(prompt, "\n") {
-		line = strings.TrimSpace(line)
+		line = normalizeStepLine(strings.TrimSpace(line))
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -28,6 +28,7 @@ func parseSteps(prompt string) []Step {
 }
 
 func parseStepLine(line string) (Step, bool) {
+	line = normalizeStepLine(line)
 	tool, rest := firstField(line)
 	if tool == "" {
 		return Step{}, false
@@ -54,6 +55,25 @@ func parseStepLine(line string) (Step, bool) {
 		step.Args = splitStepFields(rest)
 	}
 	return step, true
+}
+
+func normalizeStepLine(line string) string {
+	line = strings.TrimSpace(line)
+	line = strings.TrimPrefix(line, "- ")
+	line = strings.TrimPrefix(line, "* ")
+	line = strings.TrimPrefix(line, "+ ")
+	line = strings.TrimSpace(line)
+	for i, r := range line {
+		if r != '.' && r != ')' {
+			continue
+		}
+		prefix := line[:i]
+		if prefix == "" || strings.Trim(prefix, "0123456789") != "" {
+			continue
+		}
+		return strings.TrimSpace(line[i+1:])
+	}
+	return line
 }
 
 func firstField(value string) (string, string) {

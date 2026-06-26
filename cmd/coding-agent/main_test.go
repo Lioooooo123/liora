@@ -73,6 +73,48 @@ func TestCLINaturalModeUsesLLMPlan(t *testing.T) {
 	}
 }
 
+func TestCLINaturalModeAcceptsMarkdownPlanWithSpacePath(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "Assignment Question.pdf"), []byte("%PDF test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices": [
+				{"message": {"role": "assistant", "content": "可以，先确认文件：\n\n1. list .\n2. stat \"Assignment Question.pdf\""}}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	cmd := exec.Command(
+		"go",
+		"run",
+		".",
+		"-workspace", workspace,
+		"-natural",
+		"-llm-base-url", server.URL,
+		"-llm-model", "test-model",
+		"-prompt", "帮我看看 Assignment Question.pdf",
+	)
+	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=test-key")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\n%s", err, string(output))
+	}
+	rendered := string(output)
+	for _, want := range []string{"planned steps:", "stat \"Assignment Question.pdf\"", "Assignment Question.pdf"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestCLIVersionFlagPrintsBuildVersion(t *testing.T) {
 	packageDir, err := os.Getwd()
 	if err != nil {
