@@ -162,6 +162,10 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 	case "/last":
 		return s.replayLastTask(ctx)
 	default:
+		if line == "/tail" || strings.HasPrefix(line, "/tail ") || line == "/log" || strings.HasPrefix(line, "/log ") {
+			command := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, "/tail"), "/log"))
+			return s.tailTask(ctx, command)
+		}
 		if strings.HasPrefix(line, "/resume-session ") {
 			return s.resumeSession(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/resume-session ")))
 		}
@@ -176,6 +180,55 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		}
 		return "", false, nil
 	}
+}
+
+func (s *DaemonSubmitter) tailTask(ctx context.Context, args string) (string, bool, error) {
+	taskID := s.lastTask()
+	lineCount := 40
+	fields := strings.Fields(args)
+	if len(fields) > 0 {
+		if parsed, ok := parsePositiveInt(fields[0]); ok {
+			lineCount = parsed
+		} else {
+			taskID = fields[0]
+		}
+	}
+	if len(fields) > 1 {
+		if parsed, ok := parsePositiveInt(fields[1]); ok {
+			lineCount = parsed
+		}
+	}
+	if taskID == "" {
+		tasks, err := s.client.ListTasks(ctx, 1)
+		if err != nil {
+			return "", true, err
+		}
+		if len(tasks) == 0 {
+			return "No daemon tasks found.", true, nil
+		}
+		taskID = tasks[0].ID
+	}
+	events, err := s.client.Events(ctx, taskID)
+	if err != nil {
+		return "", true, err
+	}
+	var transcript []string
+	for _, event := range events {
+		payload, _ := eventPayload(event)
+		transcript = append(transcript, formatTailEvent(event.Type, payload)...)
+	}
+	if len(transcript) == 0 {
+		return "No event output for task " + taskID + ".", true, nil
+	}
+	if lineCount > 200 {
+		lineCount = 200
+	}
+	if len(transcript) > lineCount {
+		transcript = transcript[len(transcript)-lineCount:]
+	}
+	lines := []string{fmt.Sprintf("Tail %s last %d lines", taskID, lineCount)}
+	lines = append(lines, transcript...)
+	return strings.Join(lines, "\n"), true, nil
 }
 
 func (s *DaemonSubmitter) showTools(ctx context.Context) (string, bool, error) {
@@ -590,6 +643,70 @@ func formatReplayEvent(eventType taskpkg.EventType, payload taskpkg.EventPayload
 		return string(eventType) + ": " + payload.Message
 	}
 	return string(eventType)
+}
+
+func formatTailEvent(eventType taskpkg.EventType, payload taskpkg.EventPayload) []string {
+	header := strings.TrimSpace(string(eventType))
+	switch eventType {
+	case taskpkg.EventPlanReady:
+		return appendPrefixedLines(header, payload.Steps)
+	case taskpkg.EventToolCall:
+		return []string{strings.TrimSpace(header + ": " + payload.Tool + " " + payload.Input)}
+	case taskpkg.EventToolResult:
+		status := payload.Status
+		if status == "" {
+			status = string(trace.StatusOK)
+		}
+		lines := []string{strings.TrimSpace(header + " [" + status + "]: " + payload.Tool + " " + payload.Input)}
+		return append(lines, indentLines(payload.Output)...)
+	case taskpkg.EventSummary:
+		return appendPrefixedLines(header, payload.Message)
+	case taskpkg.EventDiff:
+		return appendPrefixedLines(header, payload.Diff)
+	case taskpkg.EventPermissionRequest:
+		return []string{strings.TrimSpace(header + ": " + payload.Tool + " " + payload.Input + " " + payload.Risk + " " + payload.Reason)}
+	case taskpkg.EventCompleted, taskpkg.EventCancelled, taskpkg.EventError, taskpkg.EventReplanning:
+		return appendPrefixedLines(strings.TrimSpace(header+" "+payload.Status), payload.Message)
+	default:
+		return appendPrefixedLines(header, payload.Message)
+	}
+}
+
+func appendPrefixedLines(prefix string, value string) []string {
+	value = strings.TrimRight(value, "\n")
+	if value == "" {
+		return []string{prefix}
+	}
+	lines := []string{prefix + ":"}
+	return append(lines, indentLines(value)...)
+}
+
+func indentLines(value string) []string {
+	var lines []string
+	for _, line := range strings.Split(strings.TrimRight(value, "\n"), "\n") {
+		if len(line) > 180 {
+			line = line[:177] + "..."
+		}
+		lines = append(lines, "  "+line)
+	}
+	return lines
+}
+
+func parsePositiveInt(value string) (int, bool) {
+	if value == "" {
+		return 0, false
+	}
+	parsed := 0
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+		parsed = parsed*10 + int(r-'0')
+	}
+	if parsed <= 0 {
+		return 0, false
+	}
+	return parsed, true
 }
 
 func firstLine(value string) string {

@@ -321,6 +321,50 @@ func TestDaemonSubmitterReplayShowsFailureDiagnostics(t *testing.T) {
 	}
 }
 
+func TestDaemonSubmitterTailsRecentTaskOutput(t *testing.T) {
+	root := t.TempDir()
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	taskRecord, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: root,
+		Prompt:    "run long output",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), taskRecord.ID, taskpkg.EventToolResult, taskpkg.EventPayload{
+		Tool:   "run",
+		Input:  "long output",
+		Output: "line1\nline2\nline3\nline4\nline5",
+		Status: "ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), taskRecord.ID, taskpkg.EventCompleted, taskpkg.EventPayload{Status: string(taskpkg.StatusCompleted)}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, false)
+
+	output, handled, err := submitter.HandleCommand(t.Context(), "/tail 3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled {
+		t.Fatal("expected /tail to be handled")
+	}
+	for _, want := range []string{"Tail " + taskRecord.ID + " last 3 lines", "line4", "line5", "task.completed"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected /tail output to contain %q, got:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "line1") {
+		t.Fatalf("expected /tail to omit older lines, got:\n%s", output)
+	}
+}
+
 func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 	root := t.TempDir()
 	repo, closeDB := newTestRepository(t)

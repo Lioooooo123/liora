@@ -25,7 +25,7 @@ func TestTUISmokeScriptCoversDaemonBackedTUI(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
-	for _, want := range []string{"-tui-daemon", "Timeline session_", "tool.result", "/tools", "MCP tools", "mcp fake echo <json arguments>", "/timeline", "/cancel", "Cancelled task", "Fake", "chat"} {
+	for _, want := range []string{"-tui-daemon", "Timeline session_", "tool.result", "/tools", "MCP tools", "mcp fake echo <json arguments>", "/tail 8", "Tail task_", "/timeline", "/cancel", "Cancelled task", "Fake", "chat"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected tui smoke script to contain %q, got:\n%s", want, content)
 		}

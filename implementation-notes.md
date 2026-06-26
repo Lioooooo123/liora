@@ -252,3 +252,10 @@
 - daemonclient 不再把所有 `task.error` SSE 帧都当作传输错误；只有非 JSON payload 的 `task.error` 才表示 stream 级错误。正常任务失败事件会进入 TUI 和未来客户端的事件模型。
 - daemon-backed TUI 的 `/last`/`/resume` 回放现在会显示 `tool.result` 的 `status`，并在 `task.error` 中同时展示终态和失败原因，便于用户看到失败工具、输入和下一步恢复线索。
 - `scripts/coding-eval.sh` 新增 `read missing-eval.txt` 失败任务，验证 SSE 里同时出现 `tool.result status=error`、`task.error` 和 failed 终态，防止失败路径退化成不可解释的 generic error。
+
+## 2026-06-26 TUI Tail History View
+
+- daemon-backed TUI 新增 `/tail [lines|task_id lines]` 与别名 `/log`，通过 daemonclient.Events 读取 task event history 后显示尾部行。
+- 这是 line-based TUI 的长输出回看 MVP，避免为了长输出立即重写 Bubble Tea；默认 40 行，最多 200 行。
+- `/tail` 使用 daemon event history，不依赖终端滚屏；未来全屏 TUI 或 Mac 客户端可以基于同一套 event/timeline 数据做可滚动 transcript。
+- `scripts/tui-smoke.sh` 覆盖 `/tail 8`，防止长输出回看入口从 daemon-backed TUI 退化。

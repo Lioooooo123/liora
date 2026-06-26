@@ -118,7 +118,7 @@ if [[ "$READY" != "1" ]]; then
 fi
 
 STREAM_OUT="$TMP_DIR/stream.out"
-printf '/tools\n看看目录\n/timeline\n/exit\n' | (
+printf '/tools\n看看目录\n/tail 8\n/timeline\n/exit\n' | (
   cd "$ROOT"
   LIORA_HOME="$TMP_DIR/home" go run ./cmd/coding-agent \
     -workspace "$WORKSPACE" \
@@ -134,6 +134,7 @@ grep -q 'Plan' "$STREAM_OUT"
 grep -q 'Tools' "$STREAM_OUT"
 grep -q 'MCP tools' "$STREAM_OUT"
 grep -q 'mcp fake echo <json arguments>' "$STREAM_OUT"
+grep -q 'Tail task_' "$STREAM_OUT"
 grep -q 'Timeline session_' "$STREAM_OUT"
 grep -q 'user: 看看目录' "$STREAM_OUT"
 grep -q 'tool.result' "$STREAM_OUT"

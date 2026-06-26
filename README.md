@@ -206,6 +206,9 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /tasks
 /sessions
 /timeline
+/last
+/tail [lines|task_id lines]
+/resume <task_id>
 /approve
 /deny
 /apply
@@ -226,6 +229,8 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 - `Tools`：每个工具的执行状态和多行输出预览。
 - `Summary`：本轮执行总结。
 - `Diff`：文件变更。
+
+长输出或历史任务可以用 `/tail` 回看最近事件输出，例如 `/tail 80` 查看最近任务的最后 80 行，或 `/tail task_xxx 80` 查看指定任务。
 
 ## Goal、Memory 和 Skill
 
