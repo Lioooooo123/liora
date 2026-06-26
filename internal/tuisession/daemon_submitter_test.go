@@ -112,6 +112,42 @@ func TestDaemonSubmitterShowsDaemonCapabilitiesWithMCPTools(t *testing.T) {
 	}
 }
 
+func TestDaemonSubmitterHandlesMemoryThroughDaemon(t *testing.T) {
+	root := t.TempDir()
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Store: persistentStore}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+
+	out, handled, err := submitter.HandleCommand(t.Context(), "/memory add prefer compact memory panel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, "Memory saved") {
+		t.Fatalf("unexpected add output handled=%v out=%q", handled, out)
+	}
+	out, handled, err = submitter.HandleCommand(t.Context(), "/memory search compact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, "prefer compact memory panel") {
+		t.Fatalf("unexpected search output handled=%v out=%q", handled, out)
+	}
+	out, handled, err = submitter.HandleCommand(t.Context(), "/memory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, "prefer compact memory panel") {
+		t.Fatalf("unexpected list output handled=%v out=%q", handled, out)
+	}
+}
+
 type blockingShellExecutor struct {
 	started chan struct{}
 	done    chan struct{}

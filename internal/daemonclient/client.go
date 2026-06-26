@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/Lioooooo123/liora/internal/capabilities"
+	"github.com/Lioooooo123/liora/internal/store"
 	"github.com/Lioooooo123/liora/internal/task"
 )
 
@@ -86,6 +87,40 @@ func (c *Client) Capabilities(ctx context.Context) (Capabilities, error) {
 	var result Capabilities
 	if err := c.getJSON(ctx, "/v1/capabilities", &result); err != nil {
 		return Capabilities{}, err
+	}
+	return result, nil
+}
+
+func (c *Client) ListMemories(ctx context.Context, limit int) ([]store.Memory, error) {
+	return c.SearchMemories(ctx, "", limit)
+}
+
+func (c *Client) SearchMemories(ctx context.Context, query string, limit int) ([]store.Memory, error) {
+	values := url.Values{}
+	if strings.TrimSpace(query) != "" {
+		values.Set("q", query)
+	}
+	if limit > 0 {
+		values.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	path := "/v1/memories"
+	if encoded := values.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	var result []store.Memory
+	if err := c.getJSON(ctx, path, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *Client) AddMemory(ctx context.Context, text string) (store.Memory, error) {
+	var result store.Memory
+	body := struct {
+		Text string `json:"text"`
+	}{Text: text}
+	if err := c.postJSON(ctx, "/v1/memories", body, &result, http.StatusCreated); err != nil {
+		return store.Memory{}, err
 	}
 	return result, nil
 }

@@ -121,6 +121,40 @@ func TestClientCapabilitiesAndTaskLifecycle(t *testing.T) {
 	}
 }
 
+func TestClientMemoryLifecycle(t *testing.T) {
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: task.NewRepository(db), Store: persistentStore}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	created, err := client.AddMemory(t.Context(), "remember workspace mood")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == "" || created.Text != "remember workspace mood" {
+		t.Fatalf("unexpected created memory %#v", created)
+	}
+	memories, err := client.ListMemories(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(memories) != 1 || memories[0].Text != created.Text {
+		t.Fatalf("unexpected memories %#v", memories)
+	}
+	matches, err := client.SearchMemories(t.Context(), "mood", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 || matches[0].ID != created.ID {
+		t.Fatalf("unexpected search matches %#v", matches)
+	}
+}
+
 func TestClientSessionLifecycle(t *testing.T) {
 	workspace := t.TempDir()
 	repo, closeDB := newTestRepository(t)

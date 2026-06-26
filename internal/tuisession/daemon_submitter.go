@@ -9,6 +9,7 @@ import (
 
 	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/daemonclient"
+	"github.com/Lioooooo123/liora/internal/store"
 	taskpkg "github.com/Lioooooo123/liora/internal/task"
 	"github.com/Lioooooo123/liora/internal/trace"
 	"github.com/Lioooooo123/liora/internal/tui"
@@ -197,6 +198,8 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		return s.showTranscript(ctx, "")
 	case "/history", "/search-history":
 		return "Usage: /history <query>", true, nil
+	case "/memory":
+		return s.handleMemory(ctx, "list")
 	case "/last":
 		return s.replayLastTask(ctx)
 	default:
@@ -228,6 +231,9 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		if strings.HasPrefix(line, "/search-history ") {
 			return s.searchHistory(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/search-history ")))
 		}
+		if strings.HasPrefix(line, "/memory ") {
+			return s.handleMemory(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/memory ")))
+		}
 		if strings.HasPrefix(line, "/watch ") {
 			return s.watchTasks(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/watch ")))
 		}
@@ -248,6 +254,43 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		}
 		return "", false, nil
 	}
+}
+
+func (s *DaemonSubmitter) handleMemory(ctx context.Context, args string) (string, bool, error) {
+	command, rest, _ := strings.Cut(strings.TrimSpace(args), " ")
+	switch strings.TrimSpace(command) {
+	case "", "list":
+		memories, err := s.client.ListMemories(ctx, 10)
+		if err != nil {
+			return "", true, err
+		}
+		return formatMemories(memories), true, nil
+	case "add":
+		memory, err := s.client.AddMemory(ctx, rest)
+		if err != nil {
+			return "", true, err
+		}
+		return "Memory saved: " + memory.Text, true, nil
+	case "search":
+		memories, err := s.client.SearchMemories(ctx, rest, 10)
+		if err != nil {
+			return "", true, err
+		}
+		return formatMemories(memories), true, nil
+	default:
+		return "Usage: /memory list | /memory add <text> | /memory search <query>", true, nil
+	}
+}
+
+func formatMemories(memories []store.Memory) string {
+	if len(memories) == 0 {
+		return "No memories found."
+	}
+	lines := make([]string, 0, len(memories))
+	for _, memory := range memories {
+		lines = append(lines, "- "+memory.Text)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (s *DaemonSubmitter) tailTask(ctx context.Context, args string) (string, bool, error) {

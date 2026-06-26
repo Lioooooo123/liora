@@ -109,21 +109,38 @@ func (s *Store) ClearGoal() error {
 }
 
 func (s *Store) AddMemory(text string) error {
+	_, err := s.CreateMemory(text)
+	return err
+}
+
+func (s *Store) CreateMemory(text string) (Memory, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return errors.New("memory text is required")
+		return Memory{}, errors.New("memory text is required")
 	}
 	db, err := s.OpenDB()
 	if err != nil {
-		return err
+		return Memory{}, err
 	}
 	defer db.Close()
 	now := time.Now().UTC()
+	memory := Memory{
+		ID:         newID(),
+		Text:       text,
+		Kind:       "note",
+		Source:     "manual",
+		Importance: 3,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
 	_, err = db.Exec(`
 		INSERT INTO memories (id, text, kind, mood, source, importance, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, newID(), text, "note", "", "manual", 3, formatTime(now), formatTime(now))
-	return err
+	`, memory.ID, memory.Text, memory.Kind, memory.Mood, memory.Source, memory.Importance, formatTime(memory.CreatedAt), formatTime(memory.UpdatedAt))
+	if err != nil {
+		return Memory{}, err
+	}
+	return memory, nil
 }
 
 func (s *Store) ListMemories(limit int) ([]Memory, error) {

@@ -275,7 +275,7 @@ LIORA_HOME=/tmp/liora-home liora
 支持的本地数据：
 
 - `goal.txt`：当前目标，由 `/goal set <text>` 写入。
-- `liora.db`：SQLite 本地数据库，保存长期记忆，由 `/memory add <text>` 写入。
+- `liora.db`：SQLite 本地数据库，保存长期记忆，由 `/memory add <text>` 或 daemon `POST /v1/memories` 写入。
 - `memory.jsonl`：旧版记忆文件；首次启动 SQLite store 时会自动导入到 `liora.db`。
 - `skills/<name>/SKILL.md`：全局 skill。
 - 项目内 `.liora/skills/<name>/SKILL.md`：当前 workspace 的项目级 skill。
@@ -442,6 +442,9 @@ curl http://127.0.0.1:18080/v1/tasks/<task-id>/cancel \
 
 ```text
 GET  /healthz
+GET  /v1/capabilities
+GET  /v1/memories
+POST /v1/memories
 GET  /v1/workbench
 GET  /v1/timeline/search
 POST /v1/tasks
@@ -462,9 +465,11 @@ GET  /v1/sessions/{id}/tasks
 GET  /v1/sessions/{id}/timeline
 ```
 
+`GET /v1/memories?q=<query>&limit=N` 支持列出或搜索 SQLite 记忆，`POST /v1/memories` 写入手动记忆。daemon-backed TUI 的 `/memory list|add|search` 会走这组 API，因此未来 Mac 客户端可以复用同一条 memory core path。
+
 `GET /v1/tasks`、`GET /v1/sessions`、`GET /v1/workbench` 和 `GET /v1/timeline/search?q=<query>` 支持 `?workspace=<absolute-path>&limit=N` 过滤。`/v1/workbench` 会一次返回 sessions、active tasks、recent tasks 和 pending approvals，TUI 和未来客户端可用它构建多 workspace / 多 session 工作台。
 
-Go client 层提供 `StreamEvents(ctx, taskID)` 和 `StreamTaskEvents(ctx, taskIDs)`。后者会通过 daemon 原生 `GET /v1/tasks/events/stream?task_id=...` 单连接订阅多个 task，并聚合成带 `TaskID` 的事件流，TUI 和未来 Mac 客户端可以直接复用它构建多 session / 多任务视图。
+Go client 层提供 `ListMemories`、`SearchMemories`、`AddMemory`、`StreamEvents(ctx, taskID)` 和 `StreamTaskEvents(ctx, taskIDs)`。后者会通过 daemon 原生 `GET /v1/tasks/events/stream?task_id=...` 单连接订阅多个 task，并聚合成带 `TaskID` 的事件流，TUI 和未来 Mac 客户端可以直接复用它构建多 session / 多任务视图。
 
 ## 测试
 
@@ -484,7 +489,7 @@ LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scr
 - `internal/tui`：交互循环和单轮结果渲染，不直接执行工具；默认通过 embedded daemon 访问任务事件流。
 - `internal/runtime`：连接 Planner 和 Agent，是交互模式的一轮执行编排层。
 - `internal/llm`：多供应商 LLM client 和自然语言 Planner。
-- `internal/store`：goal、memory、skill 和 MCP 配置的本地持久化。
+- `internal/store`：goal、memory、skill 和 MCP 配置的本地持久化；daemon 对 memory 暴露结构化 API。
 - `internal/mcp`：stdio MCP client 和 server/tool manager。
 - `internal/agent`：解析工具步骤并调度工具。
 - `internal/tools`：workspace 内的文件、搜索、目录查看和 Shell 能力。

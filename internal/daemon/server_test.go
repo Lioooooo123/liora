@@ -149,6 +149,49 @@ func TestServerServesCapabilities(t *testing.T) {
 	}
 }
 
+func TestServerServesMemoryAPI(t *testing.T) {
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := httptest.NewServer(NewServer(Config{Repository: taskpkg.NewRepository(db), Store: persistentStore}))
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/v1/memories", "application/json", strings.NewReader(`{"text":"prefer tiny local ui"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("unexpected create status %d", resp.StatusCode)
+	}
+	var created store.Memory
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == "" || created.Text != "prefer tiny local ui" {
+		t.Fatalf("unexpected created memory %#v", created)
+	}
+
+	resp, err = http.Get(server.URL + "/v1/memories?q=tiny")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected search status %d", resp.StatusCode)
+	}
+	var memories []store.Memory
+	if err := json.NewDecoder(resp.Body).Decode(&memories); err != nil {
+		t.Fatal(err)
+	}
+	if len(memories) != 1 || memories[0].Text != "prefer tiny local ui" {
+		t.Fatalf("unexpected memories %#v", memories)
+	}
+}
+
 func TestServerServesMCPToolsInCapabilities(t *testing.T) {
 	if os.Getenv("LIORA_DAEMON_FAKE_MCP_SERVER") == "1" {
 		runDaemonFakeMCPServer()

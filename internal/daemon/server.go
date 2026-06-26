@@ -41,6 +41,7 @@ func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
+	mux.HandleFunc("/v1/memories", s.handleMemories)
 	mux.HandleFunc("/v1/workbench", s.handleWorkbench)
 	mux.HandleFunc("/v1/timeline/search", s.handleTimelineSearch)
 	mux.HandleFunc("/v1/sessions", s.handleSessions)
@@ -78,6 +79,49 @@ func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		body["mcp_tools"] = mcpTools
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+func (s *server) handleMemories(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusInternalServerError, errors.New("store is not configured"))
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		query := r.URL.Query().Get("q")
+		var (
+			memories []store.Memory
+			err      error
+		)
+		if strings.TrimSpace(query) == "" {
+			memories, err = s.store.ListMemories(limit)
+		} else {
+			memories, err = s.store.SearchMemories(query, limit)
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, memories)
+	case http.MethodPost:
+		var request struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		memory, err := s.store.CreateMemory(request.Text)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, memory)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+	}
 }
 
 func (s *server) mcpTools(ctx context.Context) ([]capabilities.MCPToolSpec, error) {

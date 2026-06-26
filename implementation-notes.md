@@ -327,3 +327,9 @@
 - daemon 新增 `GET /v1/tasks/events/stream?task_id=...&task_id=...`，单条 SSE 连接可订阅多个 task。每个 SSE frame 的 `data` 是 envelope：`{"task_id": "...", "payload": {...}}`，`event` 仍保持原 task event type。
 - `daemonclient.StreamTaskEvents` 从 client-side goroutine fan-in 改为消费 daemon 原生多任务 SSE，减少未来 TUI/Mac 客户端重复实现多连接聚合的负担。
 - repository 新增 `SubscribeEventsAny`，内部仍复用 per-task subscriber，并用 `sync.Once` 做 fan-in，避免同一 channel 注册到多个 task 后被重复 close。多任务 stream 仍按每个 task 的 `seq` 增量读取，保留低频 fallback。
+
+## 2026-06-26 Daemon Memory API
+
+- 本轮没有重做 memory schema，而是把已有 SQLite `memories` 表提升到 daemon/client/TUI 共享合同：`GET /v1/memories?q=...&limit=...` 和 `POST /v1/memories`。这样未来 Mac 客户端不需要直接读 `LIORA_HOME` 文件，也不需要复刻 runtime 命令逻辑。
+- `store.AddMemory` 保持兼容旧调用，新加 `CreateMemory` 返回结构化 `Memory`，方便 API 创建后展示 id/text/kind/source/importance 等字段。
+- daemon-backed TUI 的 `/memory list|add|search` 现在优先走 daemonclient，而不是落回本地 runtime store。当前仍是手动记忆，尚未做自动抽取、embedding 或 last_used_at 更新；这些属于 v0.2 的记忆质量优化。

@@ -39,8 +39,12 @@ func TestStorePersistsAndSearchesMemories(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	if err := s.AddMemory("remember MCP config format"); err != nil {
+	created, err := s.CreateMemory("remember MCP config format")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if created.ID == "" || created.Text != "remember MCP config format" || created.Source != "manual" {
+		t.Fatalf("unexpected created memory %#v", created)
 	}
 	if err := s.AddMemory("prefer concise TUI output"); err != nil {
 		t.Fatal(err)
