@@ -170,6 +170,8 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		return s.listTasks(ctx)
 	case "/sessions":
 		return s.listSessions(ctx)
+	case "/workbench", "/status":
+		return s.showWorkbench(ctx)
 	case "/session":
 		return s.showSession(ctx)
 	case "/resume-latest", "/continue":
@@ -566,7 +568,7 @@ func (s *DaemonSubmitter) denyTask(ctx context.Context, taskID string) (string, 
 }
 
 func (s *DaemonSubmitter) listSessions(ctx context.Context) (string, bool, error) {
-	sessions, err := s.client.ListSessions(ctx, 10)
+	sessions, err := s.client.ListSessionsForWorkspace(ctx, s.workspace, 10)
 	if err != nil {
 		return "", true, err
 	}
@@ -581,6 +583,78 @@ func (s *DaemonSubmitter) listSessions(ctx context.Context) (string, bool, error
 			marker = "*"
 		}
 		lines = append(lines, fmt.Sprintf("%s %s %s (%s)", marker, session.ID, session.Title, formatTaskTime(session.UpdatedAt)))
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) showWorkbench(ctx context.Context) (string, bool, error) {
+	if s.client == nil {
+		return "No daemon client.", true, nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type sessionsResult struct {
+		sessions []taskpkg.Session
+		err      error
+	}
+	type tasksResult struct {
+		tasks []taskpkg.Task
+		err   error
+	}
+	sessionsCh := make(chan sessionsResult, 1)
+	tasksCh := make(chan tasksResult, 1)
+	go func() {
+		sessions, err := s.client.ListSessionsForWorkspace(ctx, s.workspace, 20)
+		sessionsCh <- sessionsResult{sessions: sessions, err: err}
+	}()
+	go func() {
+		tasks, err := s.client.ListTasksForWorkspace(ctx, s.workspace, 50)
+		tasksCh <- tasksResult{tasks: tasks, err: err}
+	}()
+	sessionRes := <-sessionsCh
+	if sessionRes.err != nil {
+		cancel()
+		<-tasksCh
+		return "", true, sessionRes.err
+	}
+	taskRes := <-tasksCh
+	if taskRes.err != nil {
+		return "", true, taskRes.err
+	}
+	current := s.currentSessionID()
+	lines := []string{"Workbench " + s.workspace}
+	lines = append(lines, "Sessions:")
+	if len(sessionRes.sessions) == 0 {
+		lines = append(lines, "- none")
+	} else {
+		for _, session := range sessionRes.sessions {
+			marker := " "
+			if session.ID == current {
+				marker = "*"
+			}
+			lines = append(lines, fmt.Sprintf("- %s %s %s last=%s (%s)", marker, session.ID, session.Title, emptyDash(session.LastTaskID), formatTaskTime(session.UpdatedAt)))
+		}
+	}
+	active := filterActiveTasks(taskRes.tasks)
+	lines = append(lines, "Active tasks:")
+	if len(active) == 0 {
+		lines = append(lines, "- none")
+	} else {
+		for _, task := range active {
+			lines = append(lines, fmt.Sprintf("- %s [%s] %s session=%s", task.ID, task.Status, task.Title, emptyDash(task.SessionID)))
+		}
+	}
+	lines = append(lines, "Recent tasks:")
+	if len(taskRes.tasks) == 0 {
+		lines = append(lines, "- none")
+	} else {
+		limit := len(taskRes.tasks)
+		if limit > 8 {
+			limit = 8
+		}
+		for _, task := range taskRes.tasks[:limit] {
+			lines = append(lines, fmt.Sprintf("- %s [%s] %s (%s)", task.ID, task.Status, task.Title, formatTaskTime(task.UpdatedAt)))
+		}
 	}
 	return strings.Join(lines, "\n"), true, nil
 }
@@ -747,7 +821,7 @@ func (s *DaemonSubmitter) applyLast(ctx context.Context) (string, bool, error) {
 }
 
 func (s *DaemonSubmitter) listTasks(ctx context.Context) (string, bool, error) {
-	tasks, err := s.client.ListTasks(ctx, 10)
+	tasks, err := s.client.ListTasksForWorkspace(ctx, s.workspace, 10)
 	if err != nil {
 		return "", true, err
 	}
@@ -853,14 +927,11 @@ func (s *DaemonSubmitter) resumeLatestWorkspaceSession(ctx context.Context) (tas
 	if s.client == nil || !s.shouldAutoResume() {
 		return taskpkg.Session{}, false, nil
 	}
-	sessions, err := s.client.ListSessions(ctx, 50)
+	sessions, err := s.client.ListSessionsForWorkspace(ctx, s.workspace, 50)
 	if err != nil {
 		return taskpkg.Session{}, false, err
 	}
 	for _, session := range sessions {
-		if session.Workspace != s.workspace {
-			continue
-		}
 		s.rememberSession(session.ID)
 		if session.LastTaskID != "" {
 			s.rememberTask(session.LastTaskID)
@@ -1036,6 +1107,25 @@ func previewLines(value string, maxLines int) []string {
 		}
 	}
 	return lines
+}
+
+func filterActiveTasks(tasks []taskpkg.Task) []taskpkg.Task {
+	var active []taskpkg.Task
+	for _, task := range tasks {
+		switch task.Status {
+		case taskpkg.StatusDraft, taskpkg.StatusPlanning, taskpkg.StatusRunning, taskpkg.StatusWaitingUser:
+			active = append(active, task)
+		}
+	}
+	return active
+}
+
+func emptyDash(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	return value
 }
 
 func firstLine(value string) string {

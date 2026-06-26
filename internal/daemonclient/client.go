@@ -110,10 +110,11 @@ func (c *Client) GetSession(ctx context.Context, sessionID string) (task.Session
 }
 
 func (c *Client) ListSessions(ctx context.Context, limit int) ([]task.Session, error) {
-	path := "/v1/sessions"
-	if limit > 0 {
-		path += fmt.Sprintf("?limit=%d", limit)
-	}
+	return c.ListSessionsForWorkspace(ctx, "", limit)
+}
+
+func (c *Client) ListSessionsForWorkspace(ctx context.Context, workspace string, limit int) ([]task.Session, error) {
+	path := listPath("/v1/sessions", workspace, limit)
 	var result []task.Session
 	if err := c.getJSON(ctx, path, &result); err != nil {
 		return nil, err
@@ -166,15 +167,30 @@ func (c *Client) GetTask(ctx context.Context, taskID string) (task.Task, error) 
 }
 
 func (c *Client) ListTasks(ctx context.Context, limit int) ([]task.Task, error) {
-	path := "/v1/tasks"
-	if limit > 0 {
-		path += fmt.Sprintf("?limit=%d", limit)
-	}
+	return c.ListTasksForWorkspace(ctx, "", limit)
+}
+
+func (c *Client) ListTasksForWorkspace(ctx context.Context, workspace string, limit int) ([]task.Task, error) {
+	path := listPath("/v1/tasks", workspace, limit)
 	var result []task.Task
 	if err := c.getJSON(ctx, path, &result); err != nil {
 		return nil, err
 	}
 	return result, nil
+}
+
+func listPath(base string, workspace string, limit int) string {
+	values := url.Values{}
+	if limit > 0 {
+		values.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	if strings.TrimSpace(workspace) != "" {
+		values.Set("workspace", workspace)
+	}
+	if encoded := values.Encode(); encoded != "" {
+		return base + "?" + encoded
+	}
+	return base
 }
 
 func (c *Client) Events(ctx context.Context, taskID string) ([]task.Event, error) {

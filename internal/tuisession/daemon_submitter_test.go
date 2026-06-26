@@ -409,6 +409,15 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 		t.Fatalf("expected one reused session, got %#v", sessions)
 	}
 	sessionID := sessions[0].ID
+	otherWorkspace := t.TempDir()
+	otherTask, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: otherWorkspace,
+		Prompt:    "other workspace prompt",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	sessionsOutput, handled, err := submitter.HandleCommand(t.Context(), "/sessions")
 	if err != nil {
@@ -416,6 +425,21 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 	}
 	if !handled || !strings.Contains(sessionsOutput, sessionID) || !strings.Contains(sessionsOutput, "* "+sessionID) {
 		t.Fatalf("unexpected /sessions output handled=%v output=%q", handled, sessionsOutput)
+	}
+	if strings.Contains(sessionsOutput, otherTask.SessionID) {
+		t.Fatalf("/sessions should be scoped to current workspace, got %q", sessionsOutput)
+	}
+	workbenchOutput, handled, err := submitter.HandleCommand(t.Context(), "/workbench")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Workbench " + root, "Sessions:", sessionID, "Active tasks:", "Recent tasks:"} {
+		if !handled || !strings.Contains(workbenchOutput, want) {
+			t.Fatalf("expected /workbench output to contain %q handled=%v output=%q", want, handled, workbenchOutput)
+		}
+	}
+	if strings.Contains(workbenchOutput, otherTask.ID) || strings.Contains(workbenchOutput, otherTask.SessionID) {
+		t.Fatalf("/workbench should be scoped to current workspace, got %q", workbenchOutput)
 	}
 
 	sessionOutput, handled, err := submitter.HandleCommand(t.Context(), "/session")
@@ -475,8 +499,8 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 2 {
-		t.Fatalf("expected /new-session to create a second session, got %#v", sessions)
+	if len(sessions) != 3 {
+		t.Fatalf("expected /new-session to create one more current-workspace session, got %#v", sessions)
 	}
 }
 

@@ -132,6 +132,28 @@ func (r *Repository) List(ctx context.Context, limit int) ([]Task, error) {
 	return scanTasks(rows)
 }
 
+func (r *Repository) ListByWorkspace(ctx context.Context, workspace string, limit int) ([]Task, error) {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return r.List(ctx, limit)
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, session_id, title, user_input, natural, status, workspace, approval_granted, created_at, updated_at, completed_at
+		FROM tasks
+		WHERE workspace = ?
+		ORDER BY updated_at DESC, id DESC
+		LIMIT ?
+	`, workspace, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
 func (r *Repository) ListBySession(ctx context.Context, sessionID string, limit int) ([]Task, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -199,6 +221,36 @@ func (r *Repository) ListSessions(ctx context.Context, limit int) ([]Session, er
 		ORDER BY updated_at DESC, id DESC
 		LIMIT ?
 	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sessions []Session
+	for rows.Next() {
+		session, err := scanSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	return sessions, rows.Err()
+}
+
+func (r *Repository) ListSessionsByWorkspace(ctx context.Context, workspace string, limit int) ([]Session, error) {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return r.ListSessions(ctx, limit)
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, title, workspace, last_task_id, created_at, updated_at
+		FROM sessions
+		WHERE workspace = ?
+		ORDER BY updated_at DESC, id DESC
+		LIMIT ?
+	`, workspace, limit)
 	if err != nil {
 		return nil, err
 	}

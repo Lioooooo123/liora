@@ -155,6 +155,28 @@ func TestClientSessionLifecycle(t *testing.T) {
 	if len(sessions) != 1 || sessions[0].LastTaskID != created.Task.ID {
 		t.Fatalf("unexpected sessions %#v", sessions)
 	}
+	otherWorkspace := t.TempDir()
+	if _, err := client.CreateTask(t.Context(), task.CreateRequest{
+		Workspace: otherWorkspace,
+		Prompt:    "other workspace",
+		Natural:   true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	workspaceSessions, err := client.ListSessionsForWorkspace(t.Context(), workspace, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workspaceSessions) != 1 || workspaceSessions[0].ID != sessionResponse.Session.ID {
+		t.Fatalf("unexpected workspace sessions %#v", workspaceSessions)
+	}
+	workspaceTasks, err := client.ListTasksForWorkspace(t.Context(), workspace, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workspaceTasks) != 1 || workspaceTasks[0].ID != created.Task.ID {
+		t.Fatalf("unexpected workspace tasks %#v", workspaceTasks)
+	}
 	messages, err := client.SessionMessages(t.Context(), sessionResponse.Session.ID, 10)
 	if err != nil {
 		t.Fatal(err)

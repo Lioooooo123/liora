@@ -283,3 +283,9 @@
 - 参考本地 Kimi Code 的“持久化 session 可直接继续 prompt”方向，以及 Claude Code 在进入 query 前先写 transcript、assistant 写入可异步 fire-and-forget 的做法；Liora 继续把 session/timeline 放在 daemon + SQLite，TUI 只做投影。
 - `/timeline [limit]` 保持紧凑事件线，`/transcript [limit]` 展开 user、assistant、tool、diff、approval 和 status 内容，默认最多取 100 个 timeline item，最多 300 个。
 - 后续做真正全屏 TUI 时，应继续使用 Go 的 context/goroutine/channel：每个 session/task 独立流式消费 daemon 事件，UI 层按 session id 聚合，避免单个长输出或慢工具阻塞其它 session。
+
+## 2026-06-26 Workspace Workbench
+
+- 参考 Kimi Code session store 的 workDir bucket 行为，daemon 的 `GET /v1/tasks` 和 `GET /v1/sessions` 新增 `workspace` query filter；TUI 的 `/tasks`、`/sessions` 默认只展示当前 workspace。
+- daemon-backed TUI 新增 `/workbench` 与别名 `/status`，展示当前 workspace 的 sessions、active tasks 和 recent tasks。实现上用两个 goroutine 并发拉取 sessions/tasks，并通过 context cancellation 传递错误。
+- 这一步让多 session 可见性留在 daemon/client 合同上，而不是写死在 TUI 私有状态；未来 Mac 客户端可以直接复用 workspace-scoped API 构建多项目工作台。

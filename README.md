@@ -203,6 +203,7 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /skills
 /skill <name>
 /mcp
+/workbench
 /tasks
 /sessions
 /timeline [limit]
@@ -227,6 +228,8 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 TUI 会自动继续当前 workspace 最近的 session，因此重启 `liora` 后可以直接 `/timeline` 或继续输入任务。需要手动接回最近 session 时可用 `/resume-latest`；想从干净上下文开始下一轮任务时可用 `/new-session`。
 
 `/timeline [limit]` 展示紧凑会话事件线，`/transcript [limit]` 展开 user、assistant、tool、diff、approval 和 status 内容，适合回看长会话；两者都来自 daemon 的 session timeline API。
+
+`/workbench` 展示当前 workspace 下的 session、active tasks 和 recent tasks。`/tasks` 与 `/sessions` 默认也按当前 workspace 过滤，避免多个项目的任务混在一起。
 
 任务 streaming 期间可以直接输入 `/cancel` 中止当前任务；其它命令会在当前任务结束后按顺序执行，避免 `/apply` 或 `/exit` 抢在结果和 diff 之前生效。
 
@@ -446,6 +449,8 @@ GET  /v1/sessions/{id}/messages
 GET  /v1/sessions/{id}/tasks
 GET  /v1/sessions/{id}/timeline
 ```
+
+`GET /v1/tasks` 和 `GET /v1/sessions` 支持 `?workspace=<absolute-path>&limit=N` 过滤，TUI 和未来客户端可用它构建多 workspace / 多 session 工作台。
 
 ## 测试
 

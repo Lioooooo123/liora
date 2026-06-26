@@ -119,7 +119,8 @@ func (s *server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-		tasks, err := s.repo.List(r.Context(), limit)
+		workspace := r.URL.Query().Get("workspace")
+		tasks, err := s.repo.ListByWorkspace(r.Context(), workspace, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -170,7 +171,8 @@ func (s *server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-		sessions, err := s.repo.ListSessions(r.Context(), limit)
+		workspace := r.URL.Query().Get("workspace")
+		sessions, err := s.repo.ListSessionsByWorkspace(r.Context(), workspace, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
