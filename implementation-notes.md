@@ -271,3 +271,9 @@
 - daemon-backed TUI 新增 `/approvals` 与别名 `/pending`，通过 task list + permission.requested event 展示等待审批任务、工具输入、风险类型和原因。
 - `/approve` 和 `/deny` 保留无参处理最近 task 的兼容行为，同时新增 `/approve <task_id>`、`/deny <task_id>`，避免多任务等待审批时误操作。
 - 这仍是 task 级授权队列，不是逐步 tool approval。它先补齐 line-based TUI 的可见性；后续全屏 TUI 或 Mac 客户端应基于相同事件数据做逐步审批弹窗。
+
+## 2026-06-26 TUI Session Auto Resume
+
+- daemon-backed TUI 在首次提交任务、`/session` 或 `/timeline` 时，如果当前进程还未绑定 session，会自动接回同 workspace 最近更新的 session。
+- 新增 `/resume-latest` 用于显式接回最近 session，新增 `/new-session` 用于让下一条任务强制创建新 session，避免自动恢复让用户无法从干净上下文开始。
+- 自动恢复只按 workspace 精确匹配，不跨目录复用 session；这保持本地项目隔离，也让未来 Mac 客户端可以复用同一规则做“继续上次工作”入口。

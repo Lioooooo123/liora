@@ -23,6 +23,7 @@ type DaemonSubmitter struct {
 	currentTaskID string
 	lastTaskID    string
 	lastDiff      string
+	newSession    bool
 }
 
 func NewDaemonSubmitter(client *daemonclient.Client, workspace string, natural bool) *DaemonSubmitter {
@@ -37,10 +38,20 @@ func (s *DaemonSubmitter) SubmitStream(ctx context.Context, input string, onEven
 	if s.client == nil {
 		return tui.TurnResult{}, fmt.Errorf("daemon client is required")
 	}
+	sessionID := s.currentSessionID()
+	if sessionID == "" {
+		resumed, ok, err := s.resumeLatestWorkspaceSession(ctx)
+		if err != nil {
+			return tui.TurnResult{}, err
+		}
+		if ok {
+			sessionID = resumed.ID
+		}
+	}
 	created, err := s.client.CreateTask(ctx, taskpkg.CreateRequest{
 		Workspace: s.workspace,
 		Prompt:    input,
-		SessionID: s.currentSessionID(),
+		SessionID: sessionID,
 		Natural:   s.natural,
 		RunAsync:  true,
 	})
@@ -161,6 +172,10 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		return s.listSessions(ctx)
 	case "/session":
 		return s.showSession(ctx)
+	case "/resume-latest", "/continue":
+		return s.resumeLatest(ctx)
+	case "/new-session":
+		return s.newSessionCommand()
 	case "/timeline", "/transcript":
 		return s.showTimeline(ctx)
 	case "/last":
@@ -288,7 +303,14 @@ func (s *DaemonSubmitter) showTools(ctx context.Context) (string, bool, error) {
 func (s *DaemonSubmitter) showTimeline(ctx context.Context) (string, bool, error) {
 	sessionID := s.currentSessionID()
 	if sessionID == "" {
-		return "No current daemon session.", true, nil
+		session, ok, err := s.resumeLatestWorkspaceSession(ctx)
+		if err != nil {
+			return "", true, err
+		}
+		if !ok {
+			return "No current daemon session.", true, nil
+		}
+		sessionID = session.ID
 	}
 	timeline, err := s.client.SessionTimeline(ctx, sessionID, 50)
 	if err != nil {
@@ -459,9 +481,39 @@ func (s *DaemonSubmitter) listSessions(ctx context.Context) (string, bool, error
 func (s *DaemonSubmitter) showSession(ctx context.Context) (string, bool, error) {
 	sessionID := s.currentSessionID()
 	if sessionID == "" {
-		return "No current daemon session.", true, nil
+		session, ok, err := s.resumeLatestWorkspaceSession(ctx)
+		if err != nil {
+			return "", true, err
+		}
+		if !ok {
+			return "No current daemon session.", true, nil
+		}
+		sessionID = session.ID
 	}
 	return s.resumeSession(ctx, sessionID)
+}
+
+func (s *DaemonSubmitter) resumeLatest(ctx context.Context) (string, bool, error) {
+	session, ok, err := s.resumeLatestWorkspaceSession(ctx)
+	if err != nil {
+		return "", true, err
+	}
+	if !ok {
+		return "No previous daemon session for this workspace.", true, nil
+	}
+	return strings.Join([]string{
+		"Resumed session " + session.ID + ".",
+		"Title: " + session.Title,
+		"Next: use /timeline or continue typing a task.",
+	}, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) newSessionCommand() (string, bool, error) {
+	s.startNewSession()
+	return strings.Join([]string{
+		"New session will be created for the next task.",
+		"Next: type a request, or use /resume-latest to reattach the latest workspace session.",
+	}, "\n"), true, nil
 }
 
 func (s *DaemonSubmitter) resumeSession(ctx context.Context, sessionID string) (string, bool, error) {
@@ -666,12 +718,49 @@ func (s *DaemonSubmitter) rememberSession(sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sessionID = sessionID
+	s.newSession = false
 }
 
 func (s *DaemonSubmitter) currentSessionID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sessionID
+}
+
+func (s *DaemonSubmitter) startNewSession() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionID = ""
+	s.lastTaskID = ""
+	s.lastDiff = ""
+	s.newSession = true
+}
+
+func (s *DaemonSubmitter) shouldAutoResume() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.newSession
+}
+
+func (s *DaemonSubmitter) resumeLatestWorkspaceSession(ctx context.Context) (taskpkg.Session, bool, error) {
+	if s.client == nil || !s.shouldAutoResume() {
+		return taskpkg.Session{}, false, nil
+	}
+	sessions, err := s.client.ListSessions(ctx, 50)
+	if err != nil {
+		return taskpkg.Session{}, false, err
+	}
+	for _, session := range sessions {
+		if session.Workspace != s.workspace {
+			continue
+		}
+		s.rememberSession(session.ID)
+		if session.LastTaskID != "" {
+			s.rememberTask(session.LastTaskID)
+		}
+		return session, true, nil
+	}
+	return taskpkg.Session{}, false, nil
 }
 
 func (s *DaemonSubmitter) rememberTask(taskID string) {

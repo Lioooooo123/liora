@@ -429,6 +429,22 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 	}
 
 	fresh := newTestSubmitter(t, server.URL, root, true)
+	timelineOutput, handled, err := fresh.HandleCommand(t.Context(), "/timeline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Timeline " + sessionID, "user: first prompt", "user: second prompt", "tool.result", "completed 1 step"} {
+		if !handled || !strings.Contains(timelineOutput, want) {
+			t.Fatalf("expected auto-resumed /timeline output to contain %q handled=%v output=%q", want, handled, timelineOutput)
+		}
+	}
+	resumeLatestOutput, handled, err := fresh.HandleCommand(t.Context(), "/resume-latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(resumeLatestOutput, "Resumed session "+sessionID) {
+		t.Fatalf("unexpected /resume-latest output handled=%v output=%q", handled, resumeLatestOutput)
+	}
 	resumeOutput, handled, err := fresh.HandleCommand(t.Context(), "/resume-session "+sessionID)
 	if err != nil {
 		t.Fatal(err)
@@ -436,14 +452,22 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 	if !handled || !strings.Contains(resumeOutput, "Session "+sessionID) || !strings.Contains(resumeOutput, "second prompt") {
 		t.Fatalf("unexpected /resume-session output handled=%v output=%q", handled, resumeOutput)
 	}
-	timelineOutput, handled, err := fresh.HandleCommand(t.Context(), "/timeline")
+	newOutput, handled, err := fresh.HandleCommand(t.Context(), "/new-session")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Timeline " + sessionID, "user: first prompt", "user: second prompt", "tool.result", "completed 1 step"} {
-		if !handled || !strings.Contains(timelineOutput, want) {
-			t.Fatalf("expected /timeline output to contain %q handled=%v output=%q", want, handled, timelineOutput)
-		}
+	if !handled || !strings.Contains(newOutput, "New session will be created") {
+		t.Fatalf("unexpected /new-session output handled=%v output=%q", handled, newOutput)
+	}
+	if _, err := fresh.SubmitStream(t.Context(), "third prompt", nil); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err = repo.ListSessions(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("expected /new-session to create a second session, got %#v", sessions)
 	}
 }
 

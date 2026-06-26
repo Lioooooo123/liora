@@ -39,6 +39,7 @@ Liora v0.1 是本地 Mac 上的轻量 agent 工坊。
 - 使用 SQLite 保存任务、事件、记忆和配置相关数据。
 - 基础记忆能力可用：添加、列出、搜索记忆，并能注入 planner 上下文。
 - 任务历史可查询，事件可回放，客户端重连后能恢复任务时间线。
+- TUI 重启后应默认接回同 workspace 最近 session；用户也能显式 `/new-session` 从新上下文开始。
 
 ### 4. Sandbox 与安全边界
 
@@ -63,7 +64,7 @@ Liora v0.1 是本地 Mac 上的轻量 agent 工坊。
 - `LIORA_HOME=$(mktemp -d) LIORA_DAEMON_ADDR=127.0.0.1:19089 ./scripts/daemon-smoke.sh "$PWD"` 通过。
 - `LIORA_TUI_SMOKE_DAEMON_ADDR=127.0.0.1:19090 LIORA_TUI_SMOKE_LLM_ADDR=127.0.0.1:19091 ./scripts/tui-smoke.sh "$PWD"` 通过。
 - `LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scripts/coding-eval.sh` 通过。
-- smoke、eval 和 CLI 测试覆盖至少一个 natural coding task、一个 document-read task、一个 MCP external tool task、一个 daemon capabilities MCP tools view、一个 failed task diagnostic path、一个 multi-file patch task、一个 failed-tool replan task、一个 apply API 调用、一个 TUI `/diff` preview path、一个 large-output truncation task、一个 permission approve/deny task、一个 TUI approval queue path、一个 running cancel task、一个 child-process cleanup case、一个 SSE 事件流、一个 daemon-backed TUI timeline、一个 TUI `/tail` history view、一个默认 embedded-daemon TUI timeline 和一个 TUI running cancel。
+- smoke、eval 和 CLI 测试覆盖至少一个 natural coding task、一个 document-read task、一个 MCP external tool task、一个 daemon capabilities MCP tools view、一个 failed task diagnostic path、一个 multi-file patch task、一个 failed-tool replan task、一个 apply API 调用、一个 TUI `/diff` preview path、一个 large-output truncation task、一个 permission approve/deny task、一个 TUI approval queue path、一个 TUI auto-resume session path、一个 TUI new-session path、一个 running cancel task、一个 child-process cleanup case、一个 SSE 事件流、一个 daemon-backed TUI timeline、一个 TUI `/tail` history view、一个默认 embedded-daemon TUI timeline 和一个 TUI running cancel。
 - `implementation-notes.md` 已记录所有重要技术取舍和后续风险。
 - `git status --short --branch` 显示本地分支和 `origin/main` 同步且无未提交改动。
 
