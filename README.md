@@ -478,7 +478,10 @@ GOTOOLCHAIN=local go test -count=1 ./...
 LIORA_HOME=$(mktemp -d) LIORA_DAEMON_ADDR=127.0.0.1:19089 ./scripts/daemon-smoke.sh "$PWD"
 LIORA_TUI_SMOKE_DAEMON_ADDR=127.0.0.1:19090 LIORA_TUI_SMOKE_LLM_ADDR=127.0.0.1:19091 ./scripts/tui-smoke.sh "$PWD"
 LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scripts/coding-eval.sh
+./scripts/v0.1-exit-audit.sh "$PWD"
 ```
+
+`v0.1-exit-audit.sh` 是当前长期目标的最终收敛验收入口；开发中可用 `--skip-git-clean` 跳过工作区干净检查，真正结束目标时必须在已推送的干净 `main` 上直接运行通过。
 
 ## 架构分层
 

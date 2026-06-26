@@ -333,3 +333,9 @@
 - 本轮没有重做 memory schema，而是把已有 SQLite `memories` 表提升到 daemon/client/TUI 共享合同：`GET /v1/memories?q=...&limit=...` 和 `POST /v1/memories`。这样未来 Mac 客户端不需要直接读 `LIORA_HOME` 文件，也不需要复刻 runtime 命令逻辑。
 - `store.AddMemory` 保持兼容旧调用，新加 `CreateMemory` 返回结构化 `Memory`，方便 API 创建后展示 id/text/kind/source/importance 等字段。
 - daemon-backed TUI 的 `/memory list|add|search` 现在优先走 daemonclient，而不是落回本地 runtime store。当前仍是手动记忆，尚未做自动抽取、embedding 或 last_used_at 更新；这些属于 v0.2 的记忆质量优化。
+
+## 2026-06-26 v0.1 Exit Audit
+
+- 用户指出长期目标需要可收敛，否则“对标 Kimi Code / Claude Code”会无限扩范围。本轮新增 `docs/v0.1-exit-audit.md`，把当前 active goal 收敛为 v0.1 P0 evidence matrix，并明确 Mac 原生 App、Bubble Tea 全屏 TUI、Docker 默认化、逐步授权弹窗、自动记忆抽取等为 v0.2+ 非阻塞项。
+- 新增 `scripts/v0.1-exit-audit.sh` 作为最终验收入口，串联 `go test`、`git diff --check`、daemon smoke、TUI smoke、coding eval、install、package、release smoke 和 git clean/sync check。开发中可用 `--skip-git-clean`，但目标结束必须在干净且已推送的 `main` 上不带 skip 参数通过。
+- `docs/mvp-exit-benchmark.md` 现在以 exit audit 为最终收敛口径；`scripts/package-release.sh` 会把 exit audit 文档打进 release 包，方便使用者理解当前 v0.1 边界。
