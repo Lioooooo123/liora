@@ -603,6 +603,34 @@ func (r *Repository) SubscribeEvents(ctx context.Context, taskID string) (<-chan
 	return ch, unsubscribe
 }
 
+func (r *Repository) SubscribeEventsAny(ctx context.Context, taskIDs []string) (<-chan struct{}, func()) {
+	ids := uniqueNonEmpty(taskIDs)
+	ctx, cancel := context.WithCancel(ctx)
+	notify := make(chan struct{})
+	var once sync.Once
+	unsubscribers := make([]func(), 0, len(ids))
+	for _, taskID := range ids {
+		taskCh, unsubscribe := r.SubscribeEvents(ctx, taskID)
+		unsubscribers = append(unsubscribers, unsubscribe)
+		go func() {
+			select {
+			case <-ctx.Done():
+			case <-taskCh:
+				once.Do(func() {
+					close(notify)
+				})
+			}
+		}()
+	}
+	unsubscribe := func() {
+		cancel()
+		for _, unsubscribe := range unsubscribers {
+			unsubscribe()
+		}
+	}
+	return notify, unsubscribe
+}
+
 func (r *Repository) notifyEventSubscribers(taskID string) {
 	r.subscribersMu.Lock()
 	subscribers := r.subscribers[taskID]
@@ -628,6 +656,23 @@ func (r *Repository) removeEventSubscriber(taskID string, ch chan struct{}) {
 		return
 	}
 	r.subscribers[taskID] = subscribers
+}
+
+func uniqueNonEmpty(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	return unique
 }
 
 func (r *Repository) Events(ctx context.Context, taskID string, limit int) ([]Event, error) {

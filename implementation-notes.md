@@ -292,10 +292,10 @@
 
 ## 2026-06-26 Multi Task Event Stream
 
-- daemonclient 新增 `StreamTaskEvents(ctx, taskIDs)`，用每个 task 一个 goroutine 消费现有 SSE，再聚合成带 `TaskID` 的 channel。这样 TUI、CLI 自动化和未来 Mac 客户端都可以复用同一套多任务事件订阅能力。
+- daemonclient 新增 `StreamTaskEvents(ctx, taskIDs)`，最初用每个 task 一个 goroutine 消费现有 SSE，再聚合成带 `TaskID` 的 channel；后续已经升级为消费 daemon 原生多任务 SSE，保留同一个 Go API 给 TUI、CLI 自动化和未来 Mac 客户端复用。
 - 设计参考了 Claude Code 的 per-conversation engine 隔离思路，以及 Kimi Code 按 workspace/session 管理历史的方向：核心状态仍在 daemon/session/task/event，入口层只负责投影和交互。
-- 聚合流使用 child context 统一取消；任一子流出现传输错误时会取消整组订阅并通过 buffered error channel 返回首个错误。调用方停止消费时必须取消 context，否则 channel send 仍会等待，这是 Go channel API 的显式背压语义。
-- 当前没有新增 daemon 批量 SSE API，原因是 client-side fan-in 已能满足 TUI/Mac 客户端共享需求，且不改变已有 HTTP 合同。后续如果任务数量很多，再考虑 daemon 原生 `/v1/tasks/events/stream?ids=...` 来降低连接数。
+- 多任务流现在由 daemon 端统一按 task seq 增量读取并 fan-in 通知；任一 HTTP 传输错误会通过 buffered error channel 返回。调用方停止消费时仍必须取消 context，否则 channel send 会等待，这是 Go channel API 的显式背压语义。
+- daemon 原生 `/v1/tasks/events/stream?task_id=...` 已落地，目的是降低多任务观察时的连接数，并让未来 Mac 客户端无需重新实现多连接聚合。
 
 ## 2026-06-26 TUI Multi Task Watch
 
@@ -321,3 +321,9 @@
 - repository 新增 `SearchTimeline(workspace, query, limit)`，daemon 暴露 `GET /v1/timeline/search?q=...&workspace=...`，daemonclient 暴露 `SearchTimeline`。搜索覆盖 user message、assistant summary、tool input/output、diff、approval/status 等 timeline 投影文本。
 - daemon-backed TUI 新增 `/history <query>` 和 `/search-history <query>`。这让用户重启后可以按关键词找回历史任务，而不是只能知道 session id 后手动 `/timeline` 翻页。
 - 当前搜索是基于现有 session/timeline 投影的轻量实现，不新增 materialized transcript 表；结果按时间倒序返回。后续如果要做长期全文搜索、embedding 或 compaction，再单独落 transcript/search 表。
+
+## 2026-06-26 Daemon Multi Task SSE
+
+- daemon 新增 `GET /v1/tasks/events/stream?task_id=...&task_id=...`，单条 SSE 连接可订阅多个 task。每个 SSE frame 的 `data` 是 envelope：`{"task_id": "...", "payload": {...}}`，`event` 仍保持原 task event type。
+- `daemonclient.StreamTaskEvents` 从 client-side goroutine fan-in 改为消费 daemon 原生多任务 SSE，减少未来 TUI/Mac 客户端重复实现多连接聚合的负担。
+- repository 新增 `SubscribeEventsAny`，内部仍复用 per-task subscriber，并用 `sync.Once` 做 fan-in，避免同一 channel 注册到多个 task 后被重复 close。多任务 stream 仍按每个 task 的 `seq` 增量读取，保留低频 fallback。

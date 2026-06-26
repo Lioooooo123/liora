@@ -364,6 +364,10 @@ func (s *server) handleTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("task id is required"))
 		return
 	}
+	if len(parts) == 2 && parts[0] == "events" && parts[1] == "stream" {
+		s.handleTasksEventStream(w, r)
+		return
+	}
 	taskID := parts[0]
 	if len(parts) == 1 {
 		if r.Method != http.MethodGet {
@@ -409,6 +413,20 @@ func (s *server) handleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusNotFound, fmt.Errorf("unknown task route %q", r.URL.Path))
+}
+
+func (s *server) handleTasksEventStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		return
+	}
+	taskIDs := taskIDsFromQuery(r)
+	if len(taskIDs) == 0 {
+		writeError(w, http.StatusBadRequest, errors.New("task_id is required"))
+		return
+	}
+	s.writeTaskEventStream(w, r, taskIDs)
 }
 
 func (s *server) handleTaskApproval(w http.ResponseWriter, r *http.Request, taskID string) {
@@ -611,6 +629,58 @@ func (s *server) writeEventStream(w http.ResponseWriter, r *http.Request, taskID
 	}
 }
 
+func (s *server) writeTaskEventStream(w http.ResponseWriter, r *http.Request, taskIDs []string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher, _ := w.(http.Flusher)
+	lastSeq := make(map[string]int64, len(taskIDs))
+	done := make(map[string]bool, len(taskIDs))
+	for {
+		allDone := true
+		for _, taskID := range taskIDs {
+			if done[taskID] {
+				continue
+			}
+			allDone = false
+			taskDone, nextSeq, err := s.writeAvailableTaskEvents(r.Context(), w, flusher, taskID, lastSeq[taskID])
+			if err != nil {
+				fmt.Fprintf(w, "event: task.error\ndata: %s\n\n", taskSSEData(taskID, quoteSSEData(err.Error())))
+				if flusher != nil {
+					flusher.Flush()
+				}
+				return
+			}
+			lastSeq[taskID] = nextSeq
+			if taskDone {
+				done[taskID] = true
+			}
+		}
+		if allDone || len(done) == len(taskIDs) {
+			return
+		}
+		var pending []string
+		for _, taskID := range taskIDs {
+			if !done[taskID] {
+				pending = append(pending, taskID)
+			}
+		}
+		notification, unsubscribe := s.repo.SubscribeEventsAny(r.Context(), pending)
+		timer := time.NewTimer(eventStreamFallbackInterval)
+		select {
+		case <-r.Context().Done():
+			timer.Stop()
+			unsubscribe()
+			return
+		case <-notification:
+			timer.Stop()
+			unsubscribe()
+		case <-timer.C:
+			unsubscribe()
+		}
+	}
+}
+
 func (s *server) writeAvailableEvents(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, taskID string, afterSeq int64) (bool, int64, error) {
 	events, err := s.repo.EventsAfter(ctx, taskID, afterSeq, 0)
 	if err != nil {
@@ -634,6 +704,73 @@ func (s *server) writeAvailableEvents(ctx context.Context, w http.ResponseWriter
 		flusher.Flush()
 	}
 	return done, lastSeq, nil
+}
+
+func (s *server) writeAvailableTaskEvents(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, taskID string, afterSeq int64) (bool, int64, error) {
+	events, err := s.repo.EventsAfter(ctx, taskID, afterSeq, 0)
+	if err != nil {
+		return false, afterSeq, err
+	}
+	done := false
+	lastSeq := afterSeq
+	for _, event := range events {
+		lastSeq = event.Seq
+		fmt.Fprintf(w, "event: %s\n", event.Type)
+		fmt.Fprintf(w, "id: %s\n", event.ID)
+		fmt.Fprintf(w, "data: %s\n\n", taskSSEData(taskID, event.Payload))
+		switch event.Type {
+		case taskpkg.EventPermissionApproved:
+			done = false
+		case taskpkg.EventCompleted, taskpkg.EventCancelled, taskpkg.EventError, taskpkg.EventPermissionRequest:
+			done = true
+		}
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+	return done, lastSeq, nil
+}
+
+func taskSSEData(taskID string, payload string) string {
+	data, _ := json.Marshal(struct {
+		TaskID  string          `json:"task_id"`
+		Payload json.RawMessage `json:"payload"`
+	}{
+		TaskID:  taskID,
+		Payload: json.RawMessage(payload),
+	})
+	return string(data)
+}
+
+func taskIDsFromQuery(r *http.Request) []string {
+	var ids []string
+	ids = append(ids, r.URL.Query()["task_id"]...)
+	for _, value := range r.URL.Query()["ids"] {
+		for _, id := range strings.Split(value, ",") {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return uniqueStrings(ids)
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	return unique
 }
 
 func quoteSSEData(value string) string {

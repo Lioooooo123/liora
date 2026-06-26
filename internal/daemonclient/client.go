@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/Lioooooo123/liora/internal/capabilities"
 	"github.com/Lioooooo123/liora/internal/task"
@@ -325,35 +324,34 @@ func (c *Client) StreamTaskEvents(ctx context.Context, taskIDs []string) (<-chan
 		close(errs)
 		return events, errs
 	}
-	streamCtx, cancel := context.WithCancel(ctx)
-	var wg sync.WaitGroup
-	for _, id := range ids {
-		taskID := id
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			stream, streamErrs := c.StreamEvents(streamCtx, taskID)
-			for event := range stream {
-				select {
-				case <-streamCtx.Done():
-					return
-				case events <- TaskStreamEvent{TaskID: taskID, StreamEvent: event}:
-				}
-			}
-			if err := <-streamErrs; err != nil && streamCtx.Err() == nil {
-				select {
-				case errs <- fmt.Errorf("stream task %s: %w", taskID, err):
-					cancel()
-				default:
-				}
-			}
-		}()
-	}
 	go func() {
-		wg.Wait()
-		cancel()
-		close(events)
-		close(errs)
+		defer close(events)
+		defer close(errs)
+		values := url.Values{}
+		for _, id := range ids {
+			values.Add("task_id", id)
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/tasks/events/stream?"+values.Encode(), nil)
+		if err != nil {
+			errs <- err
+			return
+		}
+		response, err := c.httpClient.Do(request)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			errs <- err
+			return
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			errs <- readAPIError(response)
+			return
+		}
+		if err := scanTaskSSE(ctx, response.Body, events); err != nil {
+			errs <- err
+		}
 	}()
 	return events, errs
 }
@@ -441,6 +439,82 @@ func scanSSE(ctx context.Context, reader io.Reader, events chan<- StreamEvent) e
 		case <-ctx.Done():
 			return ctx.Err()
 		case events <- StreamEvent{Type: task.EventType(eventType), Event: event}:
+		}
+		eventType = ""
+		eventID = ""
+		data.Reset()
+		return nil
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			if err := flush(); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "event:") {
+			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			continue
+		}
+		if strings.HasPrefix(line, "id:") {
+			eventID = strings.TrimSpace(strings.TrimPrefix(line, "id:"))
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			data.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+			data.WriteByte('\n')
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
+	return flush()
+}
+
+func scanTaskSSE(ctx context.Context, reader io.Reader, events chan<- TaskStreamEvent) error {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	var eventType string
+	var eventID string
+	var data strings.Builder
+	flush := func() error {
+		if eventType == "" && data.Len() == 0 {
+			return nil
+		}
+		payload := strings.TrimSuffix(data.String(), "\n")
+		if !json.Valid([]byte(payload)) {
+			return fmt.Errorf("decode task stream event %q: invalid JSON payload", eventType)
+		}
+		var envelope struct {
+			TaskID  string          `json:"task_id"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
+			return fmt.Errorf("decode task stream event %q: %w", eventType, err)
+		}
+		if strings.TrimSpace(envelope.TaskID) == "" {
+			return fmt.Errorf("decode task stream event %q: task_id is required", eventType)
+		}
+		if !json.Valid(envelope.Payload) {
+			return fmt.Errorf("decode task stream event %q: invalid task payload", eventType)
+		}
+		event := task.Event{
+			ID:      eventID,
+			TaskID:  envelope.TaskID,
+			Type:    task.EventType(eventType),
+			Payload: string(envelope.Payload),
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case events <- TaskStreamEvent{TaskID: envelope.TaskID, StreamEvent: StreamEvent{Type: task.EventType(eventType), Event: event}}:
 		}
 		eventType = ""
 		eventID = ""

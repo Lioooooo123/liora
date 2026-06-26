@@ -446,6 +446,7 @@ GET  /v1/workbench
 GET  /v1/timeline/search
 POST /v1/tasks
 GET  /v1/tasks
+GET  /v1/tasks/events/stream
 GET  /v1/tasks/{id}
 GET  /v1/tasks/{id}/events
 GET  /v1/tasks/{id}/events/stream
@@ -463,7 +464,7 @@ GET  /v1/sessions/{id}/timeline
 
 `GET /v1/tasks`、`GET /v1/sessions`、`GET /v1/workbench` 和 `GET /v1/timeline/search?q=<query>` 支持 `?workspace=<absolute-path>&limit=N` 过滤。`/v1/workbench` 会一次返回 sessions、active tasks、recent tasks 和 pending approvals，TUI 和未来客户端可用它构建多 workspace / 多 session 工作台。
 
-Go client 层提供 `StreamEvents(ctx, taskID)` 和 `StreamTaskEvents(ctx, taskIDs)`。后者会并发订阅多个 task SSE 并聚合成带 `TaskID` 的事件流，TUI 和未来 Mac 客户端可以直接复用它构建多 session / 多任务视图。
+Go client 层提供 `StreamEvents(ctx, taskID)` 和 `StreamTaskEvents(ctx, taskIDs)`。后者会通过 daemon 原生 `GET /v1/tasks/events/stream?task_id=...` 单连接订阅多个 task，并聚合成带 `TaskID` 的事件流，TUI 和未来 Mac 客户端可以直接复用它构建多 session / 多任务视图。
 
 ## 测试
 

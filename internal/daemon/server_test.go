@@ -523,6 +523,55 @@ func TestEventStreamWaitsForNewEventsUntilTaskCompletes(t *testing.T) {
 	}
 }
 
+func TestMultiTaskEventStreamServesTaskEnvelopes(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	first, err := repo.Create(t.Context(), taskpkg.CreateRequest{Workspace: t.TempDir(), Prompt: "first", Natural: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.Create(t.Context(), taskpkg.CreateRequest{Workspace: t.TempDir(), Prompt: "second", Natural: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range []struct {
+		id      string
+		message string
+	}{
+		{id: first.ID, message: "first done"},
+		{id: second.ID, message: "second done"},
+	} {
+		if err := repo.AppendEvent(t.Context(), record.id, taskpkg.EventSummary, taskpkg.EventPayload{Message: record.message}); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.AppendEvent(t.Context(), record.id, taskpkg.EventCompleted, taskpkg.EventPayload{Status: string(taskpkg.StatusCompleted)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := httptest.NewServer(NewServer(Config{Repository: repo}))
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/v1/tasks/events/stream?task_id=" + first.ID + "&task_id=" + second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	for _, want := range []string{`"task_id":"` + first.ID + `"`, `"task_id":"` + second.ID + `"`, "first done", "second done", "event: task.completed"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected multi-task stream to contain %q, got:\n%s", want, body)
+		}
+	}
+}
+
 func TestServerCancelsTask(t *testing.T) {
 	db, err := store.New(t.TempDir()).OpenDB()
 	if err != nil {
