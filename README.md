@@ -25,6 +25,8 @@ docs/         产品、架构和发布文档
 
 当前 `apps/cli` 仍负责安装产物 `liora`。复杂 TUI 后续可以放到 `apps/tui`，用 Ink/React 或其他更适合终端 UI 的技术栈，通过 Core Daemon API 复用 Go core，而不是重写 agent 执行逻辑。
 
+技术选型见 [Liora 技术选型](docs/tech-stack-selection.md)。
+
 ## 功能
 
 - 默认使用当前目录作为 workspace。

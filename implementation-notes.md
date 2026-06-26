@@ -372,3 +372,9 @@
 - 用户判断 Go 写复杂 TUI 不太合适，希望仓库转成 monorepo。本轮采用渐进式迁移：把当前可运行入口从 `cmd/coding-agent` 移到 `apps/cli`，保留二进制名 `liora` 和现有 Go core，不在同一轮重写 TUI。
 - 根目录新增 `package.json` 和 `pnpm-workspace.yaml`，工作区包含 `apps/*` 与 `packages/*`。`apps/tui` 先作为独立 TUI app 占位，未来可用 Ink/React 或其他终端 UI 栈，通过 Core Daemon API 复用 Go core。
 - 暂不把 `internal/` 移到 `packages/core`，因为 Go `internal` 可见性、已有 import path、daemon smoke 和 release packaging 都依赖当前模块边界。先稳定入口目录和脚本，后续如果要拆协议 SDK，再新增 `packages/protocol`。
+
+## 2026-06-26 Tech Stack Selection
+
+- 新增 `docs/tech-stack-selection.md`，把 Liora 的技术路线固定为 Go core + TypeScript UI monorepo。Go 继续负责 daemon、task、sandbox、SQLite、LLM provider、MCP 和 patch/apply；复杂 TUI 不继续在 Go line-based UI 上堆功能。
+- 下一代 `apps/tui` 选择 TypeScript + React + Ink，原因是复杂终端应用需要更自然的组件模型、状态管理、底部输入栏、tool stream、diff viewport 和 approval modal；Bubble Tea 作为 Go-only 备选保留，但不作为主路线。
+- 桌面端暂不启动，等 daemon/protocol/TUI 稳定后再在 Tauri 2 和 SwiftUI 之间选择。当前优先级是 protocol 包和 Ink TUI，而不是提前做 Mac App。

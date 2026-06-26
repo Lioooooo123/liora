@@ -2,6 +2,8 @@
 
 这个目录预留给下一阶段的独立 TUI app。
 
+技术选型见 [Liora 技术选型](../../docs/tech-stack-selection.md)。当前结论是使用 TypeScript + React + Ink 构建下一代 TUI。
+
 当前 Go 入口 `apps/cli` 仍保留轻量 line-based TUI，保证 `liora` 可安装、可 smoke、可打包。复杂 TUI 不应重新实现 agent 逻辑，而应通过 Core Daemon API 复用：
 
 - `GET /v1/capabilities`
