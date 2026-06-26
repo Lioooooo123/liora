@@ -265,3 +265,9 @@
 - daemon-backed TUI 新增 `/diff [task_id]`，复用 daemon diff API 展示最近或指定任务的 patch 预览，并把该 diff 缓存给后续 `/apply`。
 - 这是 patch-first 工作流的最低确认体验：用户可以先 review diff，再显式 apply 到真实 workspace。完整 split-pane diff、逐文件勾选和按钮式确认留给全屏 TUI 或 Mac 客户端。
 - diff 预览默认最多展示 180 行，避免超大 patch 再次拖慢 line-based TUI；完整 patch 仍保存在 daemon task event/diff API 中。
+
+## 2026-06-26 TUI Approval Queue
+
+- daemon-backed TUI 新增 `/approvals` 与别名 `/pending`，通过 task list + permission.requested event 展示等待审批任务、工具输入、风险类型和原因。
+- `/approve` 和 `/deny` 保留无参处理最近 task 的兼容行为，同时新增 `/approve <task_id>`、`/deny <task_id>`，避免多任务等待审批时误操作。
+- 这仍是 task 级授权队列，不是逐步 tool approval。它先补齐 line-based TUI 的可见性；后续全屏 TUI 或 Mac 客户端应基于相同事件数据做逐步审批弹窗。

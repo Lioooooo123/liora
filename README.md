@@ -209,9 +209,10 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /last
 /tail [lines|task_id lines]
 /diff [task_id]
+/approvals
 /resume <task_id>
-/approve
-/deny
+/approve [task_id]
+/deny [task_id]
 /apply
 /cancel
 /exit
@@ -234,6 +235,8 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 长输出或历史任务可以用 `/tail` 回看最近事件输出，例如 `/tail 80` 查看最近任务的最后 80 行，或 `/tail task_xxx 80` 查看指定任务。
 
 patch-first 任务完成后可以先用 `/diff` 预览最近任务的变更，或用 `/diff task_xxx` 查看指定任务；确认后再输入 `/apply` 写入真实 workspace。
+
+需要人工确认的任务可以用 `/approvals` 查看等待审批队列，再用 `/approve task_xxx` 或 `/deny task_xxx` 处理；不带 task id 时会处理最近任务。
 
 ## Goal、Memory 和 Skill
 
@@ -403,7 +406,7 @@ curl http://127.0.0.1:18080/v1/tasks/<task-id>/approval \
   -d '{"decision":"deny","reason":"too risky"}'
 ```
 
-daemon-backed TUI 中可直接使用 `/approve` 和 `/deny` 处理最近一个等待审批的 task。命令结果会显示 task 状态和后续可查看的历史命令。当前是 task 级授权：批准后该 task 后续需要审批的步骤都会继续执行；逐步授权 UI 留给后续全屏 TUI / Mac 客户端。
+daemon-backed TUI 中可直接使用 `/approvals` 查看等待审批队列，再用 `/approve <task-id>` 和 `/deny <task-id>` 处理指定 task；不带 task id 时会处理最近任务。命令结果会显示 task 状态和后续可查看的历史命令。当前是 task 级授权：批准后该 task 后续需要审批的步骤都会继续执行；逐步授权 UI 留给后续全屏 TUI / Mac 客户端。
 
 取消任务：
 

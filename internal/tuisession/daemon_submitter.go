@@ -146,9 +146,11 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 	case "/cancel":
 		return s.cancelCurrent(ctx)
 	case "/approve":
-		return s.approveLast(ctx)
+		return s.approveTask(ctx, "")
 	case "/deny":
-		return s.denyLast(ctx)
+		return s.denyTask(ctx, "")
+	case "/approvals", "/pending":
+		return s.listApprovals(ctx)
 	case "/diff":
 		return s.showDiff(ctx, "")
 	case "/apply":
@@ -170,6 +172,12 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		}
 		if strings.HasPrefix(line, "/diff ") {
 			return s.showDiff(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/diff ")))
+		}
+		if strings.HasPrefix(line, "/approve ") {
+			return s.approveTask(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/approve ")))
+		}
+		if strings.HasPrefix(line, "/deny ") {
+			return s.denyTask(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/deny ")))
 		}
 		if strings.HasPrefix(line, "/resume-session ") {
 			return s.resumeSession(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/resume-session ")))
@@ -331,8 +339,68 @@ func formatTimelineItem(item taskpkg.TimelineItem) string {
 	}
 }
 
-func (s *DaemonSubmitter) approveLast(ctx context.Context) (string, bool, error) {
-	taskID := s.lastTask()
+func (s *DaemonSubmitter) listApprovals(ctx context.Context) (string, bool, error) {
+	if s.client == nil {
+		return "No pending approvals.", true, nil
+	}
+	tasks, err := s.client.ListTasks(ctx, 50)
+	if err != nil {
+		return "", true, err
+	}
+	var lines []string
+	lines = append(lines, "Pending approvals")
+	for _, task := range tasks {
+		if task.Status != taskpkg.StatusWaitingUser {
+			continue
+		}
+		payload, err := s.latestPermissionRequest(ctx, task.ID)
+		if err != nil {
+			return "", true, err
+		}
+		if len(lines) == 1 {
+			s.rememberTask(task.ID)
+		}
+		lines = append(lines, fmt.Sprintf("- %s [%s] %s", task.ID, task.Status, task.Title))
+		if strings.TrimSpace(payload.Tool+payload.Input) != "" {
+			lines = append(lines, "  request: "+strings.TrimSpace(payload.Tool+" "+payload.Input))
+		}
+		if strings.TrimSpace(payload.Risk) != "" {
+			lines = append(lines, "  risk: "+payload.Risk)
+		}
+		if strings.TrimSpace(payload.Reason) != "" {
+			lines = append(lines, "  reason: "+payload.Reason)
+		}
+		lines = append(lines, "  commands: /approve "+task.ID+"  /deny "+task.ID)
+	}
+	if len(lines) == 1 {
+		return "No pending approvals.", true, nil
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) latestPermissionRequest(ctx context.Context, taskID string) (taskpkg.EventPayload, error) {
+	events, err := s.client.Events(ctx, taskID)
+	if err != nil {
+		return taskpkg.EventPayload{}, err
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type != taskpkg.EventPermissionRequest {
+			continue
+		}
+		payload, err := eventPayload(events[i])
+		if err != nil {
+			return taskpkg.EventPayload{}, err
+		}
+		return payload, nil
+	}
+	return taskpkg.EventPayload{}, nil
+}
+
+func (s *DaemonSubmitter) approveTask(ctx context.Context, taskID string) (string, bool, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		taskID = s.lastTask()
+	}
 	if taskID == "" {
 		return "No daemon task to approve.", true, nil
 	}
@@ -340,6 +408,7 @@ func (s *DaemonSubmitter) approveLast(ctx context.Context) (string, bool, error)
 	if err != nil {
 		return "", true, err
 	}
+	s.rememberTask(task.ID)
 	return strings.Join([]string{
 		"Approved task " + task.ID + ".",
 		"Status: " + string(task.Status),
@@ -347,8 +416,11 @@ func (s *DaemonSubmitter) approveLast(ctx context.Context) (string, bool, error)
 	}, "\n"), true, nil
 }
 
-func (s *DaemonSubmitter) denyLast(ctx context.Context) (string, bool, error) {
-	taskID := s.lastTask()
+func (s *DaemonSubmitter) denyTask(ctx context.Context, taskID string) (string, bool, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		taskID = s.lastTask()
+	}
 	if taskID == "" {
 		return "No daemon task to deny.", true, nil
 	}
@@ -356,6 +428,7 @@ func (s *DaemonSubmitter) denyLast(ctx context.Context) (string, bool, error) {
 	if err != nil {
 		return "", true, err
 	}
+	s.rememberTask(task.ID)
 	return strings.Join([]string{
 		"Denied task " + task.ID + ".",
 		"Status: " + string(task.Status),

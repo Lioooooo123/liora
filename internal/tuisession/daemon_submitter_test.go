@@ -467,7 +467,17 @@ func TestDaemonSubmitterApprovesAndDeniesWaitingTask(t *testing.T) {
 	if result.AgentResult.Status != agent.StatusWaitingUser || !containsStreamType(streamed, string(taskpkg.EventPermissionRequest)) {
 		t.Fatalf("expected waiting approval result=%#v streamed=%#v", result.AgentResult, streamed)
 	}
-	output, handled, err := submitter.HandleCommand(t.Context(), "/approve")
+	taskID := findOnlyTaskID(t, repo)
+	pendingOutput, handled, err := submitter.HandleCommand(t.Context(), "/approvals")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Pending approvals", taskID, "request: run rm -rf build", "risk: dangerous_shell", "reason: Command contains rm -rf.", "/approve " + taskID, "/deny " + taskID} {
+		if !handled || !strings.Contains(pendingOutput, want) {
+			t.Fatalf("expected approvals output to contain %q handled=%v output=%q", want, handled, pendingOutput)
+		}
+	}
+	output, handled, err := submitter.HandleCommand(t.Context(), "/approve "+taskID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +499,7 @@ func TestDaemonSubmitterApprovesAndDeniesWaitingTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	submitter.rememberTask(second.ID)
-	output, handled, err = submitter.HandleCommand(t.Context(), "/deny")
+	output, handled, err = submitter.HandleCommand(t.Context(), "/deny "+second.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
