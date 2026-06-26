@@ -615,6 +615,66 @@ func TestMultiTaskEventStreamServesTaskEnvelopes(t *testing.T) {
 	}
 }
 
+func TestMultiTaskEventStreamContinuesAfterPermissionRequest(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	task, err := repo.Create(t.Context(), taskpkg.CreateRequest{Workspace: t.TempDir(), Prompt: "needs approval", Natural: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), task.ID, taskpkg.EventPermissionRequest, taskpkg.EventPayload{Message: "approval needed"}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(NewServer(Config{Repository: repo}))
+	defer server.Close()
+
+	done := make(chan string, 1)
+	errs := make(chan error, 1)
+	go func() {
+		resp, err := http.Get(server.URL + "/v1/tasks/events/stream?task_id=" + task.ID)
+		if err != nil {
+			errs <- err
+			return
+		}
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			errs <- err
+			return
+		}
+		done <- string(data)
+	}()
+	select {
+	case body := <-done:
+		t.Fatalf("multi-task stream ended at permission request:\n%s", body)
+	case err := <-errs:
+		t.Fatal(err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := repo.AppendEvent(t.Context(), task.ID, taskpkg.EventPermissionApproved, taskpkg.EventPayload{Message: "approved"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), task.ID, taskpkg.EventCompleted, taskpkg.EventPayload{Status: string(taskpkg.StatusCompleted)}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case body := <-done:
+		for _, want := range []string{"event: permission.requested", "event: permission.approved", "event: task.completed"} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("expected stream to contain %q, got:\n%s", want, body)
+			}
+		}
+	case err := <-errs:
+		t.Fatal(err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("multi-task stream did not complete after approval and completion")
+	}
+}
+
 func TestServerCancelsTask(t *testing.T) {
 	db, err := store.New(t.TempDir()).OpenDB()
 	if err != nil {
@@ -722,6 +782,33 @@ func TestServerCancelStopsRunningAsyncTask(t *testing.T) {
 	}
 }
 
+func TestServerRejectsAsyncTaskWithoutRunner(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	server := httptest.NewServer(NewServer(Config{Repository: repo}))
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/v1/tasks", "application/json", strings.NewReader(`{"workspace":`+quote(t.TempDir())+`,"prompt":"run echo hi","natural":false,"run_async":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected bad request, got %d", resp.StatusCode)
+	}
+	tasks, err := repo.List(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("async task without runner should not be created, got %#v", tasks)
+	}
+}
+
 func TestServerApprovesWaitingPermissionTask(t *testing.T) {
 	db, err := store.New(t.TempDir()).OpenDB()
 	if err != nil {
@@ -778,6 +865,63 @@ func TestServerApprovesWaitingPermissionTask(t *testing.T) {
 		}
 		return task.Status == taskpkg.StatusCompleted
 	})
+}
+
+func TestServerRejectsDuplicateApprovalWhileTaskRunning(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	task, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "run long-task",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), task.ID, taskpkg.StatusWaitingUser); err != nil {
+		t.Fatal(err)
+	}
+	executor := newBlockingShellExecutor()
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: ""}))
+	runner.SetSandbox(executor)
+	server := httptest.NewServer(NewServer(Config{Repository: repo, Runner: runner}))
+	defer server.Close()
+
+	approve, err := http.Post(server.URL+"/v1/tasks/"+task.ID+"/approval", "application/json", strings.NewReader(`{"decision":"approve"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer approve.Body.Close()
+	if approve.StatusCode != http.StatusAccepted {
+		t.Fatalf("unexpected first approve status %d", approve.StatusCode)
+	}
+	select {
+	case <-executor.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("approved task did not start")
+	}
+	duplicate, err := http.Post(server.URL+"/v1/tasks/"+task.ID+"/approval", "application/json", strings.NewReader(`{"decision":"approve"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer duplicate.Body.Close()
+	if duplicate.StatusCode != http.StatusConflict {
+		t.Fatalf("expected duplicate approval conflict, got %d", duplicate.StatusCode)
+	}
+	cancelResp, err := http.Post(server.URL+"/v1/tasks/"+task.ID+"/cancel", "application/json", strings.NewReader(`{"reason":"test cleanup"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancelResp.Body.Close()
+	select {
+	case <-executor.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancel did not stop approved task")
+	}
 }
 
 func TestServerDeniesWaitingPermissionTask(t *testing.T) {

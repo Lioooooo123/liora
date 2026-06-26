@@ -103,7 +103,7 @@ func (r *Runtime) SubmitWithOptions(ctx context.Context, input string, options S
 			}, err
 		}
 		if strings.TrimSpace(replan.Answer) != "" {
-			return tui.TurnResult{Answer: replan.Answer, PlannedSteps: plannedSteps, AgentResult: result, Events: recordedEvents(recorder)}, err
+			return tui.TurnResult{Answer: replan.Answer, PlannedSteps: plannedSteps, AgentResult: result, Events: recordedEvents(recorder)}, nil
 		}
 		if options.OnPlan != nil {
 			options.OnPlan(replan.Steps)

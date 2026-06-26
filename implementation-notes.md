@@ -345,3 +345,10 @@
 - bits-code-guard 审查指出 v0.1 exit audit 的 git 同步检查过弱。本轮改为显式要求当前分支为 `main`、存在 upstream，并用 `git rev-list --left-right --count HEAD...@{u}` 校验 ahead/behind 都为 0；不再依赖 `git status` 文案 grep。
 - exit audit 的安装验证改用临时 `LIORA_INSTALL_DIR`，并执行该目录下的 `liora -version`，避免误用 `$HOME/.local/bin/liora` 里的旧二进制。
 - release 包补充 `docs/release.md`，`release-smoke.sh` 现在会检查 README、release、benchmark、exit audit 和二进制都存在，避免 README 内部链接在离线包中断掉。
+
+## 2026-06-26 Full Code Guard Review Fixes
+
+- 大范围 bits-code-guard 审查发现 daemon async task 在未配置 runner 时会 panic。本轮在 `run_async=true` 创建前直接校验 runner，缺失时返回 400 且不创建 task。
+- approval approve 路径现在只接受 `waiting_user` 状态，并用 daemon running registry 做原子启动检查，重复 approve 会返回 409，不再为同一 task 启动多个 runner goroutine。
+- 多任务 SSE 不再把 `permission.requested` 当作终止事件，`/watch` 可以继续等 approve 后的 `permission.approved` 与最终 completed/cancelled/error；单任务 SSE 仍在 permission request 处返回，保持当前 TUI 等待审批体验。
+- runtime replan 如果返回 `ANSWER:`，会把它视为本轮成功回答并返回 nil error，同时保留第一次失败工具事件供 transcript 回看。

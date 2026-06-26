@@ -139,6 +139,29 @@ func TestTurnRuntimeReplansAfterToolFailure(t *testing.T) {
 	}
 }
 
+func TestTurnRuntimeReplanAnswerDoesNotReturnPreviousToolError(t *testing.T) {
+	root := t.TempDir()
+	generator := &fakeGenerator{responses: []string{
+		"read missing.txt",
+		"ANSWER: 我没找到这个文件。",
+	}}
+	runtime, err := New(root, llm.NewPlanner(generator))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := runtime.Submit(t.Context(), "看看缺失文件")
+	if err != nil {
+		t.Fatalf("replan direct answer should not return previous tool error: %v", err)
+	}
+	if result.Answer != "我没找到这个文件。" {
+		t.Fatalf("unexpected answer %q", result.Answer)
+	}
+	if len(result.Events) != 1 || result.Events[0].Tool != "read" || result.Events[0].Status != "error" {
+		t.Fatalf("expected failed tool event to remain in transcript, got %#v", result.Events)
+	}
+}
+
 func TestRuntimeHandlesGoalAndMemoryCommands(t *testing.T) {
 	root := t.TempDir()
 	storeRoot := t.TempDir()

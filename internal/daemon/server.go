@@ -18,6 +18,8 @@ import (
 	taskpkg "github.com/Lioooooo123/liora/internal/task"
 )
 
+var errTaskAlreadyRunning = errors.New("task is already running")
+
 type Config struct {
 	Repository *taskpkg.Repository
 	Runner     *taskpkg.Runner
@@ -267,6 +269,10 @@ func (s *server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		if request.RunAsync && s.runner == nil {
+			writeError(w, http.StatusBadRequest, errors.New("runner is not configured"))
+			return
+		}
 		task, err := s.repo.Create(r.Context(), request)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -274,13 +280,10 @@ func (s *server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = s.repo.AppendEvent(r.Context(), task.ID, taskpkg.EventTaskCreated, taskpkg.EventPayload{Message: task.UserInput})
 		if request.RunAsync {
-			taskID := task.ID
-			ctx, cancel := context.WithCancel(context.Background())
-			s.registerRunning(taskID, cancel)
-			go func() {
-				defer s.unregisterRunning(taskID)
-				_ = s.runner.Run(ctx, taskID)
-			}()
+			if err := s.startTaskAsync(task.ID); err != nil {
+				writeError(w, http.StatusConflict, err)
+				return
+			}
 			writeJSON(w, http.StatusAccepted, taskpkg.CreateResponse{Task: task})
 			return
 		}
@@ -489,29 +492,44 @@ func (s *server) handleTaskApproval(w http.ResponseWriter, r *http.Request, task
 	}
 	switch strings.ToLower(strings.TrimSpace(request.Decision)) {
 	case "approve", "approved", "yes":
+		current, err := s.repo.Get(r.Context(), taskID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		if current.Status != taskpkg.StatusWaitingUser {
+			if s.isRunning(taskID) {
+				writeError(w, http.StatusConflict, errTaskAlreadyRunning)
+				return
+			}
+			writeError(w, http.StatusConflict, fmt.Errorf("task is not waiting for approval: %s", current.Status))
+			return
+		}
 		if err := s.repo.GrantApproval(r.Context(), taskID); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		_ = s.repo.AppendEvent(r.Context(), taskID, taskpkg.EventPermissionApproved, taskpkg.EventPayload{
-			Message: "Approval granted.",
-			Status:  string(taskpkg.StatusDraft),
-		})
 		task, err := s.repo.Get(r.Context(), taskID)
 		if err != nil {
 			writeError(w, http.StatusNotFound, err)
 			return
 		}
 		if s.runner != nil {
-			ctx, cancel := context.WithCancel(context.Background())
-			s.registerRunning(taskID, cancel)
-			go func() {
-				defer s.unregisterRunning(taskID)
-				_ = s.runner.Run(ctx, taskID)
-			}()
+			if err := s.startTaskAsync(taskID); err != nil {
+				writeError(w, http.StatusConflict, err)
+				return
+			}
+			_ = s.repo.AppendEvent(r.Context(), taskID, taskpkg.EventPermissionApproved, taskpkg.EventPayload{
+				Message: "Approval granted.",
+				Status:  string(taskpkg.StatusDraft),
+			})
 			writeJSON(w, http.StatusAccepted, task)
 			return
 		}
+		_ = s.repo.AppendEvent(r.Context(), taskID, taskpkg.EventPermissionApproved, taskpkg.EventPayload{
+			Message: "Approval granted.",
+			Status:  string(taskpkg.StatusDraft),
+		})
 		writeJSON(w, http.StatusOK, task)
 	case "deny", "denied", "no":
 		if err := s.repo.DenyApproval(r.Context(), taskID, request.Reason); err != nil {
@@ -555,10 +573,30 @@ func (s *server) handleTaskCancel(w http.ResponseWriter, r *http.Request, taskID
 	writeJSON(w, http.StatusOK, task)
 }
 
-func (s *server) registerRunning(taskID string, cancel context.CancelFunc) {
+func (s *server) tryRegisterRunning(taskID string, cancel context.CancelFunc) bool {
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
+	if s.running[taskID] != nil {
+		return false
+	}
 	s.running[taskID] = cancel
+	return true
+}
+
+func (s *server) startTaskAsync(taskID string) error {
+	if s.runner == nil {
+		return errors.New("runner is not configured")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if !s.tryRegisterRunning(taskID, cancel) {
+		cancel()
+		return errTaskAlreadyRunning
+	}
+	go func() {
+		defer s.unregisterRunning(taskID)
+		_ = s.runner.Run(ctx, taskID)
+	}()
+	return nil
 }
 
 func (s *server) unregisterRunning(taskID string) {
@@ -765,7 +803,7 @@ func (s *server) writeAvailableTaskEvents(ctx context.Context, w http.ResponseWr
 		switch event.Type {
 		case taskpkg.EventPermissionApproved:
 			done = false
-		case taskpkg.EventCompleted, taskpkg.EventCancelled, taskpkg.EventError, taskpkg.EventPermissionRequest:
+		case taskpkg.EventCompleted, taskpkg.EventCancelled, taskpkg.EventError:
 			done = true
 		}
 	}
