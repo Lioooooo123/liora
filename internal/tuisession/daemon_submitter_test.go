@@ -438,6 +438,15 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 			t.Fatalf("expected auto-resumed /timeline output to contain %q handled=%v output=%q", want, handled, timelineOutput)
 		}
 	}
+	transcriptOutput, handled, err := fresh.HandleCommand(t.Context(), "/transcript 20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Transcript " + sessionID + " last 20 items", "User", "first prompt", "Tool result", "completed 1 step"} {
+		if !handled || !strings.Contains(transcriptOutput, want) {
+			t.Fatalf("expected /transcript output to contain %q handled=%v output=%q", want, handled, transcriptOutput)
+		}
+	}
 	resumeLatestOutput, handled, err := fresh.HandleCommand(t.Context(), "/resume-latest")
 	if err != nil {
 		t.Fatal(err)

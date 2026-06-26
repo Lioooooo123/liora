@@ -277,3 +277,9 @@
 - daemon-backed TUI 在首次提交任务、`/session` 或 `/timeline` 时，如果当前进程还未绑定 session，会自动接回同 workspace 最近更新的 session。
 - 新增 `/resume-latest` 用于显式接回最近 session，新增 `/new-session` 用于让下一条任务强制创建新 session，避免自动恢复让用户无法从干净上下文开始。
 - 自动恢复只按 workspace 精确匹配，不跨目录复用 session；这保持本地项目隔离，也让未来 Mac 客户端可以复用同一规则做“继续上次工作”入口。
+
+## 2026-06-26 Expanded Transcript View
+
+- 参考本地 Kimi Code 的“持久化 session 可直接继续 prompt”方向，以及 Claude Code 在进入 query 前先写 transcript、assistant 写入可异步 fire-and-forget 的做法；Liora 继续把 session/timeline 放在 daemon + SQLite，TUI 只做投影。
+- `/timeline [limit]` 保持紧凑事件线，`/transcript [limit]` 展开 user、assistant、tool、diff、approval 和 status 内容，默认最多取 100 个 timeline item，最多 300 个。
+- 后续做真正全屏 TUI 时，应继续使用 Go 的 context/goroutine/channel：每个 session/task 独立流式消费 daemon 事件，UI 层按 session id 聚合，避免单个长输出或慢工具阻塞其它 session。

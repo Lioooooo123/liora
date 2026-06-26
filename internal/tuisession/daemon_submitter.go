@@ -176,8 +176,10 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		return s.resumeLatest(ctx)
 	case "/new-session":
 		return s.newSessionCommand()
-	case "/timeline", "/transcript":
-		return s.showTimeline(ctx)
+	case "/timeline":
+		return s.showTimeline(ctx, "")
+	case "/transcript":
+		return s.showTranscript(ctx, "")
 	case "/last":
 		return s.replayLastTask(ctx)
 	default:
@@ -193,6 +195,12 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		}
 		if strings.HasPrefix(line, "/deny ") {
 			return s.denyTask(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/deny ")))
+		}
+		if strings.HasPrefix(line, "/timeline ") {
+			return s.showTimeline(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/timeline ")))
+		}
+		if strings.HasPrefix(line, "/transcript ") {
+			return s.showTranscript(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/transcript ")))
 		}
 		if strings.HasPrefix(line, "/resume-session ") {
 			return s.resumeSession(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/resume-session ")))
@@ -300,19 +308,16 @@ func (s *DaemonSubmitter) showTools(ctx context.Context) (string, bool, error) {
 	return strings.Join(lines, "\n"), true, nil
 }
 
-func (s *DaemonSubmitter) showTimeline(ctx context.Context) (string, bool, error) {
-	sessionID := s.currentSessionID()
-	if sessionID == "" {
-		session, ok, err := s.resumeLatestWorkspaceSession(ctx)
-		if err != nil {
-			return "", true, err
-		}
-		if !ok {
-			return "No current daemon session.", true, nil
-		}
-		sessionID = session.ID
+func (s *DaemonSubmitter) showTimeline(ctx context.Context, args string) (string, bool, error) {
+	sessionID, ok, err := s.currentOrLatestSessionID(ctx)
+	if err != nil {
+		return "", true, err
 	}
-	timeline, err := s.client.SessionTimeline(ctx, sessionID, 50)
+	if !ok {
+		return "No current daemon session.", true, nil
+	}
+	limit := timelineLimit(args, 50, 200)
+	timeline, err := s.client.SessionTimeline(ctx, sessionID, limit)
 	if err != nil {
 		return "", true, err
 	}
@@ -320,7 +325,7 @@ func (s *DaemonSubmitter) showTimeline(ctx context.Context) (string, bool, error
 		return "No timeline items found.", true, nil
 	}
 	var lines []string
-	lines = append(lines, "Timeline "+sessionID)
+	lines = append(lines, fmt.Sprintf("Timeline %s last %d items", sessionID, limit))
 	for _, item := range timeline {
 		line := formatTimelineItem(item)
 		if line != "" {
@@ -328,6 +333,47 @@ func (s *DaemonSubmitter) showTimeline(ctx context.Context) (string, bool, error
 		}
 	}
 	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) showTranscript(ctx context.Context, args string) (string, bool, error) {
+	sessionID, ok, err := s.currentOrLatestSessionID(ctx)
+	if err != nil {
+		return "", true, err
+	}
+	if !ok {
+		return "No current daemon session.", true, nil
+	}
+	limit := timelineLimit(args, 100, 300)
+	timeline, err := s.client.SessionTimeline(ctx, sessionID, limit)
+	if err != nil {
+		return "", true, err
+	}
+	if len(timeline) == 0 {
+		return "No transcript items found.", true, nil
+	}
+	lines := []string{fmt.Sprintf("Transcript %s last %d items", sessionID, limit)}
+	for _, item := range timeline {
+		formatted := formatTranscriptItem(item)
+		if len(formatted) > 0 {
+			lines = append(lines, formatted...)
+		}
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) currentOrLatestSessionID(ctx context.Context) (string, bool, error) {
+	sessionID := s.currentSessionID()
+	if sessionID == "" {
+		session, ok, err := s.resumeLatestWorkspaceSession(ctx)
+		if err != nil {
+			return "", false, err
+		}
+		if !ok {
+			return "", false, nil
+		}
+		sessionID = session.ID
+	}
+	return sessionID, true, nil
 }
 
 func formatTimelineItem(item taskpkg.TimelineItem) string {
@@ -359,6 +405,67 @@ func formatTimelineItem(item taskpkg.TimelineItem) string {
 	default:
 		return strings.TrimSpace(item.Kind + ": " + firstLine(item.Content))
 	}
+}
+
+func formatTranscriptItem(item taskpkg.TimelineItem) []string {
+	taskSuffix := ""
+	if item.TaskID != "" {
+		taskSuffix = " (" + item.TaskID + ")"
+	}
+	switch item.Kind {
+	case "message":
+		role := item.Role
+		if role == "" {
+			role = "message"
+		}
+		title := titleWord(role) + taskSuffix
+		return append([]string{title}, indentLines(item.Content)...)
+	case "tool_call":
+		return []string{strings.TrimSpace("Tool call" + taskSuffix + ": " + item.Tool + " " + item.Input)}
+	case "tool_result":
+		status := item.Status
+		if status == "" {
+			status = "ok"
+		}
+		lines := []string{strings.TrimSpace("Tool result [" + status + "]" + taskSuffix + ": " + item.Tool + " " + item.Input)}
+		return append(lines, indentLines(item.Output)...)
+	case "diff":
+		lines := []string{"Diff" + taskSuffix}
+		return append(lines, previewLines(item.Diff, 80)...)
+	case "approval":
+		header := strings.TrimSpace("Approval" + taskSuffix + ": " + item.Tool + " " + item.Input + " " + item.Status + " " + item.Risk + " " + item.Reason)
+		return appendPrefixedLines(header, item.Content)
+	case "status":
+		header := strings.TrimSpace("Status" + taskSuffix + ": " + item.Status)
+		return appendPrefixedLines(header, strings.TrimSpace(item.Content+" "+item.Reason))
+	default:
+		return appendPrefixedLines(strings.TrimSpace(item.Kind+taskSuffix), item.Content)
+	}
+}
+
+func titleWord(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	runes[0] = []rune(strings.ToUpper(string(runes[0])))[0]
+	return string(runes)
+}
+
+func timelineLimit(args string, defaultLimit int, maxLimit int) int {
+	fields := strings.Fields(args)
+	if len(fields) == 0 {
+		return defaultLimit
+	}
+	parsed, ok := parsePositiveInt(fields[0])
+	if !ok {
+		return defaultLimit
+	}
+	if parsed > maxLimit {
+		return maxLimit
+	}
+	return parsed
 }
 
 func (s *DaemonSubmitter) listApprovals(ctx context.Context) (string, bool, error) {

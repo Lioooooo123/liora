@@ -205,7 +205,8 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /mcp
 /tasks
 /sessions
-/timeline
+/timeline [limit]
+/transcript [limit]
 /last
 /tail [lines|task_id lines]
 /diff [task_id]
@@ -224,6 +225,8 @@ agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 默认交互入口会在本进程内启动临时 Core Daemon，并通过 HTTP/SSE 复用 daemon/session/task/event 主链路；如果已经有独立 daemon，可使用 `liora -interactive -tui-daemon -daemon-addr 127.0.0.1:18080` 连接它。
 
 TUI 会自动继续当前 workspace 最近的 session，因此重启 `liora` 后可以直接 `/timeline` 或继续输入任务。需要手动接回最近 session 时可用 `/resume-latest`；想从干净上下文开始下一轮任务时可用 `/new-session`。
+
+`/timeline [limit]` 展示紧凑会话事件线，`/transcript [limit]` 展开 user、assistant、tool、diff、approval 和 status 内容，适合回看长会话；两者都来自 daemon 的 session timeline API。
 
 任务 streaming 期间可以直接输入 `/cancel` 中止当前任务；其它命令会在当前任务结束后按顺序执行，避免 `/apply` 或 `/exit` 抢在结果和 diff 之前生效。
 
