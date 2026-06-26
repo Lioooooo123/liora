@@ -169,7 +169,7 @@ PY
 
 (
   cd "$ROOT"
-  LIORA_HOME="$TMP_DIR/home" LIORA_PATCH_MODE=1 LIORA_PERMISSION=prompt go run ./cmd/coding-agent \
+  LIORA_HOME="$TMP_DIR/home" LIORA_PATCH_MODE=1 LIORA_PERMISSION=prompt go run ./apps/cli \
     -workspace "$WORKSPACE" \
     -daemon \
     -daemon-addr "$DAEMON_ADDR" \

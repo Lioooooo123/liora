@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKSPACE="${1:-$ROOT}"
 ADDR="${LIORA_DAEMON_ADDR:-127.0.0.1:18080}"
 
-LIORA_PATCH_MODE=1 go run ./cmd/coding-agent -daemon -daemon-addr "$ADDR" &
+LIORA_PATCH_MODE=1 go run ./apps/cli -daemon -daemon-addr "$ADDR" &
 PID="$!"
 trap 'kill "$PID" >/dev/null 2>&1 || true' EXIT
 

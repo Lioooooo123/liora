@@ -93,7 +93,7 @@ JSON
 
 (
   cd "$ROOT"
-  LIORA_HOME="$TMP_DIR/home" go run ./cmd/coding-agent \
+  LIORA_HOME="$TMP_DIR/home" go run ./apps/cli \
     -workspace "$WORKSPACE" \
     -daemon \
     -daemon-addr "$DAEMON_ADDR" \
@@ -120,7 +120,7 @@ fi
 STREAM_OUT="$TMP_DIR/stream.out"
 printf '/tools\n看看目录\n/tail 8\n/timeline\n/exit\n' | (
   cd "$ROOT"
-  LIORA_HOME="$TMP_DIR/home" go run ./cmd/coding-agent \
+  LIORA_HOME="$TMP_DIR/home" go run ./apps/cli \
     -workspace "$WORKSPACE" \
     -interactive \
     -tui-daemon \
@@ -142,7 +142,7 @@ grep -q 'tool.result' "$STREAM_OUT"
 CANCEL_OUT="$TMP_DIR/cancel.out"
 printf 'run sleep 10\n/cancel\n/exit\n' | (
   cd "$ROOT"
-  LIORA_HOME="$TMP_DIR/home-cancel" go run ./cmd/coding-agent \
+  LIORA_HOME="$TMP_DIR/home-cancel" go run ./apps/cli \
     -workspace "$WORKSPACE" \
     -interactive \
     -tui-daemon \

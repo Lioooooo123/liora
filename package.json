@@ -1,0 +1,16 @@
+{
+  "name": "liora-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local-first agent monorepo for Liora.",
+  "scripts": {
+    "build:cli": "go build -o dist/dev/liora ./apps/cli",
+    "test:go": "GOTOOLCHAIN=local go test -count=1 ./...",
+    "smoke:tui": "./scripts/tui-smoke.sh \"$PWD\"",
+    "audit:v0.1": "GOTOOLCHAIN=local ./scripts/v0.1-exit-audit.sh \"$PWD\""
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.0.0"
+}

@@ -25,7 +25,7 @@
 - `internal/task`：任务领域模型、SQLite 仓储、任务 runner。
 - `internal/daemon`：HTTP API、SSE 输出。
 - `internal/store`：开放共享 SQLite 连接，并初始化任务表。
-- `cmd/coding-agent`：增加 daemon 模式。
+- `apps/cli`：增加 daemon 模式。
 - `scripts`：增加 daemon smoke 脚本和测试。
 
 HTTP API:
@@ -56,7 +56,7 @@ HTTP API:
 - [x] Task 3: 新增 `internal/task/store.go` 和测试，完成任务仓储。
 - [x] Task 4: 新增 `internal/task/runner.go` 和测试，桥接现有 runtime/agent 事件。
 - [x] Task 5: 新增 `internal/daemon/server.go` 和测试，完成 HTTP/SSE API。
-- [x] Task 6: 修改 `cmd/coding-agent/main.go` 和测试，接入 `-daemon`。
+- [x] Task 6: 修改 `apps/cli/main.go` 和测试，接入 `-daemon`。
 - [x] Task 7: 更新 README、增加 smoke 脚本和测试。
 - [x] Task 8: 全量测试、smoke、git diff 审查、提交。
 

@@ -2,12 +2,28 @@
 
 Liora 是一个可运行的最小 Coding Agent MVP，用于验证“工具调用 + 文件修改 + 命令执行 + 执行轨迹”的基础闭环。
 
-它支持两种使用方式：
+它支持几种使用方式：
 
 - 脚本模式：直接输入工具步骤，便于稳定调试。
 - 自然语言模式：通过可切换供应商的 LLM client 将用户需求转换成工具步骤，再交给本地执行器运行。
 - 交互模式：启动一个轻量 TUI，自动拉起本地 Core Daemon，连续输入自然语言任务并查看计划、工具调用、总结和 diff。
 - Daemon 模式：启动本地 Core Daemon，通过 HTTP API 和 SSE 暴露任务工坊能力，供未来 macOS 客户端接入。
+
+## Monorepo 结构
+
+Liora 现在按 monorepo 组织，Go core 和未来 TUI/desktop 入口分开演进：
+
+```text
+apps/
+  cli/        当前可用的 liora CLI/TUI/daemon 入口
+  tui/        预留给下一阶段更精致的独立 TUI app
+internal/     Go agent core、daemon、task、sandbox、LLM、store、tools
+packages/     预留给跨 app 复用的协议、UI 或 eval 包
+scripts/      安装、打包、smoke 和 exit audit
+docs/         产品、架构和发布文档
+```
+
+当前 `apps/cli` 仍负责安装产物 `liora`。复杂 TUI 后续可以放到 `apps/tui`，用 Ink/React 或其他更适合终端 UI 的技术栈，通过 Core Daemon API 复用 Go core，而不是重写 agent 执行逻辑。
 
 ## 功能
 
@@ -187,7 +203,7 @@ liora
 进入后直接输入自然语言任务：
 
 ```text
-agent > 帮我读取 app.txt，把 old 改成 new，并输出 diff
+liora > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 ```
 
 常用命令：
@@ -246,7 +262,6 @@ TUI 会自动继续当前 workspace 最近的 session，因此重启 `liora` 后
 
 - `Core` / `Safety`：当前连接的 agent core 和写入策略。
 - 轻量进度行：任务启动、planning、workspace、tool call 和完成状态。
-- `You`：本轮用户输入。
 - `Plan`：LLM 生成的工具步骤。
 - `Tools`：每个工具的执行状态和多行输出预览。
 - `Summary`：本轮执行总结。
@@ -485,7 +500,9 @@ LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scr
 
 ## 架构分层
 
-- `cmd/coding-agent`：CLI 参数、配置加载和模式选择。
+- `apps/cli`：当前 Go CLI/TUI/daemon 入口，负责参数、配置加载和模式选择。
+- `apps/tui`：未来独立 TUI app 预留目录；应通过 daemon API 复用 core，不直接执行工具。
+- `packages`：未来跨 app 复用的协议、UI 和 eval 包。
 - `internal/daemon`：本地 HTTP API 和 SSE 事件流。
 - `internal/task`：任务模型、SQLite 仓储和任务 runner。
 - `internal/sandbox`：Shell executor 抽象，支持 local 和 Docker。

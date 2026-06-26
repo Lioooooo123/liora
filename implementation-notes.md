@@ -366,3 +366,9 @@
 - planner 清洗现在会识别 `ANSWER:`、跳过 fenced code marker、剥离 `-` / `*` / `1.` / `1)` 等常见列表前缀，并只提取已注册工具开头的行；如果没有可执行行，仍保留原错误路径，避免把未知输出静默吞掉。
 - agent 自身也接受编号/项目符号步骤，作为 CLI/scripted 输入的兜底。针对带空格路径，planner prompt 明确要求加引号，agent 继续支持反斜杠转义，覆盖 `Assignment Question.pdf` 这类实际文件名。
 - 这仍不是 Claude Code 的完整 tool-use agent loop；后续真正对标需要模型原生工具调用、多轮观察-执行循环、全屏审批和可中断 UI。本轮先解决“模型返回稍不规整就不能用”的阻塞问题。
+
+## 2026-06-26 Monorepo Restructure
+
+- 用户判断 Go 写复杂 TUI 不太合适，希望仓库转成 monorepo。本轮采用渐进式迁移：把当前可运行入口从 `cmd/coding-agent` 移到 `apps/cli`，保留二进制名 `liora` 和现有 Go core，不在同一轮重写 TUI。
+- 根目录新增 `package.json` 和 `pnpm-workspace.yaml`，工作区包含 `apps/*` 与 `packages/*`。`apps/tui` 先作为独立 TUI app 占位，未来可用 Ink/React 或其他终端 UI 栈，通过 Core Daemon API 复用 Go core。
+- 暂不把 `internal/` 移到 `packages/core`，因为 Go `internal` 可见性、已有 import path、daemon smoke 和 release packaging 都依赖当前模块边界。先稳定入口目录和脚本，后续如果要拆协议 SDK，再新增 `packages/protocol`。

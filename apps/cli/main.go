@@ -155,7 +155,7 @@ func main() {
 		}
 	}
 	if strings.TrimSpace(steps) == "" {
-		fmt.Fprintln(os.Stderr, "usage: coding-agent -workspace /path -prompt $'read file\\nrun go test ./...'")
+		fmt.Fprintln(os.Stderr, "usage: liora -workspace /path -prompt $'read file\\nrun go test ./...'")
 		os.Exit(2)
 	}
 

@@ -19,7 +19,7 @@ GOOS="$GOOS_TARGET" GOARCH="$GOARCH_TARGET" go build \
   -trimpath \
   -ldflags "-s -w -X main.version=$VERSION" \
   -o "$STAGE_DIR/bin/liora" \
-  ./cmd/coding-agent
+  ./apps/cli
 
 cp "$PROJECT_DIR/README.md" "$STAGE_DIR/README.md"
 cp "$PROJECT_DIR/docs/release.md" "$STAGE_DIR/docs/release.md"

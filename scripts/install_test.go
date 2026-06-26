@@ -12,7 +12,7 @@ func TestInstallScriptBuildsLioraBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
-	for _, want := range []string{`go build`, `cmd/coding-agent`, `liora`, `.local/bin`} {
+	for _, want := range []string{`go build`, `apps/cli`, `liora`, `.local/bin`} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected install script to contain %q, got:\n%s", want, content)
 		}

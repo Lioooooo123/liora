@@ -9,7 +9,7 @@ CONFIG_DIR="$HOME/.config/liora"
 
 mkdir -p "$INSTALL_DIR"
 cd "$PROJECT_DIR"
-go build -o "$BIN_PATH" ./cmd/coding-agent
+go build -o "$BIN_PATH" ./apps/cli
 
 if [ -f "$PROJECT_DIR/.env.local" ] && [ ! -f "$CONFIG_DIR/.env" ]; then
   mkdir -p "$CONFIG_DIR"
