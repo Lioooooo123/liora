@@ -10,6 +10,8 @@ if [[ "${1:-}" == "--skip-git-clean" ]]; then
 fi
 
 GO_TOOLCHAIN="${GOTOOLCHAIN:-local}"
+AUDIT_TMP="$(mktemp -d)"
+trap 'rm -rf "$AUDIT_TMP"' EXIT
 
 echo "[1/7] go test"
 (
@@ -53,8 +55,9 @@ echo "[5/7] coding eval"
 echo "[6/7] install and package"
 ARCHIVE="$(
   cd "$ROOT"
-  GOTOOLCHAIN="$GO_TOOLCHAIN" ./scripts/install-local.sh >/tmp/liora-v01-install.log
-  "$HOME/.local/bin/liora" -version
+  INSTALL_DIR="$AUDIT_TMP/install/bin"
+  LIORA_INSTALL_DIR="$INSTALL_DIR" GOTOOLCHAIN="$GO_TOOLCHAIN" ./scripts/install-local.sh >"$AUDIT_TMP/install.log"
+  "$INSTALL_DIR/liora" -version
   GOTOOLCHAIN="$GO_TOOLCHAIN" ./scripts/package-release.sh
 )"
 ARCHIVE_PATH="$(printf '%s\n' "$ARCHIVE" | tail -n 1)"
@@ -68,12 +71,24 @@ echo "[7/7] release smoke"
 if [[ "$SKIP_GIT_CLEAN" != "1" ]]; then
   STATUS="$(cd "$ROOT" && git status --short --branch)"
   printf '%s\n' "$STATUS"
-  if [[ -n "$(cd "$ROOT" && git status --porcelain)" ]]; then
-    echo "working tree is not clean" >&2
+  BRANCH="$(cd "$ROOT" && git rev-parse --abbrev-ref HEAD)"
+  if [[ "$BRANCH" != "main" ]]; then
+    echo "v0.1 exit audit must run on main, got $BRANCH" >&2
     exit 1
   fi
-  if printf '%s\n' "$STATUS" | head -n 1 | grep -Eq '\[(ahead|behind|gone|diverged)'; then
-    echo "branch is not synchronized with upstream" >&2
+  if ! UPSTREAM="$(cd "$ROOT" && git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"; then
+    echo "main has no upstream configured" >&2
+    exit 1
+  fi
+  COUNTS="$(cd "$ROOT" && git rev-list --left-right --count "HEAD...$UPSTREAM")"
+  AHEAD="$(printf '%s' "$COUNTS" | awk '{print $1}')"
+  BEHIND="$(printf '%s' "$COUNTS" | awk '{print $2}')"
+  if [[ "$AHEAD" != "0" || "$BEHIND" != "0" ]]; then
+    echo "branch is not synchronized with upstream $UPSTREAM (ahead=$AHEAD behind=$BEHIND)" >&2
+    exit 1
+  fi
+  if [[ -n "$(cd "$ROOT" && git status --porcelain)" ]]; then
+    echo "working tree is not clean" >&2
     exit 1
   fi
 fi

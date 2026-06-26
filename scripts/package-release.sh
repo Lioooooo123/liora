@@ -22,6 +22,7 @@ GOOS="$GOOS_TARGET" GOARCH="$GOARCH_TARGET" go build \
   ./cmd/coding-agent
 
 cp "$PROJECT_DIR/README.md" "$STAGE_DIR/README.md"
+cp "$PROJECT_DIR/docs/release.md" "$STAGE_DIR/docs/release.md"
 cp "$PROJECT_DIR/docs/mvp-exit-benchmark.md" "$STAGE_DIR/docs/mvp-exit-benchmark.md"
 cp "$PROJECT_DIR/docs/v0.1-exit-audit.md" "$STAGE_DIR/docs/v0.1-exit-audit.md"
 
