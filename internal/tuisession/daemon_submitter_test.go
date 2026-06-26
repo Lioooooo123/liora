@@ -386,6 +386,114 @@ func TestDaemonSubmitterTailsRecentTaskOutput(t *testing.T) {
 	}
 }
 
+func TestDaemonSubmitterWatchesActiveWorkspaceTasks(t *testing.T) {
+	root := t.TempDir()
+	otherRoot := t.TempDir()
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	first, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: root,
+		Prompt:    "first active",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: root,
+		Prompt:    "second active",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: otherRoot,
+		Prompt:    "other active",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, taskID := range []string{first.ID, second.ID, other.ID} {
+		if err := repo.UpdateStatus(t.Context(), taskID, taskpkg.StatusRunning); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, record := range []struct {
+		id      string
+		message string
+	}{
+		{id: first.ID, message: "first streamed"},
+		{id: second.ID, message: "second streamed"},
+		{id: other.ID, message: "other streamed"},
+	} {
+		if err := repo.AppendEvent(t.Context(), record.id, taskpkg.EventSummary, taskpkg.EventPayload{Message: record.message}); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.AppendEvent(t.Context(), record.id, taskpkg.EventCompleted, taskpkg.EventPayload{Status: string(taskpkg.StatusCompleted)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, false)
+
+	output, handled, err := submitter.HandleCommand(t.Context(), "/watch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Watch tasks", first.ID, second.ID, "task.summary: first streamed", "task.summary: second streamed", "task.completed"} {
+		if !handled || !strings.Contains(output, want) {
+			t.Fatalf("expected /watch output to contain %q handled=%v output=%q", want, handled, output)
+		}
+	}
+	if strings.Contains(output, other.ID) || strings.Contains(output, "other streamed") {
+		t.Fatalf("/watch should be scoped to current workspace active tasks, got %q", output)
+	}
+}
+
+func TestDaemonSubmitterWatchesExplicitTasks(t *testing.T) {
+	root := t.TempDir()
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	taskRecord, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: root,
+		Prompt:    "explicit",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), taskRecord.ID, taskpkg.EventToolResult, taskpkg.EventPayload{
+		Tool:   "run",
+		Input:  "echo hi",
+		Output: "hi",
+		Status: "ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), taskRecord.ID, taskpkg.EventCompleted, taskpkg.EventPayload{Status: string(taskpkg.StatusCompleted)}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, t.TempDir(), false)
+
+	output, handled, err := submitter.HandleCommand(t.Context(), "/watch "+taskRecord.ID+" "+taskRecord.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Watch tasks", taskRecord.ID, "tool.result[ok]: run echo hi hi", "task.completed"} {
+		if !handled || !strings.Contains(output, want) {
+			t.Fatalf("expected explicit /watch output to contain %q handled=%v output=%q", want, handled, output)
+		}
+	}
+	if strings.Count(output, "- "+taskRecord.ID) != 1 {
+		t.Fatalf("expected explicit /watch to deduplicate task ids, got %q", output)
+	}
+}
+
 func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 	root := t.TempDir()
 	repo, closeDB := newTestRepository(t)

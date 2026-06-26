@@ -172,6 +172,8 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		return s.listSessions(ctx)
 	case "/workbench", "/status":
 		return s.showWorkbench(ctx)
+	case "/watch":
+		return s.watchTasks(ctx, "")
 	case "/session":
 		return s.showSession(ctx)
 	case "/resume-latest", "/continue":
@@ -203,6 +205,9 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		}
 		if strings.HasPrefix(line, "/transcript ") {
 			return s.showTranscript(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/transcript ")))
+		}
+		if strings.HasPrefix(line, "/watch ") {
+			return s.watchTasks(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/watch ")))
 		}
 		if strings.HasPrefix(line, "/resume-session ") {
 			return s.resumeSession(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/resume-session ")))
@@ -659,6 +664,67 @@ func (s *DaemonSubmitter) showWorkbench(ctx context.Context) (string, bool, erro
 	return strings.Join(lines, "\n"), true, nil
 }
 
+func (s *DaemonSubmitter) watchTasks(ctx context.Context, args string) (string, bool, error) {
+	if s.client == nil {
+		return "No daemon client.", true, nil
+	}
+	taskIDs, err := s.watchTaskIDs(ctx, args)
+	if err != nil {
+		return "", true, err
+	}
+	if len(taskIDs) == 0 {
+		return "No active daemon tasks for this workspace.", true, nil
+	}
+	stream, errs := s.client.StreamTaskEvents(ctx, taskIDs)
+	lines := []string{"Watch tasks"}
+	for _, taskID := range taskIDs {
+		lines = append(lines, "- "+taskID)
+	}
+	eventCount := 0
+	const maxWatchEvents = 120
+	for update := range stream {
+		payload, _ := eventPayload(update.Event)
+		if update.Type == taskpkg.EventDiff {
+			s.rememberDiff(update.TaskID, payload.Diff)
+		}
+		s.rememberTask(update.TaskID)
+		if eventCount < maxWatchEvents {
+			lines = append(lines, formatWatchEvent(update.TaskID, update.Type, payload))
+		}
+		eventCount++
+	}
+	if err := <-errs; err != nil {
+		if len(lines) > 1 {
+			lines = append(lines, "Error: "+err.Error())
+			return strings.Join(lines, "\n"), true, nil
+		}
+		return "", true, err
+	}
+	if eventCount == 0 {
+		lines = append(lines, "No events received.")
+	} else if eventCount > maxWatchEvents {
+		lines = append(lines, fmt.Sprintf("... %d more events omitted; use /tail <task_id> to inspect history.", eventCount-maxWatchEvents))
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) watchTaskIDs(ctx context.Context, args string) ([]string, error) {
+	fields := strings.Fields(args)
+	if len(fields) > 0 && fields[0] != "active" {
+		return uniqueStrings(fields), nil
+	}
+	tasks, err := s.client.ListTasksForWorkspace(ctx, s.workspace, 50)
+	if err != nil {
+		return nil, err
+	}
+	active := filterActiveTasks(tasks)
+	taskIDs := make([]string, 0, len(active))
+	for _, task := range active {
+		taskIDs = append(taskIDs, task.ID)
+	}
+	return taskIDs, nil
+}
+
 func (s *DaemonSubmitter) showSession(ctx context.Context) (string, bool, error) {
 	sessionID := s.currentSessionID()
 	if sessionID == "" {
@@ -1054,6 +1120,32 @@ func formatTailEvent(eventType taskpkg.EventType, payload taskpkg.EventPayload) 
 	}
 }
 
+func formatWatchEvent(taskID string, eventType taskpkg.EventType, payload taskpkg.EventPayload) string {
+	prefix := taskID + " " + string(eventType)
+	switch eventType {
+	case taskpkg.EventPlanReady:
+		return prefix + ": " + firstLine(payload.Steps)
+	case taskpkg.EventToolCall:
+		return strings.TrimSpace(prefix + ": " + payload.Tool + " " + payload.Input)
+	case taskpkg.EventToolResult:
+		status := payload.Status
+		if status == "" {
+			status = string(trace.StatusOK)
+		}
+		return strings.TrimSpace(prefix + "[" + status + "]: " + payload.Tool + " " + payload.Input + " " + firstLine(payload.Output))
+	case taskpkg.EventSummary:
+		return prefix + ": " + firstLine(payload.Message)
+	case taskpkg.EventDiff:
+		return prefix + ": " + firstLine(payload.Diff)
+	case taskpkg.EventPermissionRequest:
+		return strings.TrimSpace(prefix + ": " + payload.Tool + " " + payload.Input + " " + payload.Risk + " " + payload.Reason)
+	case taskpkg.EventCompleted, taskpkg.EventCancelled, taskpkg.EventError, taskpkg.EventReplanning:
+		return strings.TrimSpace(prefix + ": " + payload.Status + " " + firstLine(payload.Message))
+	default:
+		return strings.TrimSpace(prefix + ": " + firstLine(payload.Message))
+	}
+}
+
 func appendPrefixedLines(prefix string, value string) []string {
 	value = strings.TrimRight(value, "\n")
 	if value == "" {
@@ -1118,6 +1210,23 @@ func filterActiveTasks(tasks []taskpkg.Task) []taskpkg.Task {
 		}
 	}
 	return active
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	return unique
 }
 
 func emptyDash(value string) string {

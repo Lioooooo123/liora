@@ -296,3 +296,9 @@
 - 设计参考了 Claude Code 的 per-conversation engine 隔离思路，以及 Kimi Code 按 workspace/session 管理历史的方向：核心状态仍在 daemon/session/task/event，入口层只负责投影和交互。
 - 聚合流使用 child context 统一取消；任一子流出现传输错误时会取消整组订阅并通过 buffered error channel 返回首个错误。调用方停止消费时必须取消 context，否则 channel send 仍会等待，这是 Go channel API 的显式背压语义。
 - 当前没有新增 daemon 批量 SSE API，原因是 client-side fan-in 已能满足 TUI/Mac 客户端共享需求，且不改变已有 HTTP 合同。后续如果任务数量很多，再考虑 daemon 原生 `/v1/tasks/events/stream?ids=...` 来降低连接数。
+
+## 2026-06-26 TUI Multi Task Watch
+
+- daemon-backed TUI 新增 `/watch [active|task_id...]`。无参或 `active` 时只订阅当前 workspace 的 active tasks；显式传 task id 时可以跨 workspace 观察指定任务。
+- `/watch` 复用 `daemonclient.StreamTaskEvents`，输出按 `task_id event_type` 前缀聚合。line-based TUI 仍是阻塞式命令，不做全屏持续刷新；这是为了保持现有交互模型稳定，同时把多任务观察能力下沉到可复用 agent core。
+- 单次 `/watch` 最多展示 120 个事件，避免大输出任务拖慢终端；完整历史仍通过 daemon event store 和 `/tail <task_id>` 回看。后续全屏 TUI 或 Mac 客户端可以基于同一 fan-in API 做实时列表、状态栏和可滚动 transcript。
