@@ -39,9 +39,26 @@ func TestRenderWelcomeShowsWorkspaceAndModel(t *testing.T) {
 		Safety:    "patch-first",
 	})
 
-	for _, want := range []string{"Liora", "Workspace", "/tmp/project", "Model", "deepseek-v4-pro", "Core", "embedded daemon", "Safety", "patch-first", "/help", "/tools", "/workbench", "/timeline", "/transcript", "/tail", "/diff", "/approvals", "/resume-latest", "/new-session", "/exit"} {
+	for _, want := range []string{"Liora", "local agent workbench", "workspace", "/tmp/project", "model", "deepseek-v4-pro", "core", "embedded daemon", "safety", "patch-first", "/help", "/workbench", "/memory", "/exit"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected welcome output to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestInteractiveLoopRendersGroupedHelp(t *testing.T) {
+	var out strings.Builder
+	app := New(Config{Workspace: "/tmp/project", Model: "deepseek-v4-pro"}, SubmitterFunc(func(_ context.Context, _ string) (TurnResult, error) {
+		return TurnResult{}, nil
+	}))
+
+	if err := app.Run(context.Background(), strings.NewReader("/help\n/exit\n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	rendered := out.String()
+	for _, want := range []string{"Help", "work", "/tools", "/workbench", "history", "/timeline", "/transcript", "changes", "/diff", "/apply", "approval", "/approvals", "context", "/memory", "session", "/resume-latest"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected grouped help to contain %q, got:\n%s", want, rendered)
 		}
 	}
 }

@@ -269,7 +269,7 @@ func TestCLIDefaultsToInteractiveCurrentDirectory(t *testing.T) {
 		t.Fatalf("command failed: %v\n%s", err, string(output))
 	}
 	rendered := string(output)
-	for _, want := range []string{"Liora", "agent >", "Timeline session_", "user: 看一下当前目录", "tool.result"} {
+	for _, want := range []string{"Liora", "local agent workbench", "liora >", "Timeline session_", "user: 看一下当前目录", "tool.result"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected default daemon-backed TUI output to contain %q, got:\n%s", want, rendered)
 		}

@@ -86,16 +86,15 @@ type App struct {
 }
 
 var (
-	accentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("149")).Bold(true)
-	mutedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	labelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Bold(true)
-	okStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
-	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
-	boxStyle    = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("238")).
-			Padding(0, 1).
-			MarginTop(1)
+	mutedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	labelStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Bold(true)
+	promptStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("149")).Bold(true)
+	commandStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("183"))
+	okStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
+	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
+	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	railStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	metadataStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 )
 
 func New(config Config, submitter Submitter) *App {
@@ -107,23 +106,23 @@ func RenderWelcome(config Config) string {
 	if model == "" {
 		model = "scripted"
 	}
-	header := accentStyle.Render("Liora")
-	status := strings.Join([]string{
-		labelStyle.Render("Workspace") + " " + config.Workspace,
-		labelStyle.Render("Model") + " " + model,
-	}, "\n")
-	var runtime []string
+	lines := []string{
+		mutedStyle.Render("local agent workbench"),
+		keyValue("workspace", config.Workspace),
+		keyValue("model", model),
+	}
 	if strings.TrimSpace(config.Core) != "" {
-		runtime = append(runtime, labelStyle.Render("Core")+" "+config.Core)
+		lines = append(lines, keyValue("core", config.Core))
 	}
 	if strings.TrimSpace(config.Safety) != "" {
-		runtime = append(runtime, labelStyle.Render("Safety")+" "+config.Safety)
+		lines = append(lines, keyValue("safety", config.Safety))
 	}
-	if len(runtime) > 0 {
-		status += "\n" + strings.Join(runtime, "\n")
-	}
-	commands := mutedStyle.Render("Commands  /help  /tools  /workbench  /spawn  /watch  /tasks  /sessions  /timeline  /transcript  /history  /last  /tail  /diff  /approvals  /resume  /resume-session  /resume-latest  /new-session  /approve  /deny  /apply  /cancel  /exit")
-	return header + "\n" + status + "\n\n" + commands + "\n"
+	lines = append(lines,
+		"",
+		commandStyle.Render("/help")+" commands  "+commandStyle.Render("/workbench")+" workspace  "+commandStyle.Render("/memory")+" memory  "+commandStyle.Render("/exit")+" quit",
+		mutedStyle.Render("Patch-first: review changes, then /apply."),
+	)
+	return renderPanel("Liora", lines) + "\n"
 }
 
 func (a *App) Run(ctx context.Context, input io.Reader, output io.Writer) error {
@@ -137,7 +136,7 @@ func (a *App) Run(ctx context.Context, input io.Reader, output io.Writer) error 
 func (a *App) runBlocking(ctx context.Context, input io.Reader, output io.Writer) error {
 	scanner := bufio.NewScanner(input)
 	for {
-		fmt.Fprint(output, "\n"+accentStyle.Render("agent")+" > ")
+		fmt.Fprint(output, "\n"+promptStyle.Render("liora")+" > ")
 		if !scanner.Scan() {
 			break
 		}
@@ -150,7 +149,7 @@ func (a *App) runBlocking(ctx context.Context, input io.Reader, output io.Writer
 			fmt.Fprintln(output, "Bye")
 			return nil
 		case "/help":
-			fmt.Fprintln(output, "Type a coding request in natural language. Commands: /tools, /workbench, /spawn <request>, /watch [active|task_id...], /tasks, /sessions, /timeline [limit], /transcript [limit], /history <query>, /last, /tail [lines|task_id lines], /diff [task_id], /approvals, /resume <task_id>, /resume-session <session_id>, /resume-latest, /new-session, /approve [task_id], /deny [task_id], /apply, /cancel [task_id], /goal, /memory, /skills, /skill, /mcp, /exit.")
+			renderSection(output, "Help", helpText())
 			continue
 		}
 		if strings.HasPrefix(line, "/") && a.config.Commands != nil {
@@ -193,7 +192,7 @@ func (a *App) runStreaming(ctx context.Context, input io.Reader, output io.Write
 	}
 	prompt := func() {
 		write(func() {
-			fmt.Fprint(output, "\n"+accentStyle.Render("agent")+" > ")
+			fmt.Fprint(output, "\n"+promptStyle.Render("liora")+" > ")
 		})
 	}
 	prompt()
@@ -285,7 +284,7 @@ func (a *App) handleStreamingLine(ctx context.Context, line string, output io.Wr
 		return true
 	case "/help":
 		write(func() {
-			fmt.Fprintln(output, "Type a coding request in natural language. Commands: /tools, /workbench, /spawn <request>, /watch [active|task_id...], /tasks, /sessions, /timeline [limit], /transcript [limit], /history <query>, /last, /tail [lines|task_id lines], /diff [task_id], /approvals, /resume <task_id>, /resume-session <session_id>, /resume-latest, /new-session, /approve [task_id], /deny [task_id], /apply, /cancel [task_id], /goal, /memory, /skills, /skill, /mcp, /exit.")
+			renderSection(output, "Help", helpText())
 		})
 		return false
 	}
@@ -430,12 +429,8 @@ func RenderTurn(output io.Writer, view TurnView) {
 	if len(result.Events) > 0 {
 		var blocks []string
 		for _, event := range result.Events {
-			status := okStyle.Render("ok")
-			if event.Status != trace.StatusOK {
-				status = errStyle.Render("error")
-			}
 			var lines []string
-			lines = append(lines, "["+status+"] "+event.Tool+" "+event.Input)
+			lines = append(lines, renderStatus(string(event.Status))+" "+metadataStyle.Render(strings.TrimSpace(event.Tool+" "+event.Input)))
 			out := strings.TrimSpace(event.Output)
 			if out != "" {
 				for _, line := range formatToolOutput(out, 12) {
@@ -484,12 +479,9 @@ func formatPlan(steps string) string {
 }
 
 func formatToolEvent(payload eventPayload) string {
-	status := okStyle.Render("ok")
-	if payload.Status != "" && payload.Status != string(trace.StatusOK) {
-		status = errStyle.Render("error")
-	}
+	status := renderStatus(payload.Status)
 	var lines []string
-	lines = append(lines, "["+status+"] "+strings.TrimSpace(payload.Tool+" "+payload.Input))
+	lines = append(lines, status+" "+metadataStyle.Render(strings.TrimSpace(payload.Tool+" "+payload.Input)))
 	out := strings.TrimSpace(payload.Output)
 	if out != "" {
 		for _, line := range formatToolOutput(out, 12) {
@@ -501,8 +493,10 @@ func formatToolEvent(payload eventPayload) string {
 
 func renderSection(output io.Writer, title string, body string) {
 	body = strings.TrimRight(body, "\n")
-	content := labelStyle.Render(title) + "\n" + body
-	fmt.Fprintln(output, boxStyle.Render(content))
+	if body == "" {
+		return
+	}
+	fmt.Fprintln(output, "\n"+renderPanel(title, strings.Split(indentBody(body), "\n")))
 }
 
 func renderLogLine(output io.Writer, label string, body string) {
@@ -515,6 +509,63 @@ func renderLogLine(output io.Writer, label string, body string) {
 		label = strings.ToUpper(label[:1]) + label[1:]
 	}
 	fmt.Fprintln(output, mutedStyle.Render("  "+label+" - ")+body)
+}
+
+func keyValue(key string, value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = "-"
+	}
+	return labelStyle.Render(key) + " " + metadataStyle.Render(value)
+}
+
+func helpText() string {
+	groups := []string{
+		commandStyle.Render("work") + "      /tools  /workbench  /spawn <request>  /watch [active|task_id...]",
+		commandStyle.Render("history") + "   /tasks  /sessions  /timeline [limit]  /transcript [limit]  /history <query>  /tail",
+		commandStyle.Render("changes") + "   /diff [task_id]  /apply  /cancel [task_id]",
+		commandStyle.Render("approval") + "  /approvals  /approve [task_id]  /deny [task_id]",
+		commandStyle.Render("context") + "   /memory  /goal  /skills  /skill <name>  /mcp",
+		commandStyle.Render("session") + "   /resume <task_id>  /resume-session <id>  /resume-latest  /new-session  /exit",
+	}
+	return "Type a natural-language request, or use a command.\n\n" + strings.Join(groups, "\n")
+}
+
+func renderStatus(status string) string {
+	status = strings.TrimSpace(status)
+	if status == "" || status == string(trace.StatusOK) {
+		return okStyle.Render("ok")
+	}
+	if status == "cancelled" || status == "waiting_user" {
+		return warnStyle.Render(status)
+	}
+	return errStyle.Render(status)
+}
+
+func indentBody(body string) string {
+	var lines []string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.TrimSpace(line) == "" {
+			lines = append(lines, "")
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderPanel(title string, lines []string) string {
+	var rendered []string
+	rendered = append(rendered, railStyle.Render("╭─ ")+labelStyle.Render(title))
+	for _, line := range lines {
+		if line == "" {
+			rendered = append(rendered, railStyle.Render("│"))
+			continue
+		}
+		rendered = append(rendered, railStyle.Render("│ ")+line)
+	}
+	rendered = append(rendered, railStyle.Render("╰"))
+	return strings.Join(rendered, "\n")
 }
 
 func firstNonEmptyLine(value string) string {

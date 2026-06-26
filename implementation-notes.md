@@ -352,3 +352,10 @@
 - approval approve 路径现在只接受 `waiting_user` 状态，并用 daemon running registry 做原子启动检查，重复 approve 会返回 409，不再为同一 task 启动多个 runner goroutine。
 - 多任务 SSE 不再把 `permission.requested` 当作终止事件，`/watch` 可以继续等 approve 后的 `permission.approved` 与最终 completed/cancelled/error；单任务 SSE 仍在 permission request 处返回，保持当前 TUI 等待审批体验。
 - runtime replan 如果返回 `ANSWER:`，会把它视为本轮成功回答并返回 nil error，同时保留第一次失败工具事件供 transcript 回看。
+
+## 2026-06-26 TUI Surface Polish
+
+- 参考本地 `kimi-code` 的 welcome/banner、footer、tool card、approval panel 组织方式，以及 `claude-code-main` 的 status line、prompt footer、tool progress line 思路，本轮先改善 Liora line-based TUI 的信息架构和视觉层级，不直接迁移到 Bubble Tea/Ink 全屏 UI。
+- 首屏从一长串 commands 改为紧凑 workbench 面板，只展示 workspace/model/core/safety 和高频命令；完整命令移动到分组 `/help`，降低首次进入时的信息噪音。
+- section 渲染从大圆角盒子改为左边界轻量区块，保留 Plan/Tools/Summary/Diff/Approval 的语义标题；工具状态改为统一 status chip，后续迁移全屏 TUI 时可复用同一组语义渲染函数。
+- 实测发现完整圆角框会被长 workspace/model 行撑宽，观感反而接近“日志盒子”。本轮改成无右边框的左轨 panel，保留标题和层级，同时避免长路径导致整屏横向扩张。
