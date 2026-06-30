@@ -45,6 +45,15 @@ type Client struct {
 }
 
 func NewClient(config Config) (*Client, error) {
+	resolved, err := ResolveConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	return newClient(resolved), nil
+}
+
+// ResolveConfig normalizes provider settings and applies local defaults without calling remote APIs.
+func ResolveConfig(config Config) (Config, error) {
 	config.Provider = NormalizeProvider(config.Provider)
 	if config.Provider == "" {
 		config.Provider = ProviderOpenAIChat
@@ -54,9 +63,9 @@ func NewClient(config Config) (*Client, error) {
 	}
 	config.BaseURL = defaultBaseURL(config.Provider, config.BaseURL)
 	if config.BaseURL == "" {
-		return nil, fmt.Errorf("unsupported LLM provider %q", config.Provider)
+		return Config{}, fmt.Errorf("unsupported LLM provider %q", config.Provider)
 	}
-	return newClient(config), nil
+	return config, nil
 }
 
 func newClient(config Config) *Client {

@@ -168,6 +168,12 @@ gemini            Google Gemini generateContent
 
 为了兼容旧配置，`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 仍然可用；新的 `LIORA_LLM_*` 优先级更高。
 
+接入新 API 前可以先做本地诊断；该命令只解析配置，不会请求供应商接口，也不会打印密钥明文：
+
+```sh
+liora -doctor
+```
+
 运行：
 
 ```sh

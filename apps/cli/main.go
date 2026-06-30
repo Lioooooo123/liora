@@ -42,6 +42,7 @@ func main() {
 	daemonMode := flag.Bool("daemon", false, "start the local Liora core daemon")
 	daemonAddr := flag.String("daemon-addr", "127.0.0.1:18080", "daemon listen address")
 	tuiDaemon := flag.Bool("tui-daemon", false, "run interactive TUI through the local daemon event stream")
+	doctor := flag.Bool("doctor", false, "print resolved LLM provider configuration and exit without calling the API")
 	llmProvider := flag.String("llm-provider", getenvAny("LIORA_LLM_PROVIDER", "OPENAI_PROVIDER", ""), "LLM provider: openai-chat, openai-responses, deepseek, anthropic, gemini")
 	llmBaseURL := flag.String("llm-base-url", getenvAny("LIORA_LLM_BASE_URL", "OPENAI_BASE_URL", ""), "LLM API base URL")
 	llmAPIKey := flag.String("llm-api-key", getenvAny("LIORA_LLM_API_KEY", "OPENAI_API_KEY", ""), "LLM API key")
@@ -65,6 +66,13 @@ func main() {
 		BaseURL:  *llmBaseURL,
 		APIKey:   *llmAPIKey,
 		Model:    *llmModel,
+	}
+	if *doctor {
+		if err := printDoctor(llmConfig); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		return
 	}
 	llmClient, err := llm.NewClient(llmConfig)
 	if err != nil {

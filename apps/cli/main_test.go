@@ -15,6 +15,94 @@ import (
 	"time"
 )
 
+func TestCLIDoctorReportsAnthropicConfigWithoutSecret(t *testing.T) {
+	// Given
+	cmd := exec.Command("go", "run", ".", "-doctor")
+	cmd.Env = cleanLLMEnv(t,
+		"LIORA_LLM_PROVIDER=anthropic",
+		"LIORA_LLM_API_KEY=test-secret",
+		"LIORA_LLM_MODEL=claude-test",
+	)
+
+	// When
+	output, err := cmd.CombinedOutput()
+
+	// Then
+	if err != nil {
+		t.Fatalf("doctor command failed: %v\n%s", err, string(output))
+	}
+	rendered := string(output)
+	for _, want := range []string{
+		"provider: anthropic",
+		"display: Anthropic",
+		"model: claude-test",
+		"base_url: https://api.anthropic.com/v1",
+		"api_key: configured",
+		"tools: supported",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected doctor output to contain %q, got:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "test-secret") {
+		t.Fatalf("doctor output leaked API key:\n%s", rendered)
+	}
+}
+
+func TestCLIDoctorReportsGeminiMissingKeyWithoutFailing(t *testing.T) {
+	// Given
+	cmd := exec.Command("go", "run", ".", "-doctor")
+	cmd.Env = cleanLLMEnv(t,
+		"LIORA_LLM_PROVIDER=gemini",
+		"LIORA_LLM_MODEL=gemini-test",
+	)
+
+	// When
+	output, err := cmd.CombinedOutput()
+
+	// Then
+	if err != nil {
+		t.Fatalf("doctor command failed: %v\n%s", err, string(output))
+	}
+	rendered := string(output)
+	for _, want := range []string{
+		"provider: gemini",
+		"display: Gemini",
+		"model: gemini-test",
+		"base_url: https://generativelanguage.googleapis.com",
+		"api_key: missing",
+		"tools: unsupported",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected doctor output to contain %q, got:\n%s", want, rendered)
+		}
+	}
+}
+
+func cleanLLMEnv(t *testing.T, extra ...string) []string {
+	t.Helper()
+	blocked := map[string]bool{
+		"LIORA_LLM_PROVIDER": true,
+		"LIORA_LLM_BASE_URL": true,
+		"LIORA_LLM_API_KEY":  true,
+		"LIORA_LLM_MODEL":    true,
+		"OPENAI_PROVIDER":    true,
+		"OPENAI_BASE_URL":    true,
+		"OPENAI_API_KEY":     true,
+		"OPENAI_MODEL":       true,
+	}
+	env := make([]string, 0, len(os.Environ())+len(extra))
+	for _, entry := range os.Environ() {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok && blocked[name] {
+			continue
+		}
+		env = append(env, entry)
+	}
+	env = append(env, "HOME="+t.TempDir())
+	return append(env, extra...)
+}
+
 func TestCLINaturalModeUsesLLMPlan(t *testing.T) {
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "app.txt"), []byte("hello old agent\n"), 0o600); err != nil {
