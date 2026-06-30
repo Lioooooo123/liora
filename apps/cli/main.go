@@ -25,6 +25,7 @@ import (
 	"github.com/Lioooooo123/liora/internal/trace"
 	"github.com/Lioooooo123/liora/internal/tui"
 	"github.com/Lioooooo123/liora/internal/tuisession"
+	"github.com/mattn/go-isatty"
 )
 
 var version = "dev"
@@ -42,14 +43,20 @@ func main() {
 	daemonMode := flag.Bool("daemon", false, "start the local Liora core daemon")
 	daemonAddr := flag.String("daemon-addr", "127.0.0.1:18080", "daemon listen address")
 	tuiDaemon := flag.Bool("tui-daemon", false, "run interactive TUI through the local daemon event stream")
+	sessionID := flag.String("session", "", "attach interactive TUI requests to an existing daemon session id")
+	forceNewSession := flag.Bool("new-session", false, "start a fresh interactive session instead of auto-resume")
 	doctor := flag.Bool("doctor", false, "print resolved LLM provider configuration and exit without calling the API")
 	llmProvider := flag.String("llm-provider", getenvAny("LIORA_LLM_PROVIDER", "OPENAI_PROVIDER", ""), "LLM provider: openai-chat, openai-responses, deepseek, anthropic, gemini")
-	llmBaseURL := flag.String("llm-base-url", getenvAny("LIORA_LLM_BASE_URL", "OPENAI_BASE_URL", ""), "LLM API base URL")
+	llmBaseURL := flag.String("llm-base-url", defaultLLMBaseURL(), "LLM API base URL")
 	llmAPIKey := flag.String("llm-api-key", getenvAny("LIORA_LLM_API_KEY", "OPENAI_API_KEY", ""), "LLM API key")
 	llmModel := flag.String("llm-model", getenvAny("LIORA_LLM_MODEL", "OPENAI_MODEL", ""), "LLM model name")
 	traceOut := flag.String("trace-out", "", "write trace events to a JSONL file")
 	versionFlag := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	seenFlags := parsedFlagNames()
+	if shouldIgnoreLegacyBaseURL(*llmProvider, seenFlags["llm-provider"], seenFlags["llm-base-url"]) {
+		*llmBaseURL = ""
+	}
 	if *versionFlag {
 		fmt.Println("liora " + version)
 		return
@@ -115,8 +122,6 @@ func main() {
 	turnRuntime.SetPermissionChecker(permissionPolicy(false))
 
 	if *interactive || defaultInteractive {
-		submitter := tui.Submitter(turnRuntime)
-		commands := tui.CommandHandler(turnRuntime)
 		baseURL := daemonBaseURL(*daemonAddr)
 		var embedded *embeddedDaemon
 		coreLabel := "external daemon"
@@ -139,16 +144,34 @@ func main() {
 			fmt.Fprintln(os.Stderr, "daemon is not reachable:", err)
 			os.Exit(1)
 		}
-		daemonSession := tuisession.NewDaemonSubmitter(client, workspace.Root(), true)
-		submitter = daemonSession
-		commands = tui.CommandChain{daemonSession, turnRuntime}
-		app := tui.New(tui.Config{
+
+		daemonSession := tuisession.NewDaemonSubmitter(client, workspace.Root(), true, strings.TrimSpace(*sessionID), *forceNewSession)
+		tuiConfig := tui.Config{
 			Workspace: workspace.Root(),
 			Model:     llmLabel(llmConfig),
 			Core:      coreLabel,
 			Safety:    safetyLabel(patchMode),
-			Commands:  commands,
-		}, submitter)
+			Commands: tui.CommandChain{
+				doctorCommand{
+					config: llmConfig,
+					report: doctorReportContext{
+						Workspace: workspace.Root(),
+						Core:      coreLabel,
+						Safety:    safetyLabel(patchMode),
+					},
+				},
+				daemonSession,
+				turnRuntime,
+			},
+		}
+		if useFullScreenTUI() {
+			if err := tui.RunProgram(context.Background(), tuiConfig, daemonSession); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		}
+		app := tui.New(tuiConfig, daemonSession)
 		if err := app.Run(context.Background(), os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -274,6 +297,21 @@ func daemonBaseURL(addr string) string {
 	return "http://" + addr
 }
 
+// full-screen Bubble Tea TUI requires a real terminal; piped/CI callers
+// (e.g. tui-smoke) fall back to the line-based renderer. LIORA_FORCE_GO_TUI
+// forces the line renderer even on a TTY for debugging.
+func useFullScreenTUI() bool {
+	if toBool(os.Getenv("LIORA_FORCE_GO_TUI")) {
+		return false
+	}
+	return isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd())
+}
+
+func toBool(v string) bool {
+	s := strings.TrimSpace(strings.ToLower(v))
+	return s == "1" || s == "true" || s == "yes" || s == "on"
+}
+
 func newTaskRunner(repo *taskpkg.Repository, planner *llm.Planner, executor sandbox.Executor, patchMode bool) *taskpkg.Runner {
 	runner := taskpkg.NewRunner(repo, planner)
 	runner.SetSandbox(executor)
@@ -314,6 +352,38 @@ func getenvAny(names ...string) string {
 		}
 	}
 	return fallback
+}
+
+func defaultLLMBaseURL() string {
+	if value := os.Getenv("LIORA_LLM_BASE_URL"); value != "" {
+		return value
+	}
+	if strings.TrimSpace(os.Getenv("LIORA_LLM_PROVIDER")) != "" {
+		return ""
+	}
+	return getenvAny("OPENAI_BASE_URL", "")
+}
+
+func parsedFlagNames() map[string]bool {
+	seen := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) {
+		seen[f.Name] = true
+	})
+	return seen
+}
+
+func shouldIgnoreLegacyBaseURL(provider string, providerFlagSet bool, baseURLFlagSet bool) bool {
+	if baseURLFlagSet || strings.TrimSpace(os.Getenv("LIORA_LLM_BASE_URL")) != "" {
+		return false
+	}
+	if strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")) == "" {
+		return false
+	}
+	namespacedProviderSet := strings.TrimSpace(os.Getenv("LIORA_LLM_PROVIDER")) != ""
+	if !providerFlagSet && !namespacedProviderSet {
+		return false
+	}
+	return llm.NormalizeProvider(provider) != llm.ProviderOpenAIChat
 }
 
 func llmLabel(config llm.Config) string {

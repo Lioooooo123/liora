@@ -4,6 +4,10 @@ liora.db
 *.db-shm
 *.db-wal
 .superpowers/
+.omo/
+.trae/
 dist/
 node_modules/
 *.tsbuildinfo
+/cli
+/liora-demo

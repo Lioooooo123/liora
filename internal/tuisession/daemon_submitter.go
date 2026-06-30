@@ -16,19 +16,32 @@ import (
 )
 
 type DaemonSubmitter struct {
-	client        *daemonclient.Client
-	workspace     string
-	natural       bool
-	mu            sync.Mutex
-	sessionID     string
-	currentTaskID string
-	lastTaskID    string
-	lastDiff      string
-	newSession    bool
+	client          *daemonclient.Client
+	workspace       string
+	natural         bool
+	mu              sync.Mutex
+	sessionID       string
+	explicitSession bool
+	currentTaskID   string
+	lastTaskID      string
+	lastDiff        string
+	newSession      bool
 }
 
-func NewDaemonSubmitter(client *daemonclient.Client, workspace string, natural bool) *DaemonSubmitter {
-	return &DaemonSubmitter{client: client, workspace: workspace, natural: natural}
+func NewDaemonSubmitter(client *daemonclient.Client, workspace string, natural bool, sessionID string, startFresh bool) *DaemonSubmitter {
+	submitter := &DaemonSubmitter{
+		client:     client,
+		workspace:  workspace,
+		natural:    natural,
+		newSession: startFresh,
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID != "" {
+		submitter.rememberSession(sessionID)
+		submitter.explicitSession = true
+		submitter.newSession = false
+	}
+	return submitter
 }
 
 func (s *DaemonSubmitter) Submit(ctx context.Context, input string) (tui.TurnResult, error) {
@@ -164,6 +177,8 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 	switch line {
 	case "/tools":
 		return s.showTools(ctx)
+	case "/clear":
+		return s.newSessionCommand()
 	case "/cancel":
 		return s.cancelTask(ctx, "")
 	case "/approve":
@@ -931,8 +946,10 @@ func (s *DaemonSubmitter) showDiff(ctx context.Context, taskID string) (string, 
 	s.rememberTask(taskID)
 	s.rememberDiff(taskID, diff)
 	lines := []string{"Diff " + taskID}
+	lines = append(lines, tui.PatchReadyReply(diff))
 	lines = append(lines, previewLines(diff, 180)...)
-	lines = append(lines, "Next: review this diff, then use /apply to write it to the workspace.")
+	lines = append(lines, "Next:")
+	lines = append(lines, tui.PatchReadyNextAction())
 	return strings.Join(lines, "\n"), true, nil
 }
 
@@ -1066,7 +1083,7 @@ func (s *DaemonSubmitter) startNewSession() {
 func (s *DaemonSubmitter) shouldAutoResume() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return !s.newSession
+	return !s.newSession && !s.explicitSession
 }
 
 func (s *DaemonSubmitter) resumeLatestWorkspaceSession(ctx context.Context) (taskpkg.Session, bool, error) {

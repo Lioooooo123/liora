@@ -8,9 +8,24 @@ import (
 )
 
 func printDoctor(config llm.Config) error {
-	resolved, err := llm.ResolveConfig(config)
+	report, err := doctorReport(config, doctorReportContext{})
 	if err != nil {
 		return err
+	}
+	fmt.Println(report)
+	return nil
+}
+
+type doctorReportContext struct {
+	Workspace string
+	Core      string
+	Safety    string
+}
+
+func doctorReport(config llm.Config, reportContext doctorReportContext) (string, error) {
+	resolved, err := llm.ResolveConfig(config)
+	if err != nil {
+		return "", err
 	}
 	keyStatus := "missing"
 	if strings.TrimSpace(resolved.APIKey) != "" {
@@ -20,14 +35,25 @@ func printDoctor(config llm.Config) error {
 	if doctorSupportsTools(resolved.Provider) {
 		toolsStatus = "supported"
 	}
-	fmt.Println("Liora doctor")
-	fmt.Println("provider: " + resolved.Provider)
-	fmt.Println("display: " + llm.ProviderDisplayName(resolved.Provider))
-	fmt.Println("model: " + resolved.Model)
-	fmt.Println("base_url: " + resolved.BaseURL)
-	fmt.Println("api_key: " + keyStatus)
-	fmt.Println("tools: " + toolsStatus)
-	return nil
+	lines := []string{"Liora doctor"}
+	if strings.TrimSpace(reportContext.Workspace) != "" {
+		lines = append(lines, "workspace: "+reportContext.Workspace)
+	}
+	if strings.TrimSpace(reportContext.Core) != "" {
+		lines = append(lines, "core: "+reportContext.Core)
+	}
+	if strings.TrimSpace(reportContext.Safety) != "" {
+		lines = append(lines, "safety: "+reportContext.Safety)
+	}
+	lines = append(lines,
+		"provider: "+resolved.Provider,
+		"display: "+llm.ProviderDisplayName(resolved.Provider),
+		"model: "+resolved.Model,
+		"base_url: "+resolved.BaseURL,
+		"api_key: "+keyStatus,
+		"tools: "+toolsStatus,
+	)
+	return strings.Join(lines, "\n"), nil
 }
 
 func doctorSupportsTools(provider string) bool {

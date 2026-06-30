@@ -8,7 +8,6 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/trace"
@@ -162,6 +161,12 @@ func (a *App) runBlocking(ctx context.Context, input io.Reader, output io.Writer
 				renderSection(output, "System", result)
 				continue
 			}
+			renderSection(output, "System", "Unknown command. Use /help to view available commands.")
+			continue
+		}
+		if strings.HasPrefix(line, "/") {
+			renderSection(output, "System", "Unknown command. Use /help to view available commands.")
+			continue
 		}
 		if err := a.runTurn(ctx, line, output); err != nil {
 			fmt.Fprintf(output, "Error: %v\n", err)
@@ -184,28 +189,21 @@ func (a *App) runStreaming(ctx context.Context, input io.Reader, output io.Write
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	lines := scanInput(ctx, input)
-	var outputMu sync.Mutex
-	write := func(fn func()) {
-		outputMu.Lock()
-		defer outputMu.Unlock()
-		fn()
-	}
 	prompt := func() {
-		write(func() {
-			fmt.Fprint(output, "\n"+promptStyle.Render("liora")+" > ")
-		})
+		fmt.Fprint(output, "\n"+promptStyle.Render("liora")+" > ")
 	}
 	prompt()
 	var pending []string
 	var running bool
 	var turnDone <-chan turnOutcome
+	var streamEvents <-chan StreamUpdate
 	var inputClosed bool
 	var scanErr error
 	for {
 		if !running && len(pending) > 0 {
 			line := pending[0]
 			pending = pending[1:]
-			exit := a.handleStreamingLine(ctx, line, output, streamer, write, &running, &turnDone)
+			exit := a.handleStreamingLine(ctx, line, output, streamer, &running, &turnDone, &streamEvents)
 			if exit {
 				cancel()
 				return nil
@@ -221,13 +219,21 @@ func (a *App) runStreaming(ctx context.Context, input io.Reader, output io.Write
 		case result := <-turnDone:
 			running = false
 			turnDone = nil
+			if streamEvents != nil {
+				for event := range streamEvents {
+					RenderStreamUpdate(output, event)
+				}
+			}
+			streamEvents = nil
 			if result.err != nil {
-				write(func() {
-					fmt.Fprintf(output, "Error: %v\n", result.err)
-				})
+				fmt.Fprintf(output, "Error: %v\n", result.err)
 			}
 			if len(pending) == 0 && !inputClosed {
 				prompt()
+			}
+		case event, ok := <-streamEvents:
+			if ok {
+				RenderStreamUpdate(output, event)
 			}
 		case scanned := <-lines:
 			if !scanned.ok {
@@ -246,7 +252,7 @@ func (a *App) runStreaming(ctx context.Context, input io.Reader, output io.Write
 				pending = append(pending, line)
 				continue
 			}
-			exit := a.handleStreamingLine(ctx, line, output, streamer, write, &running, &turnDone)
+			exit := a.handleStreamingLine(ctx, line, output, streamer, &running, &turnDone, &streamEvents)
 			if exit {
 				cancel()
 				return nil
@@ -275,57 +281,52 @@ func scanInput(ctx context.Context, input io.Reader) <-chan inputLine {
 	return lines
 }
 
-func (a *App) handleStreamingLine(ctx context.Context, line string, output io.Writer, streamer StreamingSubmitter, write func(func()), running *bool, turnDone *<-chan turnOutcome) bool {
+func (a *App) handleStreamingLine(ctx context.Context, line string, output io.Writer, streamer StreamingSubmitter, running *bool, turnDone *<-chan turnOutcome, streamEvents *<-chan StreamUpdate) bool {
 	switch line {
 	case "/exit", "/quit":
-		write(func() {
-			fmt.Fprintln(output, "Bye")
-		})
+		fmt.Fprintln(output, "Bye")
 		return true
 	case "/help":
-		write(func() {
-			renderSection(output, "Help", helpText())
-		})
+		renderSection(output, "Help", helpText())
 		return false
 	}
 	if strings.HasPrefix(line, "/") && a.config.Commands != nil {
 		result, handled, err := a.config.Commands.HandleCommand(ctx, line)
-		write(func() {
-			if err != nil {
-				fmt.Fprintf(output, "Error: %v\n", err)
-				return
-			}
-			if handled {
-				renderSection(output, "System", result)
-			}
-		})
-		if handled || err != nil {
+		if err != nil {
+			fmt.Fprintf(output, "Error: %v\n", err)
 			return false
 		}
-	}
-	if *running {
-		write(func() {
-			renderSection(output, "System", "Task is still running. Use /cancel, /approve, /deny, or wait for it to finish.")
-		})
+		if handled {
+			renderSection(output, "System", result)
+			return false
+		}
+		renderSection(output, "System", "Unknown command. Use /help to view available commands.")
 		return false
 	}
-	a.startStreamingTurn(ctx, line, output, streamer, write, running, turnDone)
+	if strings.HasPrefix(line, "/") {
+		renderSection(output, "System", "Unknown command. Use /help to view available commands.")
+		return false
+	}
+	if *running {
+		renderSection(output, "System", "Task is still running. Use /cancel, /approve, /deny, or wait for it to finish.")
+		return false
+	}
+	a.startStreamingTurn(ctx, line, output, streamer, running, turnDone, streamEvents)
 	return false
 }
 
-func (a *App) startStreamingTurn(ctx context.Context, input string, output io.Writer, streamer StreamingSubmitter, write func(func()), running *bool, turnDone *<-chan turnOutcome) {
-	write(func() {
-		renderLogLine(output, "task", "started")
-	})
+func (a *App) startStreamingTurn(ctx context.Context, input string, output io.Writer, streamer StreamingSubmitter, running *bool, turnDone *<-chan turnOutcome, streamEvents *<-chan StreamUpdate) {
+	renderLogLine(output, "task", "started")
 	done := make(chan turnOutcome, 1)
+	updates := make(chan StreamUpdate, 32)
 	*running = true
 	*turnDone = done
+	*streamEvents = updates
 	go func() {
 		_, err := streamer.SubmitStream(ctx, input, func(update StreamUpdate) {
-			write(func() {
-				RenderStreamUpdate(output, update)
-			})
+			updates <- update
 		})
+		close(updates)
 		done <- turnOutcome{err: err}
 	}()
 }
@@ -384,8 +385,9 @@ func RenderStreamUpdate(output io.Writer, update StreamUpdate) {
 		}
 	case "task.diff":
 		if strings.TrimSpace(payload.Diff) != "" {
+			renderSection(output, "Assistant", PatchReadyReply(payload.Diff))
 			renderSection(output, "Diff", strings.TrimRight(payload.Diff, "\n"))
-			renderSection(output, "Next", "Review the diff before applying changes.\nCommands: /apply to confirm, /cancel to stop a running task.")
+			renderSection(output, "Next", PatchReadyNextAction())
 		}
 	case "permission.requested":
 		body := strings.TrimSpace(payload.Tool + " " + payload.Input)
@@ -445,8 +447,9 @@ func RenderTurn(output io.Writer, view TurnView) {
 		renderSection(output, "Summary", result.AgentResult.Summary)
 	}
 	if strings.TrimSpace(result.AgentResult.Diff) != "" {
+		renderSection(output, "Assistant", PatchReadyReply(result.AgentResult.Diff))
 		renderSection(output, "Diff", strings.TrimRight(result.AgentResult.Diff, "\n"))
-		renderSection(output, "Next", "Review the diff before applying changes.\nDaemon API: POST /apply to confirm, POST /cancel to stop a running task.")
+		renderSection(output, "Next", PatchReadyNextAction())
 	}
 }
 
@@ -526,7 +529,8 @@ func helpText() string {
 		commandStyle.Render("changes") + "   /diff [task_id]  /apply  /cancel [task_id]",
 		commandStyle.Render("approval") + "  /approvals  /approve [task_id]  /deny [task_id]",
 		commandStyle.Render("context") + "   /memory  /goal  /skills  /skill <name>  /mcp",
-		commandStyle.Render("session") + "   /resume <task_id>  /resume-session <id>  /resume-latest  /new-session  /exit",
+		commandStyle.Render("system") + "    /doctor  /config  /status",
+		commandStyle.Render("session") + "   /resume <task_id>  /resume-session <id>  /resume-latest  /new-session  /clear  /exit",
 	}
 	return "Type a natural-language request, or use a command.\n\n" + strings.Join(groups, "\n")
 }

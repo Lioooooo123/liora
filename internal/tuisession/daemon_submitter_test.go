@@ -46,7 +46,7 @@ func TestDaemonSubmitterStreamsFromDaemon(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	submitter := NewDaemonSubmitter(client, root, true)
+	submitter := NewDaemonSubmitter(client, root, true, "", false)
 	var streamed []string
 
 	result, err := submitter.SubmitStream(t.Context(), "看看目录", func(update tui.StreamUpdate) {
@@ -289,7 +289,7 @@ func TestDaemonSubmitterAppliesLastDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Diff " + taskID, "+++ b/notes.txt", "+hello", "Next:", "/apply"} {
+	for _, want := range []string{"Diff " + taskID, "已准备好变更", "notes.txt", "+1 -0", "+++ b/notes.txt", "+hello", "Next:", "/apply", "/diff"} {
 		if !handled || !strings.Contains(diffOutput, want) {
 			t.Fatalf("expected diff output to contain %q handled=%v output=%q", want, handled, diffOutput)
 		}
@@ -700,6 +700,23 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 	if len(sessions) != 3 {
 		t.Fatalf("expected /new-session to create one more current-workspace session, got %#v", sessions)
 	}
+	clearOutput, handled, err := fresh.HandleCommand(t.Context(), "/clear")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(clearOutput, "New session will be created") {
+		t.Fatalf("unexpected /clear output handled=%v output=%q", handled, clearOutput)
+	}
+	if _, err := fresh.SubmitStream(t.Context(), "fourth prompt", nil); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err = repo.ListSessions(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 4 {
+		t.Fatalf("expected /clear to create one more session, got %#v", sessions)
+	}
 }
 
 func TestDaemonSubmitterApprovesAndDeniesWaitingTask(t *testing.T) {
@@ -817,7 +834,7 @@ func newTestSubmitter(t *testing.T, serverURL string, root string, natural bool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewDaemonSubmitter(client, root, natural)
+	return NewDaemonSubmitter(client, root, natural, "", false)
 }
 
 func containsStreamType(events []string, want string) bool {

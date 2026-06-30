@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -66,6 +67,13 @@ func (r *Runtime) SubmitWithRecorder(ctx context.Context, input string, recorder
 }
 
 func (r *Runtime) SubmitWithOptions(ctx context.Context, input string, options SubmitOptions) (tui.TurnResult, error) {
+	recorder := options.Recorder
+	if recorder == nil {
+		recorder = trace.NewMemoryRecorder()
+	}
+	if caller, ok := r.toolLoopCaller(); ok {
+		return r.runToolLoop(ctx, input, caller, recorder, options)
+	}
 	turn, err := r.planner.PlanTurn(ctx, llm.PlanRequest{
 		WorkspaceSummary: r.workspaceSummary(),
 		UserPrompt:       input,
@@ -78,10 +86,6 @@ func (r *Runtime) SubmitWithOptions(ctx context.Context, input string, options S
 	}
 	if options.OnPlan != nil {
 		options.OnPlan(turn.Steps)
-	}
-	recorder := options.Recorder
-	if recorder == nil {
-		recorder = trace.NewMemoryRecorder()
 	}
 	result, err := r.runPlannedSteps(ctx, turn.Steps, recorder)
 	plannedSteps := turn.Steps
@@ -111,6 +115,55 @@ func (r *Runtime) SubmitWithOptions(ctx context.Context, input string, options S
 		plannedSteps = strings.TrimSpace(plannedSteps + "\n\n# Replan 1\n" + replan.Steps)
 		result, err = r.runPlannedSteps(ctx, replan.Steps, recorder)
 	}
+	return tui.TurnResult{
+		PlannedSteps: plannedSteps,
+		AgentResult:  result,
+		Events:       recordedEvents(recorder),
+	}, err
+}
+
+// toolLoopCaller reports whether the runtime should drive the native structured
+// tool-use loop. It requires LIORA_AGENT_LOOP to be unset/non-"off" and the
+// planner's generator to implement llm.ToolCaller with provider tool support.
+func (r *Runtime) toolLoopCaller() (llm.ToolCaller, bool) {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("LIORA_AGENT_LOOP")), "off") {
+		return nil, false
+	}
+	if r.planner == nil {
+		return nil, false
+	}
+	caller, ok := r.planner.Generator().(llm.ToolCaller)
+	if !ok {
+		return nil, false
+	}
+	if supported, hasCheck := caller.(interface{ SupportsTools() bool }); hasCheck && !supported.SupportsTools() {
+		return nil, false
+	}
+	return caller, true
+}
+
+func (r *Runtime) runToolLoop(ctx context.Context, input string, caller llm.ToolCaller, recorder trace.Recorder, options SubmitOptions) (tui.TurnResult, error) {
+	runner := agent.New(r.workspace, recorder)
+	if r.sandbox != nil {
+		runner.SetShellExecutor(r.sandbox)
+	}
+	if r.checker != nil {
+		runner.SetPermissionChecker(r.checker)
+	}
+	if manager, err := r.mcpManager(); err == nil && manager != nil {
+		runner.SetMCP(manager)
+	}
+	var plannedSteps string
+	loop := agent.NewToolLoop(runner, caller, agent.LoopOptions{
+		OnPlan: func(steps string) {
+			plannedSteps = steps
+			if options.OnPlan != nil {
+				options.OnPlan(steps)
+			}
+		},
+		OnReplan: options.OnReplan,
+	})
+	result, err := loop.Run(ctx, input)
 	return tui.TurnResult{
 		PlannedSteps: plannedSteps,
 		AgentResult:  result,

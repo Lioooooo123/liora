@@ -23,6 +23,12 @@ const (
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// ToolCalls carries an assistant turn's structured tool requests. The wire
+	// format is assembled per provider in GenerateWithTools, so these fields are
+	// not marshaled by the plain text Generate path.
+	ToolCalls  []ToolCall `json:"-"`
+	ToolCallID string     `json:"-"`
+	ToolError  bool       `json:"-"`
 }
 
 type Config struct {

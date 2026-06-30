@@ -25,3 +25,33 @@ func TestBuiltinToolsExposePlannerAndHumanViews(t *testing.T) {
 		}
 	}
 }
+
+func TestToolSchemasAreClosedObjects(t *testing.T) {
+	schemas := ToolSchemas()
+	if len(schemas) != len(builtinTools) {
+		t.Fatalf("expected every builtin tool to expose a schema, got %d of %d", len(schemas), len(builtinTools))
+	}
+	byName := map[string]ToolSpec{}
+	for _, spec := range schemas {
+		schema := spec.InputSchema
+		if schema["type"] != "object" {
+			t.Fatalf("tool %q schema type should be object, got %#v", spec.Name, schema["type"])
+		}
+		if schema["additionalProperties"] != false {
+			t.Fatalf("tool %q schema must set additionalProperties=false", spec.Name)
+		}
+		byName[spec.Name] = spec
+	}
+	read, ok := byName["read"]
+	if !ok {
+		t.Fatal("expected read tool schema")
+	}
+	required, ok := read.InputSchema["required"].([]string)
+	if !ok || len(required) != 1 || required[0] != "path" {
+		t.Fatalf("expected read to require path, got %#v", read.InputSchema["required"])
+	}
+	properties, ok := read.InputSchema["properties"].(map[string]any)
+	if !ok || properties["path"] == nil || properties["start_line"] == nil {
+		t.Fatalf("expected read properties to include path and start_line, got %#v", read.InputSchema["properties"])
+	}
+}

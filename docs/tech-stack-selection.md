@@ -2,15 +2,15 @@
 
 ## 结论
 
-Liora 采用“Go core + TypeScript UI monorepo”的路线。
+Liora 采用“Go core + Go 原生 TUI，TypeScript 协议/桌面预留”的路线。
 
 | 层级 | 选型 | 状态 | 结论 |
 | --- | --- | --- | --- |
 | Agent Core | Go | 已在用 | 保留。负责 daemon、task、sandbox、LLM provider、SQLite、MCP、patch/apply。 |
-| 下一代 TUI | TypeScript + React + Ink | 下一阶段 | 采用。复杂终端 UI 不继续堆 Go line-based TUI。 |
-| 当前 CLI | Go `apps/cli` | 已在用 | 保留。继续提供 `liora` 二进制、daemon、脚本模式和轻量 TUI。 |
-| 桌面端 | 先不启动；候选 Tauri 2 或 SwiftUI | v0.2+ | 等 TUI/daemon 合同稳定后再选。产品验证阶段优先 Tauri，macOS 深集成阶段再考虑 SwiftUI。 |
-| Monorepo 包管理 | pnpm workspace | 已建骨架 | 采用。管理未来 `apps/tui`、`packages/protocol`、`packages/ui`。 |
+| 全屏 TUI | Go + Bubble Tea (charmbracelet) | 已在用 | 采用。与 core 同二进制、零运行时依赖，TTY 自动启用；非 TTY 回退 line-based。 |
+| 当前 CLI | Go `apps/cli` | 已在用 | 保留。继续提供 `liora` 二进制、daemon、脚本模式和 TUI 入口装配。 |
+| 桌面端 | 先不启动；候选 Tauri 2 或 SwiftUI | v0.2+ | 等 daemon 合同稳定后再选。产品验证阶段优先 Tauri，macOS 深集成阶段再考虑 SwiftUI。 |
+| Monorepo 包管理 | pnpm workspace | 已建骨架 | 保留。为未来 `packages/protocol`、`packages/ui`、桌面端预留。 |
 | API 协议 | HTTP + SSE + JSON schema | 已在用 | 保留。TUI/desktop 都通过 daemon API 复用 core。 |
 | 本地数据库 | SQLite | 已在用 | 保留。适合本地优先、单用户、可迁移。 |
 | Sandbox | Docker + local fallback | 已在用 | 逐步把 Docker 提升为默认执行策略。 |
@@ -32,30 +32,30 @@ Go 适合 Liora 的执行底座：
 - 文件、进程、Docker、SQLite、HTTP server 这些系统能力成熟。
 - 当前 `internal/daemon`、`internal/task`、`internal/runtime`、`internal/store` 已有可运行基础。
 
-Go 不适合作为下一阶段复杂 TUI 的主要表达层：
+Go 同样能胜任全屏 TUI：
 
-- 复杂布局、局部重绘、输入栏、快捷键、弹窗、diff viewport、虚拟列表会把 Go TUI 代码推向高复杂度。
-- 产品视觉和交互动效迭代速度不如 React 生态。
-- 未来桌面端如果也使用 Web/React 技术，TUI 的状态管理和组件模型可以复用更多经验。
+- charmbracelet 生态（Bubble Tea / bubbles / lipgloss）已经把布局、局部重绘、输入栏、viewport、spinner、样式做成成熟组件。
+- TUI 与 core 同语言、同进程、同二进制，省去跨语言协议桥接和额外运行时。
+- Elm 架构（Model/Update/View）的单 goroutine 消息循环天然契合 SSE 流式事件的串行消费。
 
-## 下一代 TUI 选 Ink/React
+## 下一代 TUI 选 Bubble Tea
 
-选择 `Ink + React + TypeScript` 放在 `apps/tui`。
+选择 charmbracelet 的 **Bubble Tea + bubbles + lipgloss**，实现放在 `internal/tui`（与 line-based renderer 同包复用渲染助手与样式）。
 
 理由：
 
-- Ink 是 React renderer，适合用组件模型构建交互式命令行 UI。
-- React 组件、hooks、状态管理对复杂 TUI 更自然，适合 transcript、tool stream、approval modal、diff viewer。
-- TypeScript 能把 daemon event、task、session、memory、approval 类型沉淀到 `packages/protocol`。
-- 与未来 Tauri/Web desktop 的 UI 心智接近。
+- Bubble Tea 是成熟的 Go TUI 框架，Elm 架构清晰，适合“终端里的应用”级别交互。
+- 与 Go core 同二进制，**零 Node / 零额外运行时依赖**，打包链路最简单，最贴合“本地优先、单二进制”定位。
+- bubbles 提供 textinput / viewport / spinner 等现成组件，覆盖输入栏、可滚动 transcript、运行态指示。
+- 单 goroutine 消息循环 + buffered channel 桥接，能安全消费 daemon SSE 流式事件。
+- TTY 自动启用 Bubble Tea 全屏；非 TTY（管道 / CI / smoke）回退 line-based renderer，smoke 基线零改动。
 
-第一版 `apps/tui` 范围：
+第一版 Bubble Tea TUI 范围：
 
 - 连接本地 daemon；必要时拉起 embedded daemon 或提示用户启动。
-- 显示 session timeline、当前 task、tool stream、diff、approval。
-- 底部固定输入栏。
-- 支持 `/help`、`/cancel`、`/apply`、`/approve`、`/deny`、`/timeline`、`/history`。
-- 长输出折叠，按需展开。
+- 首屏 workbench（workspace / model / core / safety）+ 可滚动事件区 + 底部固定输入栏。
+- 实时消费 plan / tool stream / summary / diff，流式逐条渲染。
+- 支持 `/help`、`/cancel`、`/apply`、`/approve`、`/deny`、`/timeline`、`/history` 等命令（复用 `internal/tuisession`）。
 
 不在第一版 TUI 做：
 
@@ -64,24 +64,23 @@ Go 不适合作为下一阶段复杂 TUI 的主要表达层：
 - 不实现完整桌面窗口。
 - 不把所有 Claude Code 功能一次性搬完。
 
-## 为什么不是 Bubble Tea
+## 为什么不是 Ink / React
 
-Bubble Tea 是成熟的 Go TUI 框架，适合 Go-only 工具和小中型 TUI。
+早期曾设想用 `Ink + React + TypeScript` 做下一代 TUI，最终放弃，改用 Go 原生 Bubble Tea。原因：
 
-Liora 不选它作为下一代主 TUI，原因是：
+- Ink 引入 Node 运行时与 npm 依赖树，破坏“单二进制、本地优先、零额外运行时”的核心定位。
+- CLI 入口与 TUI 跨语言（Go ↔ Node）需要额外进程拉起、脚本分发与协议桥接，打包/安装链路显著复杂化。
+- Bubble Tea 已能满足当前 TUI 复杂度（输入栏、viewport、流式事件、命令），不需要 React 组件模型的额外抽象。
+- TUI 用 Go 与 core 同包，可直接复用渲染助手与样式，反而降低耦合维护成本。
 
-- 我们已经决定 monorepo，为未来 React/Tauri UI 铺路。
-- Agent UI 的复杂度更接近“终端里的应用”，组件组合和状态管理比纯 Go 结构体模式更重要。
-- Go 继续负责 core，TUI 再用 Go 会让 UI 和 core 更容易重新耦合。
+保留 TypeScript 的使用场景：
 
-保留 Bubble Tea 作为备选：
-
-- 如果后续希望继续保持单二进制、极低 Node 依赖，可以用 Bubble Tea 重写 `apps/cli` 内的全屏模式。
-- 但这会牺牲未来 desktop/web UI 的复用心智。
+- 未来 `packages/protocol`（daemon API 类型 / client / SSE parser）与桌面端（Tauri/Web）仍可用 TS。
+- TUI 不再是 TS 的落点，TS 聚焦协议层与潜在 Web/桌面 UI。
 
 ## 桌面端选择延后
 
-桌面端暂不立刻开工。等 `apps/tui` 和 daemon API 跑顺后再选：
+桌面端暂不立刻开工。等 Bubble Tea TUI 和 daemon API 跑顺后再选：
 
 ### 候选 A：Tauri 2
 
@@ -112,7 +111,7 @@ Liora 不选它作为下一代主 TUI，原因是：
 
 当前建议：
 
-- v0.1/v0.2：先不做桌面端，集中打磨 agent core 和 Ink TUI。
+- v0.1/v0.2：先不做桌面端，集中打磨 agent core 和 Bubble Tea TUI。
 - v0.3：如果需要快速产品化，优先 Tauri 2。
 - v1.0：如果只押 macOS 且追求原生质感，再评估 SwiftUI。
 
@@ -123,8 +122,8 @@ Liora 不选它作为下一代主 TUI，原因是：
 ```text
 apps/
   cli/        Go CLI/TUI/daemon 入口，产物名 liora
-  tui/        下一代 Ink/React TUI
 internal/     Go core
+  tui/        Go 原生 TUI：Bubble Tea 全屏 + line-based fallback
 packages/
   protocol/   未来：daemon API 类型、SSE event 类型、client SDK
   ui/         未来：主题、快捷键、终端 UI 约定
@@ -191,18 +190,18 @@ Go 侧可以保留 `internal/daemonclient`，两边通过 API contract 对齐，
 - `pnpm test --filter @liora/protocol` 通过。
 - Go daemon fixture 与 TS parser 对齐。
 
-### Phase 2：Ink TUI MVP
+### Phase 2：Bubble Tea TUI（已达成）
 
 目标：
 
-- 新增 `apps/tui` 可运行入口。
-- 首屏 workbench、底部输入栏、timeline、tool stream、diff preview。
-- 支持 cancel/apply/approve/deny。
+- 在 `internal/tui` 新增 Bubble Tea 全屏 renderer，TTY 自动启用。
+- 首屏 workbench、底部输入栏、可滚动事件区、流式 tool stream、diff preview。
+- 支持 cancel/apply/approve/deny（复用 `internal/tuisession`）。
 
 完成标准：
 
-- 能替代当前 Go line TUI 完成 daemon smoke 的核心场景。
-- 保留 `apps/cli` 作为稳定 fallback。
+- Bubble Tea（TTY）与 line-based（非 TTY）共享 daemon 事件，渲染一致。
+- 非 TTY smoke 走 line renderer，断言串零改动；exit-audit 全绿。
 
 ### Phase 3：Agent 能力升级
 
@@ -235,7 +234,7 @@ Go 侧可以保留 `internal/daemonclient`，两边通过 API contract 对齐，
 | 方案 | 不选原因 |
 | --- | --- |
 | Electron | 太重，和“精致小巧本地陪伴”不匹配。 |
-| 继续纯 Go TUI | 能做，但复杂 UI 迭代成本会越来越高。 |
+| Ink / React TUI | 引入 Node 运行时与跨语言桥接，破坏单二进制、本地优先定位。 |
 | Python core | 发布和本地系统集成不如 Go 单二进制稳定。 |
 | Web-only app | 失去本地 agent 的产品定位。 |
 | 直接 SwiftUI | 过早，会拖慢 agent core 和 TUI 验证。 |
@@ -243,7 +242,8 @@ Go 侧可以保留 `internal/daemonclient`，两边通过 API contract 对齐，
 
 ## 参考
 
-- Ink: https://github.com/vadimdemedes/ink
 - Bubble Tea: https://github.com/charmbracelet/bubbletea
+- Bubbles: https://github.com/charmbracelet/bubbles
+- Lip Gloss: https://github.com/charmbracelet/lipgloss
 - Tauri 2: https://v2.tauri.app/
 - pnpm Workspaces: https://pnpm.io/workspaces

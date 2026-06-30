@@ -33,6 +33,13 @@ func NewPlanner(generator Generator) *Planner {
 	return &Planner{generator: generator}
 }
 
+// Generator exposes the underlying generator so the runtime can detect whether
+// it also supports native structured tool calls (llm.ToolCaller) and drive the
+// tool-use loop instead of the text planner path.
+func (p *Planner) Generator() Generator {
+	return p.generator
+}
+
 func (p *Planner) Plan(ctx context.Context, request PlanRequest) (string, error) {
 	turn, err := p.PlanTurn(ctx, request)
 	if err != nil {

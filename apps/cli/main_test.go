@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,10 +11,61 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+// fakeToolStep is one structured tool call the stateful fake LLM should request,
+// in order, before it finishes the tool-use loop with a plain-text summary.
+type fakeToolStep struct {
+	name string
+	args string
+}
+
+// toolLoopHandler returns an OpenAI Chat Completions handler that mimics a model
+// driving the native tool-use loop. It counts how many tool results the request
+// already carries (one per completed step) and returns the next tool call, or the
+// final natural-language summary once every step has run. This mirrors how Claude
+// Code / Kimi Code style loops terminate on "no more tool_calls" rather than a
+// provider stop_reason.
+func toolLoopHandler(final string, steps ...fakeToolStep) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		completed := bytes.Count(body, []byte(`"role":"tool"`))
+		w.Header().Set("Content-Type", "application/json")
+		if completed >= len(steps) {
+			payload, _ := json.Marshal(map[string]any{
+				"choices": []map[string]any{
+					{"message": map[string]any{"role": "assistant", "content": final}},
+				},
+			})
+			_, _ = w.Write(payload)
+			return
+		}
+		step := steps[completed]
+		payload, _ := json.Marshal(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{
+					"role":    "assistant",
+					"content": "",
+					"tool_calls": []map[string]any{
+						{
+							"id":   "call_" + strconv.Itoa(completed+1),
+							"type": "function",
+							"function": map[string]any{
+								"name":      step.name,
+								"arguments": step.args,
+							},
+						},
+					},
+				}},
+			},
+		})
+		_, _ = w.Write(payload)
+	}
+}
 
 func TestCLIDoctorReportsAnthropicConfigWithoutSecret(t *testing.T) {
 	// Given
@@ -76,6 +128,68 @@ func TestCLIDoctorReportsGeminiMissingKeyWithoutFailing(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected doctor output to contain %q, got:\n%s", want, rendered)
 		}
+	}
+}
+
+func TestCLIDoctorIgnoresLegacyBaseURL_whenNamespacedProviderIsSet(t *testing.T) {
+	// Given
+	cmd := exec.Command("go", "run", ".", "-doctor")
+	cmd.Env = cleanLLMEnv(t,
+		"LIORA_LLM_PROVIDER=anthropic",
+		"LIORA_LLM_API_KEY=test-secret",
+		"LIORA_LLM_MODEL=claude-test",
+		"OPENAI_BASE_URL=https://api.deepseek.com",
+	)
+
+	// When
+	output, err := cmd.CombinedOutput()
+
+	// Then
+	if err != nil {
+		t.Fatalf("doctor command failed: %v\n%s", err, string(output))
+	}
+	rendered := string(output)
+	if !strings.Contains(rendered, "base_url: https://api.anthropic.com/v1") {
+		t.Fatalf("expected namespaced provider to use its default base URL, got:\n%s", rendered)
+	}
+}
+
+func TestCLIInteractiveDoctorCommandReportsConfigWithoutSecret(t *testing.T) {
+	// Given
+	workspace := t.TempDir()
+	cmd := exec.Command("go", "run", ".", "-interactive", "-workspace", workspace)
+	cmd.Env = cleanLLMEnv(t,
+		"LIORA_LLM_PROVIDER=anthropic",
+		"LIORA_LLM_API_KEY=test-secret",
+		"LIORA_LLM_MODEL=claude-test",
+	)
+	cmd.Stdin = strings.NewReader("/doctor\n/exit\n")
+
+	// When
+	output, err := cmd.CombinedOutput()
+
+	// Then
+	if err != nil {
+		t.Fatalf("interactive doctor command failed: %v\n%s", err, string(output))
+	}
+	rendered := string(output)
+	for _, want := range []string{
+		"Liora doctor",
+		"workspace: " + workspace,
+		"core: embedded daemon",
+		"safety: patch-first",
+		"provider: anthropic",
+		"display: Anthropic",
+		"model: claude-test",
+		"api_key: configured",
+		"tools: supported",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected interactive doctor output to contain %q, got:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "test-secret") {
+		t.Fatalf("interactive doctor output leaked API key:\n%s", rendered)
 	}
 }
 
@@ -278,14 +392,11 @@ func TestCLIInteractiveModeRunsTurns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"choices": [
-				{"message": {"role": "assistant", "content": "read app.txt\nreplace app.txt old new\ndiff"}}
-			]
-		}`))
-	}))
+	server := httptest.NewServer(toolLoopHandler(
+		"Replaced old with new in app.txt.",
+		fakeToolStep{name: "read", args: `{"path":"app.txt"}`},
+		fakeToolStep{name: "replace", args: `{"path":"app.txt","old_text":"old","new_text":"new"}`},
+	))
 	defer server.Close()
 
 	cmd := exec.Command(
@@ -297,7 +408,7 @@ func TestCLIInteractiveModeRunsTurns(t *testing.T) {
 		"-llm-base-url", server.URL,
 		"-llm-model", "test-model",
 	)
-	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=test-key")
+	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=test-key", "LIORA_HOME="+t.TempDir())
 	cmd.Stdin = strings.NewReader("把 old 改成 new\n/exit\n")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -327,14 +438,10 @@ func TestCLIInteractiveCanDisablePatchMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"choices": [
-				{"message": {"role": "assistant", "content": "replace app.txt old new\ndiff"}}
-			]
-		}`))
-	}))
+	server := httptest.NewServer(toolLoopHandler(
+		"Replaced old with new in app.txt.",
+		fakeToolStep{name: "replace", args: `{"path":"app.txt","old_text":"old","new_text":"new"}`},
+	))
 	defer server.Close()
 
 	cmd := exec.Command(
@@ -346,7 +453,7 @@ func TestCLIInteractiveCanDisablePatchMode(t *testing.T) {
 		"-llm-base-url", server.URL,
 		"-llm-model", "test-model",
 	)
-	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=test-key", "LIORA_PATCH_MODE=0")
+	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=test-key", "LIORA_PATCH_MODE=0", "LIORA_HOME="+t.TempDir())
 	cmd.Stdin = strings.NewReader("把 old 改成 new\n/exit\n")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -376,14 +483,10 @@ func TestCLIDefaultsToInteractiveCurrentDirectory(t *testing.T) {
 		t.Fatalf("build failed: %v\n%s", err, string(output))
 	}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"choices": [
-				{"message": {"role": "assistant", "content": "read app.txt\ndiff"}}
-			]
-		}`))
-	}))
+	server := httptest.NewServer(toolLoopHandler(
+		"Read app.txt in the current directory.",
+		fakeToolStep{name: "read", args: `{"path":"app.txt"}`},
+	))
 	defer server.Close()
 
 	cmd := exec.Command(
@@ -392,7 +495,7 @@ func TestCLIDefaultsToInteractiveCurrentDirectory(t *testing.T) {
 		"-llm-model", "test-model",
 	)
 	cmd.Dir = workspace
-	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=test-key")
+	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=test-key", "LIORA_HOME="+t.TempDir())
 	cmd.Stdin = strings.NewReader("看一下当前目录\n/timeline\n/exit\n")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -418,7 +521,7 @@ func TestCLIDaemonModeServesHealth(t *testing.T) {
 	}
 	addr := freeLocalAddr(t)
 	cmd := exec.Command(binary, "-daemon", "-daemon-addr", addr, "-workspace", t.TempDir())
-	cmd.Env = append(os.Environ(), "LIORA_LLM_API_KEY=test-key")
+	cmd.Env = append(os.Environ(), "LIORA_LLM_API_KEY=test-key", "LIORA_HOME="+t.TempDir())
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -462,14 +565,10 @@ func TestCLIInteractiveCanStreamThroughDaemon(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build failed: %v\n%s", err, string(output))
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"choices": [
-				{"message": {"role": "assistant", "content": "list ."}}
-			]
-		}`))
-	}))
+	server := httptest.NewServer(toolLoopHandler(
+		"Listed the workspace directory.",
+		fakeToolStep{name: "list", args: `{"path":"."}`},
+	))
 	defer server.Close()
 
 	addr := freeLocalAddr(t)
@@ -526,14 +625,10 @@ func TestCLIInteractiveDaemonApplyCommand(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build failed: %v\n%s", err, string(output))
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"choices": [
-				{"message": {"role": "assistant", "content": "write notes.txt hello"}}
-			]
-		}`))
-	}))
+	server := httptest.NewServer(toolLoopHandler(
+		"Wrote notes.txt.",
+		fakeToolStep{name: "write", args: `{"path":"notes.txt","content":"hello\n"}`},
+	))
 	defer server.Close()
 
 	addr := freeLocalAddr(t)
@@ -600,14 +695,10 @@ func TestCLIInteractiveDaemonTaskHistoryCommands(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build failed: %v\n%s", err, string(output))
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"choices": [
-				{"message": {"role": "assistant", "content": "list ."}}
-			]
-		}`))
-	}))
+	server := httptest.NewServer(toolLoopHandler(
+		"Listed the workspace directory.",
+		fakeToolStep{name: "list", args: `{"path":"."}`},
+	))
 	defer server.Close()
 
 	addr := freeLocalAddr(t)
@@ -664,14 +755,10 @@ func TestCLIInteractiveDaemonCancelWhileTaskRuns(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build failed: %v\n%s", err, string(output))
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"choices": [
-				{"message": {"role": "assistant", "content": "run sleep 10"}}
-			]
-		}`))
-	}))
+	server := httptest.NewServer(toolLoopHandler(
+		"Ran the slow command.",
+		fakeToolStep{name: "run", args: `{"command":"sleep 10"}`},
+	))
 	defer server.Close()
 
 	addr := freeLocalAddr(t)
@@ -734,14 +821,10 @@ func TestCLIInteractiveDirectoryListingShowsMultipleEntries(t *testing.T) {
 		t.Fatalf("build failed: %v\n%s", err, string(output))
 	}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"choices": [
-				{"message": {"role": "assistant", "content": "list ."}}
-			]
-		}`))
-	}))
+	server := httptest.NewServer(toolLoopHandler(
+		"Listed the workspace directory.",
+		fakeToolStep{name: "list", args: `{"path":"."}`},
+	))
 	defer server.Close()
 
 	cmd := exec.Command(
@@ -750,7 +833,7 @@ func TestCLIInteractiveDirectoryListingShowsMultipleEntries(t *testing.T) {
 		"-llm-model", "test-model",
 	)
 	cmd.Dir = workspace
-	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=test-key")
+	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=test-key", "LIORA_HOME="+t.TempDir())
 	cmd.Stdin = strings.NewReader("你帮我看看这个文件夹里有什么东西\n/exit\n")
 	output, err := cmd.CombinedOutput()
 	if err != nil {

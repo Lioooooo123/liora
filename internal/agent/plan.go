@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -51,10 +52,79 @@ func parseStepLine(line string) (Step, bool) {
 		if strings.TrimSpace(argsJSON) != "" {
 			step.Args = append(step.Args, strings.TrimSpace(argsJSON))
 		}
+	case "read", "document":
+		step.Args = parsePathWithOptionalNumbers(splitStepFields(rest), 2)
+	case "stat", "list", "mkdir", "delete":
+		fields := splitStepFields(rest)
+		if len(fields) <= 1 {
+			step.Args = fields
+			break
+		}
+		step.Args = []string{strings.Join(fields, " ")}
+	case "tree":
+		fields := splitStepFields(rest)
+		if len(fields) == 0 {
+			break
+		}
+		if len(fields) >= 2 {
+			if depth, ok := parseOptionalInt(fields[len(fields)-1]); ok {
+				step.Args = []string{strings.Join(fields[:len(fields)-1], " "), strconv.Itoa(depth)}
+				break
+			}
+		}
+		step.Args = []string{strings.Join(fields, " ")}
 	default:
 		step.Args = splitStepFields(rest)
 	}
 	return step, true
+}
+
+func parsePathWithOptionalNumbers(fields []string, maxTailNumbers int) []string {
+	if len(fields) == 0 {
+		return nil
+	}
+	if len(fields) == 1 {
+		return fields
+	}
+
+	max := maxTailNumbers
+	numbers := []int{}
+	for i := len(fields) - 1; i >= 0 && len(numbers) < max; i-- {
+		value, err := strconv.Atoi(fields[i])
+		if err != nil || value <= 0 {
+			break
+		}
+		numbers = append(numbers, value)
+		fields = fields[:i]
+	}
+
+	if len(fields) == 0 {
+		// Fallback: avoid returning an empty path. Keep original raw args.
+		out := make([]string, 0, len(numbers))
+		for i := len(numbers) - 1; i >= 0; i-- {
+			out = append(out, strconv.Itoa(numbers[i]))
+		}
+		return out
+	}
+
+	// numbers were collected from right to left; restore original order.
+	for i, j := 0, len(numbers)-1; i < j; i, j = i+1, j-1 {
+		numbers[i], numbers[j] = numbers[j], numbers[i]
+	}
+	path := strings.Join(fields, " ")
+	if len(numbers) == 0 {
+		return []string{path}
+	}
+
+	if len(numbers) >= 2 {
+		return []string{path, strconv.Itoa(numbers[0]), strconv.Itoa(numbers[1])}
+	}
+	return []string{path, strconv.Itoa(numbers[0])}
+}
+
+func parseOptionalInt(value string) (int, bool) {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	return parsed, err == nil && parsed > 0
 }
 
 func normalizeStepLine(line string) string {

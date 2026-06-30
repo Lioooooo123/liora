@@ -56,7 +56,7 @@ func TestInteractiveLoopRendersGroupedHelp(t *testing.T) {
 		t.Fatal(err)
 	}
 	rendered := out.String()
-	for _, want := range []string{"Help", "work", "/tools", "/workbench", "history", "/timeline", "/transcript", "changes", "/diff", "/apply", "approval", "/approvals", "context", "/memory", "session", "/resume-latest"} {
+	for _, want := range []string{"Help", "work", "/tools", "/workbench", "history", "/timeline", "/transcript", "changes", "/diff", "/apply", "approval", "/approvals", "context", "/memory", "system", "/doctor", "session", "/resume-latest"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected grouped help to contain %q, got:\n%s", want, rendered)
 		}
@@ -305,10 +305,13 @@ func TestRenderTurnShowsNextActionsForDiff(t *testing.T) {
 	})
 
 	rendered := out.String()
-	for _, want := range []string{"Diff", "Next", "apply", "cancel"} {
+	for _, want := range []string{"Assistant", "已准备好变更", "Diff", "Next", "apply", "exit"} {
 		if !strings.Contains(strings.ToLower(rendered), strings.ToLower(want)) {
 			t.Fatalf("expected rendered output to contain %q, got:\n%s", want, rendered)
 		}
+	}
+	if strings.Contains(rendered, "stop a running task") {
+		t.Fatalf("completed diff guidance should not mention stopping a running task:\n%s", rendered)
 	}
 }
 

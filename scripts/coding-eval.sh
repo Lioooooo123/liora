@@ -55,7 +55,12 @@ wait_task_status() {
   return 1
 }
 
-# Fake OpenAI-compatible planner for deterministic natural-language eval tasks.
+# Fake OpenAI-compatible model that drives the native tool-use loop for the
+# deterministic natural-language eval tasks. Each case is a fixed sequence of
+# structured tool calls; the server returns the next tool call until every step
+# has produced a tool result, then finishes with a plain-text summary. Step
+# progress is tracked by counting the tool results already present in the request,
+# so it stays stateless across the daemon's per-approval task re-runs.
 python3 - "$LLM_ADDR" >"$TMP_DIR/llm.log" 2>&1 <<'PY' &
 import json
 import sys
@@ -63,34 +68,55 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 host, port = sys.argv[1].split(":")
 
+
+def steps_for(raw):
+    if "docx-case" in raw:
+        return [("document", {"path": "assignment.docx"})]
+    if "mcp-case" in raw:
+        return [("mcp", {"server": "fake", "tool": "echo", "arguments": {"text": "hello from eval"}})]
+    if "replan-case" in raw:
+        return [("read", {"path": "missing-replan.txt"}), ("read", {"path": "README.md"})]
+    if "multi-file" in raw:
+        return [
+            ("write", {"path": "config/settings.txt", "content": "enabled\n"}),
+            ("write", {"path": "docs/guide.txt", "content": "ready\n"}),
+        ]
+    if "old" in raw and "new" in raw:
+        return [
+            ("read", {"path": "app.txt"}),
+            ("replace", {"path": "app.txt", "old_text": "old", "new_text": "new"}),
+        ]
+    return [("list", {"path": "."})]
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length).decode()
-        if "docx-case" in raw:
-            content = "document assignment.docx"
-        elif "mcp-case" in raw:
-            content = "mcp fake echo {\"text\":\"hello from eval\"}"
-        elif "Failure:" in raw and "missing-replan.txt" in raw:
-            content = "read README.md"
-        elif "replan-case" in raw:
-            content = "read missing-replan.txt"
-        elif "multi-file" in raw:
-            content = "write config/settings.txt enabled\nwrite docs/guide.txt ready\ndiff"
-        elif "old" in raw and "new" in raw:
-            content = "read app.txt\nreplace app.txt old new\ndiff"
-        elif "目录" in raw or "folder" in raw:
-            content = "list ."
-        else:
-            content = "list ."
+        raw = self.rfile.read(length).decode() if length else ""
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = {}
+        messages = payload.get("messages", [])
+        completed = sum(1 for m in messages if m.get("role") == "tool")
+        steps = steps_for(raw)
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({
-            "choices": [
-                {"message": {"role": "assistant", "content": content}}
-            ]
-        }).encode())
+        if completed >= len(steps):
+            message = {"role": "assistant", "content": "Done."}
+        else:
+            name, args = steps[completed]
+            message = {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_%d" % (completed + 1),
+                    "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(args)},
+                }],
+            }
+        self.wfile.write(json.dumps({"choices": [{"message": message}]}).encode())
 
     def log_message(self, *_):
         pass

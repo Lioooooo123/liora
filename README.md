@@ -6,24 +6,24 @@ Liora 是一个可运行的最小 Coding Agent MVP，用于验证“工具调用
 
 - 脚本模式：直接输入工具步骤，便于稳定调试。
 - 自然语言模式：通过可切换供应商的 LLM client 将用户需求转换成工具步骤，再交给本地执行器运行。
-- 交互模式：启动一个轻量 TUI，自动拉起本地 Core Daemon，连续输入自然语言任务并查看计划、工具调用、总结和 diff。
+- 交互模式：启动 Go 原生 TUI（TTY 下为 Bubble Tea 全屏，管道/CI 下为 line-based），自动拉起本地 Core Daemon，连续输入自然语言任务并查看计划、工具调用、总结和 diff。
 - Daemon 模式：启动本地 Core Daemon，通过 HTTP API 和 SSE 暴露任务工坊能力，供未来 macOS 客户端接入。
 
 ## Monorepo 结构
 
-Liora 现在按 monorepo 组织，Go core 和未来 TUI/desktop 入口分开演进：
+Liora 现在按 monorepo 组织，Go core 和未来 desktop 入口分开演进：
 
 ```text
 apps/
   cli/        当前可用的 liora CLI/TUI/daemon 入口
-  tui/        预留给下一阶段更精致的独立 TUI app
 internal/     Go agent core、daemon、task、sandbox、LLM、store、tools
+  tui/        Go 原生 TUI：Bubble Tea 全屏 + line-based fallback
 packages/     预留给跨 app 复用的协议、UI 或 eval 包
 scripts/      安装、打包、smoke 和 exit audit
 docs/         产品、架构和发布文档
 ```
 
-当前 `apps/cli` 仍负责安装产物 `liora`。复杂 TUI 后续可以放到 `apps/tui`，用 Ink/React 或其他更适合终端 UI 的技术栈，通过 Core Daemon API 复用 Go core，而不是重写 agent 执行逻辑。
+当前 `apps/cli` 负责安装产物 `liora`，TUI 直接由 Go 原生实现（`internal/tui`，基于 charmbracelet Bubble Tea），与 core 同二进制、无 Node 依赖。未来桌面/Web 入口应通过 Core Daemon API 复用 Go core，而不是重写 agent 执行逻辑。
 
 技术选型见 [Liora 技术选型](docs/tech-stack-selection.md)。
 
@@ -227,6 +227,7 @@ liora > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /skills
 /skill <name>
 /mcp
+/doctor
 /workbench
 /spawn <request>
 /watch [active|task_id...]
@@ -243,6 +244,7 @@ liora > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /resume-session <session_id>
 /resume-latest
 /new-session
+/clear
 /approve [task_id]
 /deny [task_id]
 /apply
@@ -252,7 +254,7 @@ liora > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 
 默认交互入口会在本进程内启动临时 Core Daemon，并通过 HTTP/SSE 复用 daemon/session/task/event 主链路；如果已经有独立 daemon，可使用 `liora -interactive -tui-daemon -daemon-addr 127.0.0.1:18080` 连接它。
 
-TUI 会自动继续当前 workspace 最近的 session，因此重启 `liora` 后可以直接 `/timeline` 或继续输入任务。需要手动接回最近 session 时可用 `/resume-latest`；想从干净上下文开始下一轮任务时可用 `/new-session`。
+TUI 会自动继续当前 workspace 最近的 session，因此重启 `liora` 后可以直接 `/timeline` 或继续输入任务。需要手动接回最近 session 时可用 `/resume-latest`；想从干净上下文开始下一轮任务时可用 `/new-session`，也可以用 `/clear`。
 
 `/timeline [limit]` 展示紧凑会话事件线，`/transcript [limit]` 展开 user、assistant、tool、diff、approval 和 status 内容，适合回看长会话；两者都来自 daemon 的 session timeline API。
 
@@ -260,11 +262,15 @@ TUI 会自动继续当前 workspace 最近的 session，因此重启 `liora` 后
 
 `/workbench` 展示当前 workspace 下的 session、active tasks 和 recent tasks。`/tasks` 与 `/sessions` 默认也按当前 workspace 过滤，避免多个项目的任务混在一起。
 
+`/doctor` 会在交互界面里显示当前 workspace、core/safety、LLM provider、model、base URL、API key 是否已配置，以及当前 provider 是否支持 tool-use loop；它不会请求远端 API，也不会打印密钥明文。`/config` 是同一命令的别名。
+
 `/spawn <request>` 会在当前 workspace/session 后台启动一个 async task，并立即返回 task id。它适合同时发起多个任务，再用 `/watch` 聚合观察。
 
 `/watch` 会订阅当前 workspace 的 active tasks，直到这些任务的 daemon SSE 结束；也可以用 `/watch task_xxx task_yyy` 显式观察多个任务。它复用 Go client 的多 task event fan-in，适合 TUI 和未来 Mac 客户端共享。
 
 任务 streaming 期间可以直接输入 `/cancel` 中止当前任务；后台任务可用 `/cancel task_xxx` 指定取消。其它命令会在当前任务结束后按顺序执行，避免 `/apply` 或 `/exit` 抢在结果和 diff 之前生效。
+
+CLI 侧也新增显式 session 控制：`liora -interactive -session <session_id> -workspace <path>` 可直接挂载已有会话；`liora -interactive -new-session -workspace <path>` 可固定走新上下文，这对脚本化重放或多入口（桌面端）接入很有用。
 
 交互界面会展示：
 
@@ -509,12 +515,11 @@ LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scr
 ## 架构分层
 
 - `apps/cli`：当前 Go CLI/TUI/daemon 入口，负责参数、配置加载和模式选择。
-- `apps/tui`：未来独立 TUI app 预留目录；应通过 daemon API 复用 core，不直接执行工具。
 - `packages`：未来跨 app 复用的协议、UI 和 eval 包。
 - `internal/daemon`：本地 HTTP API 和 SSE 事件流。
 - `internal/task`：任务模型、SQLite 仓储和任务 runner。
 - `internal/sandbox`：Shell executor 抽象，支持 local 和 Docker。
-- `internal/tui`：交互循环和单轮结果渲染，不直接执行工具；默认通过 embedded daemon 访问任务事件流。
+- `internal/tui`：Go 原生 TUI —— TTY 下 Bubble Tea 全屏、非 TTY 下 line-based renderer，不直接执行工具；默认通过 embedded daemon 访问任务事件流。
 - `internal/runtime`：连接 Planner 和 Agent，是交互模式的一轮执行编排层。
 - `internal/llm`：多供应商 LLM client 和自然语言 Planner。
 - `internal/store`：goal、memory、skill 和 MCP 配置的本地持久化；daemon 对 memory 暴露结构化 API。
@@ -543,7 +548,7 @@ LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scr
 - MCP 当前实现为 stdio JSON-RPC MVP，每次 list/call 会启动一次 server；后续可优化为长连接 session pool。
 - Skill 当前以本地 `SKILL.md` 摘要形式注入 Planner，没有实现独立 skill 执行沙盒。
 - `list`、`tree`、`glob` 是安全目录查看工具；Planner 会优先用它们处理“看看文件夹里有什么”或“找文件”这类请求。
-- TUI 是轻量 Go 实现，借鉴 Kimi Code CLI 的信息结构，使用 Lip Gloss 做样式，不复用原 TypeScript/pi-tui 组件；默认 `liora` 会自动拉起 embedded daemon，`-tui-daemon` 用于连接外部 daemon。
+- 交互 TUI 由 Go 原生实现（`internal/tui`，基于 charmbracelet Bubble Tea）：TTY 下为全屏 UI，非 TTY（管道/CI/smoke）自动回退 line-based renderer，借鉴 Kimi/Claude 信息流展示方式；与 core 同二进制、无 Node 依赖。默认 `liora` 会自动拉起 embedded daemon，`-tui-daemon` 用于连接外部 daemon；`LIORA_FORCE_GO_TUI` 可强制 line renderer 用于调试。
 - Shell 命令可通过 `LIORA_SANDBOX=docker` 进入 Docker；默认 local 方便无 Docker 环境开发。
 - 文件工具已经做 workspace 路径限制；daemon 和默认 TUI 默认先产出 patch 再显式 apply，可用 `LIORA_PATCH_MODE=0` 回到直接写入模式；也支持 `LIORA_PERMISSION=prompt` 对危险 shell、非 patch 写操作和 MCP 外部调用做 task 级审批。完整逐步授权 UI 和更严格资源隔离仍留给后续版本。
 - Trace 当前支持内存记录和 JSONL 落盘；任务和记忆已经进入本地 SQLite。

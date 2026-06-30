@@ -21,6 +21,8 @@ cleanup() {
 trap cleanup EXIT
 
 # Fake OpenAI-compatible chat server; keeps TUI smoke deterministic and keyless.
+# It drives the native tool-use loop: the first turn returns a structured
+# tool_call, and once a tool result is fed back it finishes with plain text.
 python3 - "$LLM_ADDR" >"$TMP_DIR/llm.log" 2>&1 <<'PY' &
 import json
 import sys
@@ -30,14 +32,35 @@ host, port = sys.argv[1].split(":")
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length).decode("utf-8") if length else ""
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = {}
+        messages = payload.get("messages", [])
+        has_tool_result = any(m.get("role") == "tool" for m in messages)
+        user_text = ""
+        for m in messages:
+            if m.get("role") == "user":
+                user_text = m.get("content") or ""
+                break
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({
-            "choices": [
-                {"message": {"role": "assistant", "content": "list ."}}
-            ]
-        }).encode())
+        if has_tool_result:
+            message = {"role": "assistant", "content": "Done."}
+        else:
+            if "sleep" in user_text or "run" in user_text.lower():
+                func = {"name": "run", "arguments": json.dumps({"command": "sleep 10"})}
+            else:
+                func = {"name": "list", "arguments": json.dumps({"path": "."})}
+            message = {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call_1", "type": "function", "function": func}],
+            }
+        self.wfile.write(json.dumps({"choices": [{"message": message}]}).encode())
 
     def log_message(self, *_):
         pass
