@@ -5,3 +5,5 @@ liora.db
 *.db-wal
 .superpowers/
 dist/
+node_modules/
+*.tsbuildinfo

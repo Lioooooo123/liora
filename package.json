@@ -6,6 +6,7 @@
   "scripts": {
     "build:cli": "go build -o dist/dev/liora ./apps/cli",
     "test:go": "GOTOOLCHAIN=local go test -count=1 ./...",
+    "test:protocol": "pnpm --filter @liora/protocol test",
     "smoke:tui": "./scripts/tui-smoke.sh \"$PWD\"",
     "audit:v0.1": "GOTOOLCHAIN=local ./scripts/v0.1-exit-audit.sh \"$PWD\""
   },
