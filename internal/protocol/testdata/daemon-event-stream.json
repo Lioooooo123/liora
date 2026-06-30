@@ -1,0 +1,59 @@
+{
+  "version": "2026-06-30.task-events.v1",
+  "single_task_stream": [
+    {
+      "event": "task.created",
+      "id": "event-001",
+      "data": {
+        "message": "created"
+      }
+    },
+    {
+      "event": "tool.call",
+      "id": "event-002",
+      "data": {
+        "tool": "read",
+        "input": "README.md"
+      }
+    },
+    {
+      "event": "tool.result",
+      "id": "event-003",
+      "data": {
+        "tool": "read",
+        "output": "Liora"
+      }
+    },
+    {
+      "event": "task.completed",
+      "id": "event-004",
+      "data": {
+        "status": "completed"
+      }
+    }
+  ],
+  "multi_task_stream": [
+    {
+      "event": "task.summary",
+      "id": "event-101",
+      "data": {
+        "task_id": "task-002",
+        "payload": {
+          "message": "background summary"
+        }
+      }
+    },
+    {
+      "event": "permission.requested",
+      "id": "event-102",
+      "data": {
+        "task_id": "task-003",
+        "payload": {
+          "tool": "run",
+          "risk": "dangerous_shell",
+          "reason": "requires approval"
+        }
+      }
+    }
+  ]
+}
