@@ -442,5 +442,5 @@
 ## 2026-07-01 GitHub / npm 安装入口
 
 - 为了接近 Claude Code 的安装体验，本轮在根 `package.json` 暴露 `liora` bin，并新增 `scripts/npm/liora.cjs` 作为 Node shim。shim 不实现 agent 逻辑，只负责转发参数到 Go 构建出的 `bin/liora`，避免出现两套 agent runtime。
-- `postinstall` 选择在安装端执行 `go build -o bin/liora ./apps/cli`，因此 `npm install -g github:Lioooooo123/liora` 需要用户机器有 Go 1.24+。这是当前最小可用方案；后续正式发 npm registry 时，应改成按平台下载 GitHub Release 预编译产物，降低安装端工具链要求。
+- npm git package 的 `postinstall` 在远端安装时遇到过 npm 临时目录 cwd 不稳定问题，因此改用 `prepare` 在 git package 打包阶段执行 `go build -o bin/liora ./apps/cli`，并把 `bin` 纳入 npm `files`。这仍要求用户机器有 Go 1.24+；后续正式发 npm registry 时，应改成按平台下载 GitHub Release 预编译产物，降低安装端工具链要求。
 - 根包仍保留 `private: true`，防止误发 npm registry；GitHub 安装路径不依赖 npm publish。后续如果要正式发布 `@lioooooo123/liora`，需要先补 registry 权限、跨平台预编译产物和 package provenance。

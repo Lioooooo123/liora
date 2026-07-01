@@ -30,7 +30,7 @@ if (result.error) {
 }
 
 if (result.status !== 0) {
-  console.error("Failed to build Liora during npm install.");
+  console.error("Failed to build Liora during npm package preparation.");
   process.exit(result.status ?? 1);
 }
 
