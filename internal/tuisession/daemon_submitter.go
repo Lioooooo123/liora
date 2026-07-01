@@ -947,7 +947,7 @@ func (s *DaemonSubmitter) showDiff(ctx context.Context, taskID string) (string, 
 	s.rememberDiff(taskID, diff)
 	lines := []string{"Diff " + taskID}
 	lines = append(lines, tui.PatchReadyReply(diff))
-	lines = append(lines, previewLines(diff, 180)...)
+	lines = append(lines, tui.PatchReviewPreview(diff, 180))
 	lines = append(lines, "Next:")
 	lines = append(lines, tui.PatchReadyNextAction())
 	return strings.Join(lines, "\n"), true, nil
@@ -972,14 +972,14 @@ func (s *DaemonSubmitter) applyLast(ctx context.Context) (string, bool, error) {
 	if err != nil {
 		return "", true, err
 	}
-	lines := []string{"Applied task " + taskID + "."}
+	lines := []string{"已应用变更，真实工作区已更新。"}
 	if len(result.Files) > 0 {
-		lines = append(lines, "Files:")
+		lines = append(lines, "文件:")
 		for _, file := range result.Files {
 			lines = append(lines, "- "+file)
 		}
 	}
-	lines = append(lines, "Next: use /timeline to review the applied patch event.")
+	lines = append(lines, "你可以继续让我运行测试、解释变更，或用 /timeline 查看记录。")
 	return strings.Join(lines, "\n"), true, nil
 }
 

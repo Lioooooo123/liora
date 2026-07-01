@@ -27,10 +27,7 @@ func (m *model) headerView() string {
 	if m.isTranscriptEmpty() {
 		return ""
 	}
-	width := m.vp.Width()
-	if width <= 0 {
-		width = 80
-	}
+	width := m.viewportWidth()
 	left := chromeTitleStyle.Render(brandInline())
 	right := chromePillStyle.Render(m.statusLabel())
 	top := joinEdge(left, right, width)
@@ -41,10 +38,7 @@ func (m *model) headerView() string {
 }
 
 func (m *model) welcomeCardView() string {
-	width := m.vp.Width()
-	if width <= 0 {
-		width = 80
-	}
+	width := m.viewportWidth()
 	if width < 24 {
 		return truncateCells(brandInline()+"  "+valueOr(m.cfg.Workspace, "workspace"), width)
 	}
@@ -86,9 +80,12 @@ func cardLine(content string, innerWidth int) string {
 }
 
 func (m *model) statusLine() string {
-	width := m.vp.Width()
-	if width <= 0 {
-		width = 80
+	return m.statusLineForWidth(m.viewportWidth())
+}
+
+func (m *model) statusLineForWidth(width int) string {
+	if width < 1 {
+		return ""
 	}
 	pending := ""
 	if len(m.pending) > 0 {

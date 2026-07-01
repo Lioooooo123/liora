@@ -63,6 +63,30 @@ func TestInteractiveLoopRendersGroupedHelp(t *testing.T) {
 	}
 }
 
+func TestInteractiveLoopRendersApplyCompletionAsAssistant_whenCommandHandled(t *testing.T) {
+	handler := CommandHandlerFunc(func(_ context.Context, line string) (string, bool, error) {
+		if line == "/apply" {
+			return "完成。\n文件:\n- notes.txt", true, nil
+		}
+		return "", false, nil
+	})
+	var out strings.Builder
+	app := New(Config{Workspace: "/tmp/project", Commands: handler}, &fakeSubmitter{})
+
+	if err := app.Run(context.Background(), strings.NewReader("/apply\n/exit\n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	rendered := out.String()
+	for _, want := range []string{"Assistant", "完成", "notes.txt"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected apply completion to render as assistant-facing %q, got:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "System") {
+		t.Fatalf("apply completion should not render as generic system output:\n%s", rendered)
+	}
+}
+
 func TestInteractiveLoopSubmitsPromptAndExits(t *testing.T) {
 	submitter := &fakeSubmitter{}
 	var out strings.Builder
@@ -319,9 +343,14 @@ func TestRenderTurnShowsNextActionsForDiff(t *testing.T) {
 	})
 
 	rendered := out.String()
-	for _, want := range []string{"Assistant", "已准备好变更", "Diff", "Next", "apply", "exit"} {
+	for _, want := range []string{"Assistant", "已准备好变更", "apply"} {
 		if !strings.Contains(strings.ToLower(rendered), strings.ToLower(want)) {
 			t.Fatalf("expected rendered output to contain %q, got:\n%s", want, rendered)
+		}
+	}
+	for _, avoid := range []string{"Diff", "+++ a/app.txt"} {
+		if strings.Contains(rendered, avoid) {
+			t.Fatalf("completed diff guidance should stay compact and hide %q:\n%s", avoid, rendered)
 		}
 	}
 	if strings.Contains(rendered, "stop a running task") {

@@ -15,11 +15,12 @@ import (
 )
 
 type Config struct {
-	Workspace string
-	Model     string
-	Core      string
-	Safety    string
-	Commands  CommandHandler
+	Workspace   string
+	Model       string
+	Core        string
+	Safety      string
+	Commands    CommandHandler
+	Completions CompletionProvider
 }
 
 type TurnResult struct {
@@ -71,6 +72,22 @@ func (c CommandChain) HandleCommand(ctx context.Context, line string) (string, b
 		}
 	}
 	return "", false, nil
+}
+
+func (c CommandChain) Completions(ctx context.Context, line string) ([]Completion, error) {
+	var completions []Completion
+	for _, handler := range c {
+		provider, ok := handler.(CompletionProvider)
+		if !ok || provider == nil {
+			continue
+		}
+		items, err := provider.Completions(ctx, line)
+		if err != nil {
+			return nil, err
+		}
+		completions = append(completions, items...)
+	}
+	return completions, nil
 }
 
 type SubmitterFunc func(ctx context.Context, input string) (TurnResult, error)
@@ -158,7 +175,7 @@ func (a *App) runBlocking(ctx context.Context, input io.Reader, output io.Writer
 				continue
 			}
 			if handled {
-				renderSection(output, "System", result)
+				renderSection(output, commandResultTitle(line), result)
 				continue
 			}
 			renderSection(output, "System", "Unknown command. Use /help to view available commands.")
@@ -297,7 +314,7 @@ func (a *App) handleStreamingLine(ctx context.Context, line string, output io.Wr
 			return false
 		}
 		if handled {
-			renderSection(output, "System", result)
+			renderSection(output, commandResultTitle(line), result)
 			return false
 		}
 		renderSection(output, "System", "Unknown command. Use /help to view available commands.")
@@ -352,23 +369,25 @@ func (a *App) runTurn(ctx context.Context, input string, output io.Writer) error
 }
 
 func RenderStreamUpdate(output io.Writer, update StreamUpdate) {
+	RenderStreamUpdateWithWidth(output, update, 0)
+}
+
+func RenderStreamUpdateWithWidth(output io.Writer, update StreamUpdate, width int) {
 	payload := decodeEventPayload(update.PayloadJSON)
 	switch update.Type {
 	case "task.planning", "sandbox.run", "sandbox.workspace", "task.plan_ready", "task.replanning", "tool.call":
 		return
 	case "tool.result":
 		if payload.Status != "" && payload.Status != string(trace.StatusOK) {
-			renderSection(output, "Error", formatToolEvent(payload))
+			renderSectionWithWidth(output, "Error", formatToolEvent(payload), width)
 		}
 	case "task.summary":
 		if strings.TrimSpace(payload.Message) != "" {
-			renderSection(output, "Assistant", payload.Message)
+			renderSectionWithWidth(output, "Assistant", payload.Message, width)
 		}
 	case "task.diff":
 		if strings.TrimSpace(payload.Diff) != "" {
-			renderSection(output, "Assistant", PatchReadyReply(payload.Diff))
-			renderSection(output, "Diff", strings.TrimRight(payload.Diff, "\n"))
-			renderSection(output, "Next", PatchReadyNextAction())
+			renderSectionWithWidth(output, "Assistant", PatchReadyReply(payload.Diff), width)
 		}
 	case "permission.requested":
 		body := strings.TrimSpace(payload.Tool + " " + payload.Input)
@@ -379,21 +398,21 @@ func RenderStreamUpdate(output io.Writer, update StreamUpdate) {
 			body += "\nReason: " + payload.Reason
 		}
 		body += "\nCommands: /approve to continue, /deny to cancel."
-		renderSection(output, "Approval", body)
+		renderSectionWithWidth(output, "Approval", body, width)
 	case "permission.approved":
-		renderSection(output, "Approval", "approved")
+		renderSectionWithWidth(output, "Approval", "approved", width)
 	case "permission.denied":
-		renderSection(output, "Approval", "denied")
+		renderSectionWithWidth(output, "Approval", "denied", width)
 	case "task.completed", "task.cancelled":
 		if update.Type == "task.cancelled" {
 			status := valueOr(payload.Status, "cancelled")
 			if payload.Message != "" {
 				status += ": " + payload.Message
 			}
-			renderSection(output, "System", status)
+			renderSectionWithWidth(output, "System", status, width)
 		}
 	case "task.error":
-		renderSection(output, "Error", strings.TrimSpace(payload.Message+"\n"+payload.Output))
+		renderSectionWithWidth(output, "Error", strings.TrimSpace(payload.Message+"\n"+payload.Output), width)
 	}
 }
 
@@ -410,8 +429,6 @@ func RenderTurn(output io.Writer, view TurnView) {
 	}
 	if strings.TrimSpace(result.AgentResult.Diff) != "" {
 		renderSection(output, "Assistant", PatchReadyReply(result.AgentResult.Diff))
-		renderSection(output, "Diff", strings.TrimRight(result.AgentResult.Diff, "\n"))
-		renderSection(output, "Next", PatchReadyNextAction())
 	}
 }
 
@@ -457,11 +474,25 @@ func formatToolEvent(payload eventPayload) string {
 }
 
 func renderSection(output io.Writer, title string, body string) {
+	renderSectionWithWidth(output, title, body, 0)
+}
+
+func renderSectionWithWidth(output io.Writer, title string, body string, width int) {
 	body = strings.TrimRight(body, "\n")
 	if body == "" {
 		return
 	}
+	if width > 2 {
+		body = wrapSectionBody(body, width-2)
+	}
 	fmt.Fprintln(output, "\n"+renderPanel(title, strings.Split(indentBody(body), "\n")))
+}
+
+func wrapSectionBody(body string, width int) string {
+	if width <= 0 {
+		return body
+	}
+	return lipgloss.NewStyle().Width(width).Render(body)
 }
 
 func renderLogLine(output io.Writer, label string, body string) {

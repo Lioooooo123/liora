@@ -415,12 +415,12 @@ func TestCLIInteractiveModeRunsTurns(t *testing.T) {
 		t.Fatalf("command failed: %v\n%s", err, string(output))
 	}
 	rendered := string(output)
-	for _, want := range []string{"Liora", "You", "把 old 改成 new", "Assistant", "Replaced old with new in app.txt.", "Diff", "Next", "Bye"} {
+	for _, want := range []string{"Liora", "You", "把 old 改成 new", "Assistant", "Replaced old with new in app.txt.", "/apply", "/diff", "Bye"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, rendered)
 		}
 	}
-	for _, avoid := range []string{"Plan", "Tools", "Task - started"} {
+	for _, avoid := range []string{"Plan", "Tools", "Task - started", "\nDiff"} {
 		if strings.Contains(rendered, avoid) {
 			t.Fatalf("interactive output should hide internal %q, got:\n%s", avoid, rendered)
 		}
@@ -674,7 +674,7 @@ func TestCLIInteractiveDaemonApplyCommand(t *testing.T) {
 		t.Fatalf("command failed: %v\n%s", err, string(output))
 	}
 	rendered := string(output)
-	for _, want := range []string{"Diff", "Next", "Applied task", "Files:", "notes.txt"} {
+	for _, want := range []string{"已准备好变更", "已应用变更", "真实工作区已更新", "notes.txt", "继续让我运行测试"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected daemon apply output to contain %q, got:\n%s", want, rendered)
 		}

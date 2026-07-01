@@ -13,6 +13,7 @@ import (
 	"github.com/Lioooooo123/liora/internal/agent"
 	"github.com/Lioooooo123/liora/internal/llm"
 	"github.com/Lioooooo123/liora/internal/store"
+	"github.com/Lioooooo123/liora/internal/tui"
 )
 
 func TestMain(m *testing.M) {
@@ -250,6 +251,54 @@ func TestRuntimeListsSkillsCommand(t *testing.T) {
 	if !handled || !strings.Contains(out, "Test Skill") || !strings.Contains(out, "Generate tests") {
 		t.Fatalf("unexpected skill output handled=%v out=%q", handled, out)
 	}
+}
+
+func TestRuntimeCompletesSkillNames_whenTypingSkillSlashCommand(t *testing.T) {
+	root := t.TempDir()
+	storeRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".liora", "skills", "review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".liora", "skills", "tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".liora", "skills", "review", "SKILL.md"), []byte("---\nname: Code Review\ndescription: Review code changes\n---\nBody"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".liora", "skills", "tests", "SKILL.md"), []byte("# Test Skill\nGenerate tests"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := New(root, llm.NewPlanner(&fakeGenerator{response: "ANSWER: unused"}), store.New(storeRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := runtime.Completions(t.Context(), "/skill ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"/skill review", "/skill tests"} {
+		if !containsCompletionValue(all, want) {
+			t.Fatalf("expected all skill completions to include %q, got %#v", want, all)
+		}
+	}
+
+	filtered, err := runtime.Completions(t.Context(), "/skill re")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsCompletionValue(filtered, "/skill review") || containsCompletionValue(filtered, "/skill tests") {
+		t.Fatalf("expected filtered completions to include review only, got %#v", filtered)
+	}
+}
+
+func containsCompletionValue(completions []tui.Completion, value string) bool {
+	for _, completion := range completions {
+		if completion.Value == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRuntimeSkillCommandReadsPagedSkill(t *testing.T) {

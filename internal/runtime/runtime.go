@@ -251,6 +251,37 @@ func (r *Runtime) HandleCommand(ctx context.Context, line string) (string, bool,
 	}
 }
 
+func (r *Runtime) Completions(_ context.Context, line string) ([]tui.Completion, error) {
+	line = strings.TrimRight(line, "\r\n")
+	if !strings.HasPrefix(line, "/skill ") {
+		return nil, nil
+	}
+	partial := strings.TrimSpace(strings.TrimPrefix(line, "/skill "))
+	if strings.Contains(partial, " ") {
+		return nil, nil
+	}
+	skills, err := r.store.ScanSkills(r.workspace.Root())
+	if err != nil {
+		return nil, err
+	}
+	completions := make([]tui.Completion, 0, len(skills))
+	for _, skill := range skills {
+		if partial != "" && !strings.HasPrefix(skill.Name, partial) {
+			continue
+		}
+		description := skill.Title
+		if skill.Description != "" {
+			description = skill.Description
+		}
+		completions = append(completions, tui.Completion{
+			Value:       "/skill " + skill.Name,
+			Label:       "/skill " + skill.Name,
+			Description: description,
+		})
+	}
+	return completions, nil
+}
+
 func (r *Runtime) handleGoal(args string) (string, bool, error) {
 	command, rest, _ := strings.Cut(args, " ")
 	switch strings.TrimSpace(command) {

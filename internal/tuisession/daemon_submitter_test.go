@@ -289,16 +289,21 @@ func TestDaemonSubmitterAppliesLastDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Diff " + taskID, "已准备好变更", "notes.txt", "+1 -0", "+++ b/notes.txt", "+hello", "Next:", "/apply", "/diff"} {
+	for _, want := range []string{"Diff " + taskID, "已准备好变更", "notes.txt", "+1 -0", "变更预览:", "+ hello", "Next:", "/apply", "/diff"} {
 		if !handled || !strings.Contains(diffOutput, want) {
 			t.Fatalf("expected diff output to contain %q handled=%v output=%q", want, handled, diffOutput)
+		}
+	}
+	for _, avoid := range []string{"+++ b/notes.txt", "--- a/notes.txt"} {
+		if strings.Contains(diffOutput, avoid) {
+			t.Fatalf("expected diff output to hide raw header %q, got:\n%s", avoid, diffOutput)
 		}
 	}
 	output, handled, err := submitter.HandleCommand(t.Context(), "/apply")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Applied task", "Files:", "notes.txt", "Next:", "/timeline"} {
+	for _, want := range []string{"已应用变更", "真实工作区已更新", "notes.txt", "继续让我运行测试", "/timeline"} {
 		if !handled || !strings.Contains(output, want) {
 			t.Fatalf("expected apply output to contain %q handled=%v output=%q", want, handled, output)
 		}

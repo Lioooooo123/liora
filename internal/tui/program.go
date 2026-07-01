@@ -31,6 +31,7 @@ type streamUpdateMsg struct{ update StreamUpdate }
 type turnDoneMsg struct{ err error }
 
 type commandResultMsg struct {
+	line    string
 	result  string
 	handled bool
 	err     error
@@ -42,15 +43,17 @@ type model struct {
 	submitter StreamingSubmitter
 	commands  CommandHandler
 
-	vp    viewport.Model
-	input textarea.Model
-	spin  spinner.Model
-	body  strings.Builder
+	vp     viewport.Model
+	input  textarea.Model
+	spin   spinner.Model
+	body   strings.Builder
+	blocks []transcriptBlock
 
 	running     bool
 	ready       bool
 	quitting    bool
 	pending     []string
+	completions []Completion
 	eventCount  int
 	lastStatus  string
 	nextAction  string
@@ -59,6 +62,8 @@ type model struct {
 	streamCh chan StreamUpdate
 	doneCh   chan error
 }
+
+type transcriptBlock func(io.Writer, int)
 
 func newModel(ctx context.Context, cfg Config, submitter StreamingSubmitter) *model {
 	input := textarea.New()
@@ -108,15 +113,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			line := strings.TrimSpace(m.input.Value())
 			m.input.SetValue("")
+			m.clearCompletions()
 			cmd := m.submitLine(line)
 			if m.quitting {
 				return m, tea.Quit
 			}
 			return m, cmd
+		case "tab":
+			if m.applyCompletion() {
+				return m, nil
+			}
 		}
 	case streamUpdateMsg:
 		m.noteStreamUpdate(msg.update)
-		if m.appendBlock(func(w io.Writer) { RenderStreamUpdate(w, msg.update) }) {
+		if m.appendWidthBlock(func(w io.Writer, width int) { RenderStreamUpdateWithWidth(w, msg.update, width) }) {
 			m.turnVisible = true
 		}
 		cmds = append(cmds, waitForUpdate(m.streamCh, m.doneCh))
@@ -126,9 +136,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.doneCh = nil
 		if msg.err != nil {
 			m.lastStatus = "error"
-			m.appendBlock(func(w io.Writer) { renderSection(w, "Error", msg.err.Error()) })
+			m.appendSection("Error", msg.err.Error())
 		} else if !m.turnVisible {
-			m.appendBlock(func(w io.Writer) { renderSection(w, "Assistant", "Completed.") })
+			m.appendSection("Assistant", "Completed.")
 		}
 		if cmd := m.submitPending(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -146,6 +156,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	cmds = append(cmds, cmd)
+	if _, ok := msg.(tea.KeyPressMsg); ok {
+		m.refreshCompletions()
+	}
 	m.vp, cmd = m.vp.Update(msg)
 	cmds = append(cmds, cmd)
 	return m, tea.Batch(cmds...)
@@ -179,22 +192,83 @@ func (m *model) footer() string {
 }
 
 func (m *model) inputPanelView() string {
-	status := m.statusLine()
+	width := m.viewportWidth()
+	status := m.statusLineForWidth(width)
 	if m.running {
-		status = m.spin.View() + " " + status
+		prefix := m.spin.View() + " "
+		statusWidth := width - lipgloss.Width(prefix)
+		if statusWidth < 1 {
+			status = truncateCells(prefix, width)
+		} else {
+			status = prefix + m.statusLineForWidth(statusWidth)
+		}
 	}
-	lines := []string{m.inputBoxView(), status}
+	lines := []string{m.inputBoxView()}
+	if hint := m.completionHint(width); hint != "" {
+		lines = append(lines, hint)
+	}
+	lines = append(lines, status)
 	for range inputBottomGapLines {
 		lines = append(lines, " ")
 	}
 	return strings.Join(lines, "\n")
 }
 
-func (m *model) inputBoxView() string {
-	width := m.vp.Width()
-	if width <= 0 {
-		width = 80
+func (m *model) refreshCompletions() {
+	line := strings.TrimRight(m.input.Value(), "\r\n")
+	if !strings.HasPrefix(line, "/") {
+		m.clearCompletions()
+		return
 	}
+	builtin, _ := builtinCompletionProvider{}.Completions(m.ctx, line)
+	var dynamic []Completion
+	provider := m.cfg.Completions
+	if provider == nil {
+		if commandProvider, ok := m.commands.(CompletionProvider); ok {
+			provider = commandProvider
+		}
+	}
+	if provider != nil {
+		items, err := provider.Completions(m.ctx, line)
+		if err == nil {
+			dynamic = items
+		}
+	}
+	m.completions = mergeCompletions(line, builtin, dynamic)
+}
+
+func (m *model) clearCompletions() {
+	m.completions = nil
+}
+
+func (m *model) applyCompletion() bool {
+	m.refreshCompletions()
+	if len(m.completions) == 0 {
+		return false
+	}
+	m.input.SetValue(m.completions[0].Value)
+	m.input.CursorEnd()
+	m.refreshCompletions()
+	return true
+}
+
+func (m *model) completionHint(width int) string {
+	if len(m.completions) == 0 || width < 12 {
+		return ""
+	}
+	parts := make([]string, 0, len(m.completions))
+	for _, item := range m.completions {
+		label := commandStyle.Render(completionLabel(item))
+		if description := completionDescription(item); description != "" {
+			label += mutedStyle.Render(" " + description)
+		}
+		parts = append(parts, label)
+	}
+	return truncateCells(strings.Join(parts, mutedStyle.Render("  ")), width)
+}
+
+func (m *model) inputBoxView() string {
+	width := m.viewportWidth()
 	if width < 4 {
 		return m.input.View()
 	}
@@ -208,6 +282,14 @@ func (m *model) inputBoxView() string {
 	}
 	middle := chromeInputBorderStyle.Render("│") + content + strings.Repeat(" ", padding) + chromeInputBorderStyle.Render("│")
 	return strings.Join([]string{top, middle, bottom}, "\n")
+}
+
+func (m *model) viewportWidth() int {
+	width := m.vp.Width()
+	if width <= 0 {
+		return 80
+	}
+	return width
 }
 
 func (m *model) resize(width, height int) {
@@ -231,9 +313,7 @@ func (m *model) submitLine(line string) tea.Cmd {
 	}
 	if m.running && !isControlCommandDuringRun(line) {
 		m.pending = append(m.pending, line)
-		m.appendBlock(func(w io.Writer) {
-			renderSection(w, "Queue", "Task is running. Queued for the next turn: "+line)
-		})
+		m.appendSection("Queue", "Task is running. Queued for the next turn: "+line)
 		return nil
 	}
 	switch line {
@@ -241,22 +321,18 @@ func (m *model) submitLine(line string) tea.Cmd {
 		m.quitting = true
 		return tea.Quit
 	case "/help":
-		m.appendBlock(func(w io.Writer) { renderSection(w, "Help", helpText()) })
+		m.appendSection("Help", helpText())
 		return nil
 	}
 	if strings.HasPrefix(line, "/") {
 		if m.commands == nil {
-			m.appendBlock(func(w io.Writer) {
-				renderSection(w, "System", "Unknown command. Use /help to view available commands.")
-			})
+			m.appendSection("System", "Unknown command. Use /help to view available commands.")
 			return nil
 		}
 		return m.runCommand(line)
 	}
 	if m.running {
-		m.appendBlock(func(w io.Writer) {
-			renderSection(w, "System", "Task is still running. Use /cancel, /approve, /deny, or wait for it to finish.")
-		})
+		m.appendSection("System", "Task is still running. Use /cancel, /approve, /deny, or wait for it to finish.")
 		return nil
 	}
 	m.appendUserMessage(line)
@@ -270,7 +346,7 @@ func (m *model) submitLine(line string) tea.Cmd {
 func (m *model) runCommand(line string) tea.Cmd {
 	return func() tea.Msg {
 		result, handled, err := m.commands.HandleCommand(m.ctx, line)
-		return commandResultMsg{result: result, handled: handled, err: err}
+		return commandResultMsg{line: line, result: result, handled: handled, err: err}
 	}
 }
 
@@ -278,14 +354,12 @@ func (m *model) renderCommandResult(msg commandResultMsg) {
 	switch {
 	case msg.err != nil:
 		m.lastStatus = "command error"
-		m.appendBlock(func(w io.Writer) { renderSection(w, "Error", msg.err.Error()) })
+		m.appendSection("Error", msg.err.Error())
 	case msg.handled:
 		m.lastStatus = "command complete"
-		m.appendBlock(func(w io.Writer) { renderSection(w, "System", msg.result) })
+		m.appendSection(commandResultTitle(msg.line), msg.result)
 	default:
-		m.appendBlock(func(w io.Writer) {
-			renderSection(w, "System", "Unknown command. Use /help to view available commands.")
-		})
+		m.appendSection("System", "Unknown command. Use /help to view available commands.")
 	}
 }
 
@@ -315,21 +389,46 @@ func waitForUpdate(ch chan StreamUpdate, done chan error) tea.Cmd {
 }
 
 func (m *model) appendBlock(render func(io.Writer)) bool {
+	return m.appendWidthBlock(func(w io.Writer, _ int) { render(w) })
+}
+
+func (m *model) appendWidthBlock(render transcriptBlock) bool {
 	var buf bytes.Buffer
-	render(&buf)
+	render(&buf, m.vp.Width())
 	if buf.Len() == 0 {
 		return false
 	}
-	m.body.WriteString(buf.String())
+	if len(m.blocks) == 0 && m.body.Len() > 0 {
+		existing := m.body.String()
+		m.blocks = append(m.blocks, func(w io.Writer, _ int) {
+			io.WriteString(w, existing)
+		})
+	}
+	m.blocks = append(m.blocks, render)
 	m.refresh()
 	return true
 }
 
+func (m *model) appendSection(title string, body string) bool {
+	return m.appendWidthBlock(func(w io.Writer, width int) {
+		renderSectionWithWidth(w, title, body, width)
+	})
+}
+
 func (m *model) appendUserMessage(line string) {
-	m.appendBlock(func(w io.Writer) { renderSection(w, "You", line) })
+	m.appendSection("You", line)
+}
+
+func commandResultTitle(line string) string {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) > 0 && fields[0] == "/apply" {
+		return "Assistant"
+	}
+	return "System"
 }
 
 func (m *model) refresh() {
+	m.rebuildBody()
 	if m.isTranscriptEmpty() {
 		m.vp.SetContent(m.welcomeCardView())
 		m.vp.GotoTop()
@@ -337,6 +436,16 @@ func (m *model) refresh() {
 	}
 	m.vp.SetContent(strings.TrimLeft(m.body.String(), "\n"))
 	m.vp.GotoBottom()
+}
+
+func (m *model) rebuildBody() {
+	if len(m.blocks) == 0 {
+		return
+	}
+	m.body.Reset()
+	for _, block := range m.blocks {
+		block(&m.body, m.vp.Width())
+	}
 }
 
 func (m *model) isTranscriptEmpty() bool {

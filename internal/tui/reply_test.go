@@ -16,9 +16,14 @@ func TestRenderStreamUpdateShowsAssistantReply_whenDiffIsReady(t *testing.T) {
 
 	// Then
 	rendered := out.String()
-	for _, want := range []string{"Assistant", "已准备好变更", "1 个文件", "hello.py", "+1 -0", "还没有写入真实工作区", "/apply", "/diff", "继续输入新任务或 /exit"} {
+	for _, want := range []string{"Assistant", "已准备好变更", "1 个文件", "hello.py", "+1 -0", "还没有写入真实工作区", "/apply", "/diff"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected rendered output to contain %q, got:\n%s", want, rendered)
+		}
+	}
+	for _, avoid := range []string{"\nDiff", "+++ b/hello.py", "--- a/hello.py"} {
+		if strings.Contains(rendered, avoid) {
+			t.Fatalf("streamed diff should stay compact and avoid raw diff %q, got:\n%s", avoid, rendered)
 		}
 	}
 	if strings.Contains(rendered, "stop a running task") {
@@ -69,6 +74,31 @@ func TestPatchReadyReplySummarizesMultipleFiles_whenUnifiedDiffIsReady(t *testin
 	for _, want := range []string{"/apply", "/diff", "继续输入新任务或 /exit"} {
 		if !strings.Contains(next, want) {
 			t.Fatalf("expected next action to contain %q, got:\n%s", want, next)
+		}
+	}
+}
+
+func TestPatchReviewPreviewShowsStructuredDiff_withoutRawHeaders(t *testing.T) {
+	// Given
+	diff := strings.Join([]string{
+		"--- a/hello.py",
+		"+++ b/hello.py",
+		"-print('old')",
+		"+print('new')",
+	}, "\n")
+
+	// When
+	preview := PatchReviewPreview(diff, 20)
+
+	// Then
+	for _, want := range []string{"变更预览:", "hello.py", "- print('old')", "+ print('new')"} {
+		if !strings.Contains(preview, want) {
+			t.Fatalf("expected preview to contain %q, got:\n%s", want, preview)
+		}
+	}
+	for _, avoid := range []string{"--- a/hello.py", "+++ b/hello.py"} {
+		if strings.Contains(preview, avoid) {
+			t.Fatalf("preview should hide raw diff header %q, got:\n%s", avoid, preview)
 		}
 	}
 }

@@ -444,3 +444,29 @@
 - 为了接近 Claude Code 的安装体验，本轮在根 `package.json` 暴露 `liora` bin，并新增 `scripts/npm/liora.cjs` 作为 Node shim。shim 不实现 agent 逻辑，只负责转发参数到 Go 构建出的 `bin/liora`，避免出现两套 agent runtime。
 - npm git package 的 `postinstall` 在远端安装时遇到过 npm 临时目录 cwd 不稳定问题；`prepare` 虽然能构建，但 npm 打包 git cache 里的大二进制时又可能读到 EOF。因此当前改成 lazy build：安装只放 Go 源码和 JS shim，第一次执行 `liora` 时 shim 发现 `bin/liora` 缺失再调用 `scripts/npm/build.cjs` 构建。这仍要求用户机器有 Go 1.24+；后续正式发 npm registry 时，应改成按平台下载 GitHub Release 预编译产物，降低安装端工具链要求。
 - 根包仍保留 `private: true`，防止误发 npm registry；GitHub 安装路径不依赖 npm publish。后续如果要正式发布 `@lioooooo123/liora`，需要先补 registry 权限、跨平台预编译产物和 package provenance。
+
+## 2026-07-01 Full-screen TUI Width Reflow
+
+- 用户指出全屏 TUI 中 Assistant 长中文回复没有按终端宽度自适应，实际原因是 transcript 在写入时已经渲染成字符串，后续窗口变窄不会重新换行。
+- 本次修复只调整全屏 Bubble Tea transcript：新增宽度感知的 section/stream 渲染入口，并把 transcript 保存为可按当前 viewport width 重渲染的区块；line-based CLI 输出继续使用原有无宽度约束渲染，避免改变管道输出格式。
+- 区块正文的最大宽度按 `viewport width - 2` 计算，因为每行正文前会加左侧 rail 前缀 `│ `；CJK 宽度交给 lipgloss 计算和换行。
+- 当前重排发生在 `refresh/resize` 时，成本与 transcript 区块数量线性相关。v0.1 本地 TUI 可以接受；如果后续 transcript 很长，应引入窗口内虚拟化或只重排可见附近内容。
+
+## 2026-07-01 Full-screen TUI Footer Width
+
+- 用户截图指出 running 状态下底部右侧提示只露出 `wri`。根因是 `statusLine` 已按完整 viewport 宽度排版，`inputPanelView` 又额外在左侧拼接 spinner，导致整行超过终端宽度并被裁切。
+- 本次不通过缩短 next action 文案规避，而是在 running 状态先扣除 spinner 前缀宽度，再把剩余宽度交给 `statusLineForWidth` 排版，确保 `write`、`/cancel` 等右侧提示仍在可视范围内。
+- 这个修复只影响 full-screen input panel；非 running 的 status line、line-based CLI 和 transcript wrapping 行为保持不变。
+
+## 2026-07-01 Apply Follow-up and Diff Review UX
+
+- 用户反馈 `/apply` 后不像 Claude Code 那样继续给出可用回应，并且 diff 展示丑陋。参考本地 `/Users/bytedance/claude-code-main` 后确认 Claude Code 的主循环不是把 raw diff 长文塞进 transcript，而是通过结构化 diff dialog / permission preview 展示变更，并在工具执行后继续把 assistant 消息作为用户可见输出。
+- 本轮不在 `/apply` 后额外启动一个新的 LLM 任务，避免伪造“模型又回复了一轮”或引入 apply 后自动执行的副作用；改为让 `/apply` 的命令结果以 assistant-facing 完成答复呈现：说明变更已落到真实工作区、列出文件，并提示可以继续要求测试/解释或用 `/timeline` 查看记录。
+- `task.diff` 自动流式输出改为 compact 摘要，不再直接渲染 raw unified diff；显式 `/diff` 保留 review 入口，但展示结构化的文件和 +/- 行预览，隐藏 `---/+++` header。这接近 Claude Code “主 transcript 保持低噪声、需要时进入 diff review”的交互取舍。
+
+## 2026-07-01 Slash Skill Completion
+
+- 用户要求 `/` 输入需要具备补全 skill 的能力。本轮没有把 skill 扫描逻辑直接塞进 TUI，而是新增 `tui.CompletionProvider`，让 `CommandChain` 自动聚合实现了补全接口的 command handler；`runtime.Runtime` 负责从现有 store 扫描 skill 并提供 `/skill <name>` 候选。
+- TUI 内置少量静态 slash command 候选（如 `/help`、`/diff`、`/apply`、`/skills`、`/skill <name>`），动态 skill 候选只在 `/skill ` 前缀下触发。这样普通自然语言输入不会做任何文件扫描，`/skill re` 也会在 runtime 层先按前缀过滤，减少 UI 层处理量。
+- 全屏 TUI 使用 Tab 应用当前第一个候选，并在输入框下方显示一行候选摘要。这个实现先覆盖最小可用交互，不引入复杂命令面板或多选状态；后续若要更像 Claude Code 的 command palette，可在同一个 `CompletionProvider` 合同上扩展上下键选择、分组和说明面板。
+- 需要注意尾随空格：`/skill ` 必须保留空格语义，才能展示全部 skill；因此补全路径只 trim 换行，不 trim 普通空格。后续维护时不要把这段改回 `strings.TrimSpace`。

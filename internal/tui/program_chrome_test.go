@@ -9,6 +9,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+type fakeCompletionProvider struct {
+	items []Completion
+}
+
+func (f fakeCompletionProvider) Completions(_ context.Context, _ string) ([]Completion, error) {
+	return f.items, nil
+}
+
 func TestProgramChromeUsesCompactHeader_whenTranscriptExists(t *testing.T) {
 	// Given
 	model := newModel(context.Background(), Config{
@@ -136,6 +144,28 @@ func TestProgramSubmitLineShowsUserMessage_whenNaturalPromptStarts(t *testing.T)
 	}
 }
 
+func TestProgramTranscriptWrapsAssistantText_whenViewportNarrows(t *testing.T) {
+	// Given
+	model := newModel(context.Background(), Config{Workspace: "/tmp/project"}, fakeStreamingSubmitter{})
+	model.resize(72, 18)
+	longReply := "你好！我是 Liora，一个本地优先的编程助手，在单个工作区中帮助你读取代码、修改文件、运行验证并保持上下文。"
+
+	// When
+	_, _ = model.Update(streamUpdateMsg{
+		update: streamUpdate("task.summary", eventPayload{Message: longReply}),
+	})
+	model.resize(42, 18)
+	view := model.View()
+
+	// Then
+	for _, want := range []string{"Assistant", "本地优先", "保持上下文"} {
+		if !strings.Contains(view.Content, want) {
+			t.Fatalf("expected wrapped transcript to contain %q, got:\n%s", want, view.Content)
+		}
+	}
+	assertVisibleLinesWithinWidth(t, view.Content, 42)
+}
+
 func TestProgramStatusLineUsesShortRunningAction_whenTaskStarts(t *testing.T) {
 	// Given
 	model := newModel(context.Background(), Config{Workspace: "/tmp/project"}, fakeStreamingSubmitter{})
@@ -154,6 +184,118 @@ func TestProgramStatusLineUsesShortRunningAction_whenTaskStarts(t *testing.T) {
 	}
 	if strings.Contains(status, "stops the r") || strings.Contains(status, "stops the run") {
 		t.Fatalf("status should not render truncated long action, got:\n%s", status)
+	}
+}
+
+func TestProgramInputPanelKeepsRunningNextActionInsideWidth(t *testing.T) {
+	// Given
+	model := newModel(context.Background(), Config{Workspace: "/tmp/project"}, fakeStreamingSubmitter{})
+	model.resize(42, 16)
+	model.running = true
+	model.lastStatus = "running tool"
+	model.eventCount = 11
+	model.nextAction = "write"
+
+	// When
+	panel := model.inputPanelView()
+
+	// Then
+	if !strings.Contains(panel, "write") {
+		t.Fatalf("expected running footer to keep next action visible, got:\n%s", panel)
+	}
+	assertVisibleLinesWithinWidth(t, panel, 42)
+}
+
+func TestProgramCommandResultUsesAssistantSection_whenApplyCompletes(t *testing.T) {
+	// Given
+	model := newModel(context.Background(), Config{Workspace: "/tmp/project"}, fakeStreamingSubmitter{})
+	model.resize(80, 20)
+
+	// When
+	model.renderCommandResult(commandResultMsg{line: "/apply", handled: true, result: "完成。\n文件:\n- notes.txt"})
+
+	// Then
+	view := model.View()
+	for _, want := range []string{"Assistant", "完成", "notes.txt"} {
+		if !strings.Contains(view.Content, want) {
+			t.Fatalf("expected apply command result to look assistant-facing with %q, got:\n%s", want, view.Content)
+		}
+	}
+	if strings.Contains(view.Content, "System") {
+		t.Fatalf("apply command result should not be rendered as a generic system message:\n%s", view.Content)
+	}
+}
+
+func TestProgramShowsSkillCompletions_whenTypingSkillSlashCommand(t *testing.T) {
+	// Given
+	m := newModel(context.Background(), Config{
+		Workspace: "/tmp/project",
+		Completions: fakeCompletionProvider{items: []Completion{
+			{Value: "/skill review", Label: "/skill review", Description: "Review code changes"},
+			{Value: "/skill tests", Label: "/skill tests", Description: "Generate tests"},
+		}},
+	}, fakeStreamingSubmitter{})
+	m.resize(96, 20)
+	m.input.SetValue("/skill re")
+
+	// When
+	m.refreshCompletions()
+	panel := m.inputPanelView()
+
+	// Then
+	for _, want := range []string{"/skill review", "Review code changes"} {
+		if !strings.Contains(panel, want) {
+			t.Fatalf("expected skill completion panel to contain %q, got:\n%s", want, panel)
+		}
+	}
+	if strings.Contains(panel, "/skill tests") {
+		t.Fatalf("completion panel should filter by typed skill prefix, got:\n%s", panel)
+	}
+}
+
+func TestProgramShowsAllSkillCompletions_whenSkillCommandHasTrailingSpace(t *testing.T) {
+	// Given
+	m := newModel(context.Background(), Config{
+		Workspace: "/tmp/project",
+		Completions: fakeCompletionProvider{items: []Completion{
+			{Value: "/skill review", Label: "/skill review", Description: "Review code changes"},
+			{Value: "/skill tests", Label: "/skill tests", Description: "Generate tests"},
+		}},
+	}, fakeStreamingSubmitter{})
+	m.resize(96, 20)
+	m.input.SetValue("/skill ")
+
+	// When
+	m.refreshCompletions()
+	panel := m.inputPanelView()
+
+	// Then
+	for _, want := range []string{"/skill review", "/skill tests"} {
+		if !strings.Contains(panel, want) {
+			t.Fatalf("expected trailing-space skill completion panel to contain %q, got:\n%s", want, panel)
+		}
+	}
+}
+
+func TestProgramTabAppliesSkillCompletion_whenSingleSkillMatches(t *testing.T) {
+	// Given
+	m := newModel(context.Background(), Config{
+		Workspace: "/tmp/project",
+		Completions: fakeCompletionProvider{items: []Completion{
+			{Value: "/skill review", Label: "/skill review", Description: "Review code changes"},
+		}},
+	}, fakeStreamingSubmitter{})
+	m.resize(96, 20)
+	m.input.SetValue("/skill re")
+	m.refreshCompletions()
+
+	// When
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	got := updated.(*model).input.Value()
+
+	// Then
+	if got != "/skill review" {
+		t.Fatalf("expected tab to complete skill command, got %q", got)
 	}
 }
 
@@ -244,5 +386,14 @@ func TestProgramAllowsControlCommand_whenTaskIsRunning(t *testing.T) {
 	}
 	if len(model.pending) != 0 {
 		t.Fatalf("control command should not be queued: %#v", model.pending)
+	}
+}
+
+func assertVisibleLinesWithinWidth(t *testing.T, content string, width int) {
+	t.Helper()
+	for _, line := range strings.Split(content, "\n") {
+		if got := lipgloss.Width(line); got > width {
+			t.Fatalf("expected line width <= %d, got %d for %q\n%s", width, got, line, content)
+		}
 	}
 }
