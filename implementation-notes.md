@@ -470,3 +470,10 @@
 - TUI 内置少量静态 slash command 候选（如 `/help`、`/diff`、`/apply`、`/skills`、`/skill <name>`），动态 skill 候选只在 `/skill ` 前缀下触发。这样普通自然语言输入不会做任何文件扫描，`/skill re` 也会在 runtime 层先按前缀过滤，减少 UI 层处理量。
 - 全屏 TUI 使用 Tab 应用当前第一个候选，并在输入框下方显示一行候选摘要。这个实现先覆盖最小可用交互，不引入复杂命令面板或多选状态；后续若要更像 Claude Code 的 command palette，可在同一个 `CompletionProvider` 合同上扩展上下键选择、分组和说明面板。
 - 需要注意尾随空格：`/skill ` 必须保留空格语义，才能展示全部 skill；因此补全路径只 trim 换行，不 trim 普通空格。后续维护时不要把这段改回 `strings.TrimSpace`。
+
+## 2026-07-01 Slash Palette UX Upgrade
+
+- 用户实际试用后反馈“没有补全”，说明上一版把候选压在 footer 单行里太弱，且只在 `/skill ` 后显示 skill，不符合用户对 `/` 命令面板的预期。参考 Claude Code 的 PromptInput 分层后，本轮把候选改成输入框上方的独立 palette，而不是继续混在 status line。
+- `/` 现在会同时展示静态 Commands 和动态 Skills；skill 行显示 `name  /skill name  description`，让用户既能按名字发现 skill，也能看到最终会执行的命令。`/re` 会按 skill 名称匹配到 `/skill review`，解决“按 slash 但不知道要先输入 skill”的发现问题。
+- Runtime 的补全接口保留尾随空格语义：`/skill ` 展示所有 skill，`/skill re` 和 `/re` 都会按 skill name 做前缀过滤。TUI 仍只通过 `CompletionProvider` 取数据，不直接扫描 store，避免破坏 runtime/store 与 UI 的边界。
+- 目前 palette 支持 Tab 接受首个候选、Esc 关闭、Enter 执行输入内容；还没有上下键选择高亮。后续要继续向 Claude Code 靠拢时，应在当前 `Completion` 模型上增加 selected index 和分组导航，而不是另起一套命令系统。

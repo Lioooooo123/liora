@@ -253,10 +253,17 @@ func (r *Runtime) HandleCommand(ctx context.Context, line string) (string, bool,
 
 func (r *Runtime) Completions(_ context.Context, line string) ([]tui.Completion, error) {
 	line = strings.TrimRight(line, "\r\n")
-	if !strings.HasPrefix(line, "/skill ") {
+	if !strings.HasPrefix(line, "/") {
 		return nil, nil
 	}
-	partial := strings.TrimSpace(strings.TrimPrefix(line, "/skill "))
+	if strings.Contains(strings.TrimPrefix(line, "/"), " ") && !strings.HasPrefix(line, "/skill ") {
+		return nil, nil
+	}
+	raw := strings.TrimPrefix(line, "/")
+	partial := strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "skill ") {
+		partial = strings.TrimSpace(strings.TrimPrefix(raw, "skill "))
+	}
 	if strings.Contains(partial, " ") {
 		return nil, nil
 	}
@@ -275,8 +282,9 @@ func (r *Runtime) Completions(_ context.Context, line string) ([]tui.Completion,
 		}
 		completions = append(completions, tui.Completion{
 			Value:       "/skill " + skill.Name,
-			Label:       "/skill " + skill.Name,
+			Label:       skill.Name,
 			Description: description,
+			Kind:        "skill",
 		})
 	}
 	return completions, nil

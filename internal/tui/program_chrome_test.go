@@ -253,6 +253,53 @@ func TestProgramShowsSkillCompletions_whenTypingSkillSlashCommand(t *testing.T) 
 	}
 }
 
+func TestProgramSlashPaletteShowsSkillCompletions_whenTypingSlash(t *testing.T) {
+	// Given
+	m := newModel(context.Background(), Config{
+		Workspace: "/tmp/project",
+		Completions: fakeCompletionProvider{items: []Completion{
+			{Value: "/skill review", Label: "review", Description: "Review code changes"},
+			{Value: "/skill tests", Label: "tests", Description: "Generate tests"},
+		}},
+	}, fakeStreamingSubmitter{})
+	m.resize(96, 20)
+	m.input.SetValue("/")
+
+	// When
+	m.refreshCompletions()
+	panel := m.inputPanelView()
+
+	// Then
+	for _, want := range []string{"Commands", "Skills", "/help", "review", "Review code changes"} {
+		if !strings.Contains(panel, want) {
+			t.Fatalf("expected slash palette to contain %q, got:\n%s", want, panel)
+		}
+	}
+}
+
+func TestProgramTabAppliesSkillCompletion_whenSlashPrefixMatchesSkillName(t *testing.T) {
+	// Given
+	m := newModel(context.Background(), Config{
+		Workspace: "/tmp/project",
+		Completions: fakeCompletionProvider{items: []Completion{
+			{Value: "/skill review", Label: "review", Description: "Review code changes"},
+			{Value: "/skill tests", Label: "tests", Description: "Generate tests"},
+		}},
+	}, fakeStreamingSubmitter{})
+	m.resize(96, 20)
+	m.input.SetValue("/re")
+	m.refreshCompletions()
+
+	// When
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	got := updated.(*model).input.Value()
+
+	// Then
+	if got != "/skill review" {
+		t.Fatalf("expected /re tab to complete to /skill review, got %q", got)
+	}
+}
+
 func TestProgramShowsAllSkillCompletions_whenSkillCommandHasTrailingSpace(t *testing.T) {
 	// Given
 	m := newModel(context.Background(), Config{

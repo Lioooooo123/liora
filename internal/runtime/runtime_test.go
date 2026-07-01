@@ -290,6 +290,14 @@ func TestRuntimeCompletesSkillNames_whenTypingSkillSlashCommand(t *testing.T) {
 	if !containsCompletionValue(filtered, "/skill review") || containsCompletionValue(filtered, "/skill tests") {
 		t.Fatalf("expected filtered completions to include review only, got %#v", filtered)
 	}
+
+	slashFiltered, err := runtime.Completions(t.Context(), "/re")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsCompletionValue(slashFiltered, "/skill review") || containsCompletionValue(slashFiltered, "/skill tests") {
+		t.Fatalf("expected slash-prefix completions to include review only, got %#v", slashFiltered)
+	}
 }
 
 func containsCompletionValue(completions []tui.Completion, value string) bool {

@@ -5,12 +5,13 @@ import (
 	"strings"
 )
 
-const maxCompletionItems = 8
+const maxCompletionItems = 12
 
 type Completion struct {
 	Value       string
 	Label       string
 	Description string
+	Kind        string
 }
 
 type CompletionProvider interface {
@@ -31,14 +32,14 @@ func (builtinCompletionProvider) Completions(_ context.Context, line string) ([]
 		return nil, nil
 	}
 	return []Completion{
-		{Value: "/help", Label: "/help", Description: "show commands"},
-		{Value: "/diff", Label: "/diff", Description: "review current patch"},
-		{Value: "/apply", Label: "/apply", Description: "apply current patch"},
-		{Value: "/skills", Label: "/skills", Description: "list installed skills"},
-		{Value: "/skill ", Label: "/skill <name>", Description: "read an installed skill"},
-		{Value: "/mcp", Label: "/mcp", Description: "list MCP tools"},
-		{Value: "/memory", Label: "/memory", Description: "manage memory"},
-		{Value: "/exit", Label: "/exit", Description: "quit"},
+		{Value: "/help", Label: "/help", Description: "show commands", Kind: "command"},
+		{Value: "/diff", Label: "/diff", Description: "review current patch", Kind: "command"},
+		{Value: "/apply", Label: "/apply", Description: "apply current patch", Kind: "command"},
+		{Value: "/skills", Label: "/skills", Description: "list installed skills", Kind: "command"},
+		{Value: "/skill ", Label: "/skill <name>", Description: "read an installed skill", Kind: "command"},
+		{Value: "/mcp", Label: "/mcp", Description: "list MCP tools", Kind: "command"},
+		{Value: "/memory", Label: "/memory", Description: "manage memory", Kind: "command"},
+		{Value: "/exit", Label: "/exit", Description: "quit", Kind: "command"},
 	}, nil
 }
 
@@ -63,7 +64,7 @@ func mergeCompletions(line string, groups ...[]Completion) []Completion {
 	for _, group := range groups {
 		for _, item := range group {
 			value := strings.TrimRight(item.Value, "\r\n")
-			if strings.TrimSpace(value) == "" || !strings.HasPrefix(value, line) {
+			if strings.TrimSpace(value) == "" || !completionMatches(line, item, value) {
 				continue
 			}
 			if _, ok := seen[value]; ok {
@@ -81,4 +82,37 @@ func mergeCompletions(line string, groups ...[]Completion) []Completion {
 		}
 	}
 	return merged
+}
+
+func completionMatches(line string, item Completion, value string) bool {
+	if strings.HasPrefix(value, line) {
+		return true
+	}
+	if !strings.HasPrefix(line, "/") {
+		return false
+	}
+	query := strings.TrimPrefix(line, "/")
+	if strings.HasPrefix(query, "skill ") {
+		query = strings.TrimSpace(strings.TrimPrefix(query, "skill "))
+	}
+	if query == "" {
+		return strings.HasPrefix(value, "/")
+	}
+	for _, candidate := range completionSearchTerms(item, value) {
+		if strings.HasPrefix(candidate, query) {
+			return true
+		}
+	}
+	return false
+}
+
+func completionSearchTerms(item Completion, value string) []string {
+	terms := []string{
+		strings.TrimPrefix(strings.TrimSpace(completionLabel(item)), "/"),
+		strings.TrimPrefix(strings.TrimSpace(value), "/"),
+	}
+	if skillName, ok := strings.CutPrefix(strings.TrimSpace(value), "/skill "); ok {
+		terms = append(terms, strings.TrimSpace(skillName))
+	}
+	return terms
 }

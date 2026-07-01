@@ -48,6 +48,8 @@ type model struct {
 	spin   spinner.Model
 	body   strings.Builder
 	blocks []transcriptBlock
+	width  int
+	height int
 
 	running     bool
 	ready       bool
@@ -123,6 +125,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.applyCompletion() {
 				return m, nil
 			}
+		case "esc":
+			m.clearCompletions()
+			return m, nil
 		}
 	case streamUpdateMsg:
 		m.noteStreamUpdate(msg.update)
@@ -158,6 +163,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, cmd)
 	if _, ok := msg.(tea.KeyPressMsg); ok {
 		m.refreshCompletions()
+		if m.ready {
+			m.resize(m.width, m.height)
+		}
 	}
 	m.vp, cmd = m.vp.Update(msg)
 	cmds = append(cmds, cmd)
@@ -179,6 +187,9 @@ func (m *model) View() tea.View {
 	if cursor := m.input.Cursor(); cursor != nil {
 		cursor.Position.X += 2
 		cursor.Position.Y += lipgloss.Height(viewport) + 1
+		if palette := m.completionPaletteView(m.viewportWidth()); palette != "" {
+			cursor.Position.Y += lipgloss.Height(palette)
+		}
 		if strings.TrimSpace(header) != "" {
 			cursor.Position.Y += lipgloss.Height(header)
 		}
@@ -203,10 +214,11 @@ func (m *model) inputPanelView() string {
 			status = prefix + m.statusLineForWidth(statusWidth)
 		}
 	}
-	lines := []string{m.inputBoxView()}
-	if hint := m.completionHint(width); hint != "" {
-		lines = append(lines, hint)
+	lines := make([]string, 0, 4)
+	if palette := m.completionPaletteView(width); palette != "" {
+		lines = append(lines, palette)
 	}
+	lines = append(lines, m.inputBoxView())
 	lines = append(lines, status)
 	for range inputBottomGapLines {
 		lines = append(lines, " ")
@@ -248,8 +260,78 @@ func (m *model) applyCompletion() bool {
 	}
 	m.input.SetValue(m.completions[0].Value)
 	m.input.CursorEnd()
-	m.refreshCompletions()
+	m.clearCompletions()
 	return true
+}
+
+func (m *model) completionPaletteView(width int) string {
+	if len(m.completions) == 0 || width < 24 {
+		return ""
+	}
+	innerWidth := width - 2
+	if innerWidth < 1 {
+		innerWidth = 1
+	}
+	lines := []string{
+		chromeInputBorderStyle.Render("╭" + strings.Repeat("─", innerWidth) + "╮"),
+		paletteLine("Commands", innerWidth),
+	}
+	commandRows := completionRows(m.completions, "command", innerWidth)
+	if len(commandRows) == 0 {
+		commandRows = []string{paletteLine("  /help  show commands", innerWidth)}
+	}
+	lines = append(lines, commandRows...)
+	skillRows := completionRows(m.completions, "skill", innerWidth)
+	if len(skillRows) > 0 {
+		lines = append(lines, paletteLine("Skills", innerWidth))
+		lines = append(lines, skillRows...)
+	}
+	lines = append(lines,
+		paletteLine("Tab accept  Enter run  Esc close", innerWidth),
+		chromeInputBorderStyle.Render("╰"+strings.Repeat("─", innerWidth)+"╯"),
+	)
+	return strings.Join(lines, "\n")
+}
+
+func completionRows(items []Completion, kind string, width int) []string {
+	var rows []string
+	for _, item := range items {
+		if completionKind(item) != kind {
+			continue
+		}
+		label := completionLabel(item)
+		if kind == "skill" {
+			label = strings.TrimPrefix(label, "/skill ")
+		}
+		text := "  " + commandStyle.Render(label)
+		if kind == "skill" && strings.TrimSpace(item.Value) != "" && strings.TrimSpace(item.Value) != label {
+			text += mutedStyle.Render("  " + strings.TrimSpace(item.Value))
+		}
+		if description := completionDescription(item); description != "" {
+			text += mutedStyle.Render("  " + description)
+		}
+		rows = append(rows, paletteLine(text, width))
+	}
+	return rows
+}
+
+func completionKind(item Completion) string {
+	if strings.TrimSpace(item.Kind) != "" {
+		return strings.TrimSpace(item.Kind)
+	}
+	if strings.HasPrefix(strings.TrimSpace(item.Value), "/skill ") {
+		return "skill"
+	}
+	return "command"
+}
+
+func paletteLine(content string, innerWidth int) string {
+	content = truncateCells(content, innerWidth)
+	padding := innerWidth - lipgloss.Width(content)
+	if padding < 0 {
+		padding = 0
+	}
+	return chromeInputBorderStyle.Render("│") + content + strings.Repeat(" ", padding) + chromeInputBorderStyle.Render("│")
 }
 
 func (m *model) completionHint(width int) string {
@@ -293,6 +375,8 @@ func (m *model) viewportWidth() int {
 }
 
 func (m *model) resize(width, height int) {
+	m.width = width
+	m.height = height
 	m.vp.SetWidth(width)
 	viewportHeight := height - lipgloss.Height(m.headerView()) - lipgloss.Height(m.footer())
 	if viewportHeight < 1 {
