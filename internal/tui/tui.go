@@ -105,11 +105,11 @@ func RenderWelcome(config Config) string {
 	if model == "" {
 		model = "scripted"
 	}
-	lines := []string{
-		mutedStyle.Render("local agent workbench"),
+	lines := append(brandWelcomeLines(),
+		"",
 		keyValue("workspace", config.Workspace),
 		keyValue("model", model),
-	}
+	)
 	if strings.TrimSpace(config.Core) != "" {
 		lines = append(lines, keyValue("core", config.Core))
 	}
@@ -311,12 +311,12 @@ func (a *App) handleStreamingLine(ctx context.Context, line string, output io.Wr
 		renderSection(output, "System", "Task is still running. Use /cancel, /approve, /deny, or wait for it to finish.")
 		return false
 	}
+	renderSection(output, "You", line)
 	a.startStreamingTurn(ctx, line, output, streamer, running, turnDone, streamEvents)
 	return false
 }
 
 func (a *App) startStreamingTurn(ctx context.Context, input string, output io.Writer, streamer StreamingSubmitter, running *bool, turnDone *<-chan turnOutcome, streamEvents *<-chan StreamUpdate) {
-	renderLogLine(output, "task", "started")
 	done := make(chan turnOutcome, 1)
 	updates := make(chan StreamUpdate, 32)
 	*running = true
@@ -336,7 +336,6 @@ func isRunningCommand(line string) bool {
 }
 
 func (a *App) runTurn(ctx context.Context, input string, output io.Writer) error {
-	renderLogLine(output, "task", "started")
 	if streamer, ok := a.submitter.(StreamingSubmitter); ok {
 		_, err := streamer.SubmitStream(ctx, input, func(update StreamUpdate) {
 			RenderStreamUpdate(output, update)
@@ -346,7 +345,7 @@ func (a *App) runTurn(ctx context.Context, input string, output io.Writer) error
 	result, err := a.submitter.Submit(ctx, input)
 	RenderTurn(output, TurnView{
 		Input:      input,
-		ShowUser:   false,
+		ShowUser:   true,
 		TurnResult: result,
 	})
 	return err
@@ -355,33 +354,15 @@ func (a *App) runTurn(ctx context.Context, input string, output io.Writer) error
 func RenderStreamUpdate(output io.Writer, update StreamUpdate) {
 	payload := decodeEventPayload(update.PayloadJSON)
 	switch update.Type {
-	case "task.planning", "sandbox.run", "sandbox.workspace":
-		if strings.TrimSpace(payload.Message) != "" {
-			renderLogLine(output, "status", payload.Message)
-		}
-	case "task.plan_ready":
-		if strings.TrimSpace(payload.Steps) != "" {
-			renderSection(output, "Plan", formatPlan(payload.Steps))
-		}
-	case "task.replanning":
-		message := payload.Message
-		if strings.TrimSpace(message) == "" {
-			message = "Replanning after failure"
-		}
-		if strings.TrimSpace(payload.Reason) != "" {
-			message += ": " + firstNonEmptyLine(payload.Reason)
-		}
-		renderLogLine(output, "status", message)
-	case "tool.call":
-		line := strings.TrimSpace(payload.Tool + " " + payload.Input)
-		if line != "" {
-			renderLogLine(output, "tool", line)
-		}
+	case "task.planning", "sandbox.run", "sandbox.workspace", "task.plan_ready", "task.replanning", "tool.call":
+		return
 	case "tool.result":
-		renderSection(output, "Tools", formatToolEvent(payload))
+		if payload.Status != "" && payload.Status != string(trace.StatusOK) {
+			renderSection(output, "Error", formatToolEvent(payload))
+		}
 	case "task.summary":
 		if strings.TrimSpace(payload.Message) != "" {
-			renderSection(output, "Summary", payload.Message)
+			renderSection(output, "Assistant", payload.Message)
 		}
 	case "task.diff":
 		if strings.TrimSpace(payload.Diff) != "" {
@@ -404,14 +385,13 @@ func RenderStreamUpdate(output io.Writer, update StreamUpdate) {
 	case "permission.denied":
 		renderSection(output, "Approval", "denied")
 	case "task.completed", "task.cancelled":
-		status := update.Type
-		if payload.Status != "" {
-			status = payload.Status
+		if update.Type == "task.cancelled" {
+			status := valueOr(payload.Status, "cancelled")
+			if payload.Message != "" {
+				status += ": " + payload.Message
+			}
+			renderSection(output, "System", status)
 		}
-		if payload.Message != "" {
-			status += ": " + payload.Message
-		}
-		renderLogLine(output, "status", status)
 	case "task.error":
 		renderSection(output, "Error", strings.TrimSpace(payload.Message+"\n"+payload.Output))
 	}
@@ -425,26 +405,8 @@ func RenderTurn(output io.Writer, view TurnView) {
 	if strings.TrimSpace(result.Answer) != "" {
 		renderSection(output, "Assistant", result.Answer)
 	}
-	if strings.TrimSpace(result.PlannedSteps) != "" {
-		renderSection(output, "Plan", formatPlan(result.PlannedSteps))
-	}
-	if len(result.Events) > 0 {
-		var blocks []string
-		for _, event := range result.Events {
-			var lines []string
-			lines = append(lines, renderStatus(string(event.Status))+" "+metadataStyle.Render(strings.TrimSpace(event.Tool+" "+event.Input)))
-			out := strings.TrimSpace(event.Output)
-			if out != "" {
-				for _, line := range formatToolOutput(out, 12) {
-					lines = append(lines, "  "+line)
-				}
-			}
-			blocks = append(blocks, strings.Join(lines, "\n"))
-		}
-		renderSection(output, "Tools", strings.Join(blocks, "\n\n"))
-	}
-	if strings.TrimSpace(result.AgentResult.Summary) != "" {
-		renderSection(output, "Summary", result.AgentResult.Summary)
+	if strings.TrimSpace(result.AgentResult.Summary) != "" && strings.TrimSpace(result.Answer) == "" {
+		renderSection(output, "Assistant", result.AgentResult.Summary)
 	}
 	if strings.TrimSpace(result.AgentResult.Diff) != "" {
 		renderSection(output, "Assistant", PatchReadyReply(result.AgentResult.Diff))

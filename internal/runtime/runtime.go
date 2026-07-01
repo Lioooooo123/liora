@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Lioooooo123/liora/internal/agent"
@@ -150,6 +151,7 @@ func (r *Runtime) runToolLoop(ctx context.Context, input string, caller llm.Tool
 	if r.checker != nil {
 		runner.SetPermissionChecker(r.checker)
 	}
+	runner.SetSkillReader(r.store)
 	if manager, err := r.mcpManager(); err == nil && manager != nil {
 		runner.SetMCP(manager)
 	}
@@ -179,6 +181,7 @@ func (r *Runtime) runPlannedSteps(ctx context.Context, steps string, recorder tr
 	if r.checker != nil {
 		runner.SetPermissionChecker(r.checker)
 	}
+	runner.SetSkillReader(r.store)
 	if manager, err := r.mcpManager(); err == nil {
 		runner.SetMCP(manager)
 	}
@@ -322,26 +325,33 @@ func (r *Runtime) handleSkills() (string, bool, error) {
 func (r *Runtime) handleSkill(name string) (string, bool, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return "Usage: /skill <name>", true, nil
+		return "Usage: /skill <name> [start line] [line count]", true, nil
 	}
-	skills, err := r.store.ScanSkills(r.workspace.Root())
+	fields := strings.Fields(name)
+	startLine := 1
+	lineCount := 1000
+	if len(fields) > 1 {
+		parsed, err := parsePositiveInt(fields[1], "start line")
+		if err != nil {
+			return "", true, err
+		}
+		startLine = parsed
+	}
+	if len(fields) > 2 {
+		parsed, err := parsePositiveInt(fields[2], "line count")
+		if err != nil {
+			return "", true, err
+		}
+		lineCount = parsed
+	}
+	if len(fields) > 3 {
+		return "Usage: /skill <name> [start line] [line count]", true, nil
+	}
+	body, err := r.store.ReadSkill(r.workspace.Root(), fields[0], startLine, lineCount)
 	if err != nil {
 		return "", true, err
 	}
-	for _, skill := range skills {
-		if skill.Name == name {
-			var builder strings.Builder
-			builder.WriteString(skill.Title)
-			if skill.Description != "" {
-				builder.WriteString("\n")
-				builder.WriteString(skill.Description)
-			}
-			builder.WriteString("\n\n")
-			builder.WriteString(strings.TrimSpace(skill.Body))
-			return builder.String(), true, nil
-		}
-	}
-	return fmt.Sprintf("Skill %q not found.", name), true, nil
+	return strings.TrimRight(body, "\n"), true, nil
 }
 
 func (r *Runtime) handleMCP(ctx context.Context) (string, bool, error) {
@@ -408,10 +418,6 @@ func (r *Runtime) workspaceSummary() string {
 				builder.WriteString(" - ")
 				builder.WriteString(skill.Description)
 			}
-			if body := summarizeSkillBody(skill.Body, 600); body != "" {
-				builder.WriteString("\n  ")
-				builder.WriteString(body)
-			}
 		}
 	}
 	if config, err := r.store.LoadMCPConfig(); err == nil && len(config.Servers) > 0 {
@@ -426,16 +432,12 @@ func (r *Runtime) workspaceSummary() string {
 	return builder.String()
 }
 
-func summarizeSkillBody(body string, max int) string {
-	body = strings.TrimSpace(body)
-	if body == "" {
-		return ""
+func parsePositiveInt(value string, name string) (int, error) {
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", name)
 	}
-	body = strings.Join(strings.Fields(body), " ")
-	if len(body) > max {
-		return body[:max] + "..."
-	}
-	return body
+	return parsed, nil
 }
 
 func formatMemories(memories []store.Memory) string {

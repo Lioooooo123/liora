@@ -378,3 +378,69 @@
 - 新增 `docs/tech-stack-selection.md`，把 Liora 的技术路线固定为 Go core + TypeScript UI monorepo。Go 继续负责 daemon、task、sandbox、SQLite、LLM provider、MCP 和 patch/apply；复杂 TUI 不继续在 Go line-based UI 上堆功能。
 - 下一代 `apps/tui` 选择 TypeScript + React + Ink，原因是复杂终端应用需要更自然的组件模型、状态管理、底部输入栏、tool stream、diff viewport 和 approval modal；Bubble Tea 作为 Go-only 备选保留，但不作为主路线。
 - 桌面端暂不启动，等 daemon/protocol/TUI 稳定后再在 Tauri 2 和 SwiftUI 之间选择。当前优先级是 protocol 包和 Ink TUI，而不是提前做 Mac App。
+
+## 2026-06-30 TUI 中文输入法与静默工具输出
+
+- 参考本地 `/Users/bytedance/claude-code-main/src/remote/sdkMessageAdapter.ts` 的 REPL 取舍：成功 result 被视为噪音，`tool_use_summary` 不进入主显示流。本轮把 Liora 默认 TUI 主 transcript 收敛为面向用户的 `Assistant`、`Diff`、`Approval`、`Error` 和取消提示；`task.plan_ready`、`tool.call`、成功 `tool.result`、planning/sandbox/status/completed 这类内部执行细节不再直接刷屏。
+- 没有删除底层 task event、timeline 和 tail 能力。工具调用和输出仍保存在 daemon event store 中，用户需要排查时继续通过 `/tail`、`/timeline`、`/history` 等命令查看；这比彻底丢弃事件更安全，也与后续桌面端/全屏 TUI 的调试需求兼容。
+- 全屏 Bubble Tea TUI 的输入层从 v1 组件切到 `charm.land/bubbletea/v2` / `charm.land/bubbles/v2`，并对 `textinput` 调用 `SetVirtualCursor(false)`，通过 `tea.View.Cursor` 返回真实终端光标。这样 macOS/终端中文输入法候选窗可以锚定真实输入位置，而不是跟随虚拟光标错位。
+- 为了避免把项目工具链抬到 Go 1.25，本轮锁定 `bubbletea/v2 v2.0.0`、`bubbles/v2 v2.0.0`、`lipgloss/v2 v2.0.0`，并保留 `go 1.24.2` / `toolchain go1.24.13`。曾短暂验证过最新版 `bubbles/v2.1.0`，但它要求 Go 1.25，已回退。
+- 当前自动化可以验证真实 cursor API 已接入、主输出不再含工具成功输出、smoke 中 `/tail` 仍能看见 `tool.result`。但 OS 级中文输入法候选窗位置无法通过普通单元测试完全断言，后续人工 QA 应在 macOS 终端中输入拼音并确认候选窗贴近底部输入栏。
+
+## 2026-06-30 TUI 品牌字标与输入区上移
+
+- 用户要求把“对话框”往上移，并参考本地 Kimi Code。阅读 `/Users/bytedance/dev/kimi code/kimi-code/apps/kimi-code/src/tui/components/chrome/welcome.ts`、`footer.ts`、`components/editor/custom-editor.ts` 后，本轮只吸收其产品层取舍：welcome/banner 提供品牌锚点，editor 是独立输入区，footer 承担状态上下文；不复制 Kimi 的 pi-tui 架构，避免把当前 Go TUI 改成大重写。
+- 早先新增过 `▟█▙ LIORA` 小字标，让 line-based welcome 和 full-screen header 共用同一组 brand helper；后续首屏层级重做时发现真实终端观感不稳，已在下一节改成 `✦ LIORA`。
+- full-screen 输入区底部保留 2 行空格 breathing room，让输入行从屏幕底边上移。这里不用纯 trailing newline，因为 `lipgloss.Height` 对结尾空行的高度计算不稳定；使用空格行确保 viewport 高度、真实渲染和 cursor Y 坐标一致。
+- 修正真实光标 Y 偏移：之前把块之间的换行额外计入行高，可能让光标比输入行低一到数行。现在按 header、viewport、status 三块实际高度相加，中文 IME 候选窗锚点也更接近输入文本。
+- 全屏提交任务时不再追加 `Task - started` 到 transcript，避免上一轮 line-based 静默工具输出后 full-screen 又漏出内部状态。
+
+## 2026-06-30 TUI 首屏层级重做
+
+- 用户贴图对比后指出 Kimi 的首屏明显更清楚，而 Liora 当前像 debug header、空 transcript 和裸 prompt 拼在一起。本轮把 full-screen TUI 的空态单独拆出来：没有 transcript 时隐藏顶部 workspace/model 工具栏，优先展示带边框的 welcome card，里面只放品牌、Directory、Model、Core、Safety 和少量高频命令。
+- 上一版 `▟█▙ LIORA` 在真实终端里会像绿色色块夹住文字，品牌识别反而变差。因此内联字标改成稳定的 `✦ LIORA`；welcome card 内部保留一个独立色块 logo，但不再把色块和文字挤在同一行 pill 里。
+- 输入区从裸 `liora >` 改成独立边框 editor box，底部 status line 继续承载状态、events、pending 和 next action。这更接近 Kimi/Claude Code 的“工作区、对话、输入、状态”分层，也让用户视线自然落到输入框，而不是被顶部元信息抢走。
+- 真实光标仍然来自 Bubble Tea v2 `tea.View.Cursor`，本轮只把 X/Y 偏移改到边框内部；中文输入法候选窗应该继续锚定输入文本。自动化只能覆盖 cursor 坐标与渲染结构，OS 级候选窗位置仍需要人工在 macOS 终端确认。
+
+## 2026-06-30 TUI 对话态 Header 收窄
+
+- 用户开始提问后发现界面又回到旧观感：原因是空态走新的 welcome card，但 transcript 一出现就重新渲染旧的 workspace/model/core/safety 三行 header 和命令行。这个 header 信息密度太高，会把对话态重新拉回 debug 面板。
+- 本轮把对话态 header 收窄成两行：`✦ LIORA` + 当前状态 pill，再加一条分隔线。workspace/model/core/safety 只保留在首屏 welcome card，命令入口保留在底部 next action 与 `/help` 中，避免顶部长期挤占注意力。
+- 这个取舍牺牲了对话态顶部的常驻环境信息，但换来更稳定的阅读区。后续如果要恢复环境可见性，应优先做成可展开 status/context panel，而不是把多行 meta 和整排命令塞回 transcript 顶部。
+
+## 2026-06-30 TUI 用户消息显示
+
+- 用户指出“用户输入也要体现”，并要求继续参考 Claude Code 的用法。阅读 `/Users/bytedance/claude-code-main/src/remote/sdkMessageAdapter.ts` 后确认 Claude Code 的实时 REPL 会在本地添加用户输入，后端 user echo 默认忽略；历史事件回放才把 user text 转成显示消息。
+- 本轮按这个分层修正 Liora：自然语言请求提交时立刻渲染 `You` 区块，后续 daemon/stream 仍只渲染 Assistant/Diff/Approval/Error 等用户关心的事件，成功工具输出、plan、tool call 继续隐藏，避免回到刷内部日志的状态。
+- 斜杠命令仍不渲染成 `You`，因为它们是控制界面状态的操作，不是进入模型上下文的用户消息。排队中的自然语言请求在真正开始执行时才进入 transcript，避免同一条输入先显示 Queue 再重复显示 You。
+
+## 2026-06-30 TUI 运行反馈与中文光标
+
+- 用户截图中 `hi` 看起来卡死。查本地 `~/.config/liora/liora.db` 后确认任务最终 completed，事件停顿发生在 `sandbox.workspace` 到 `task.summary` 之间，约 20 秒没有主区输出。根因不是死锁，而是成功工具/内部事件被隐藏后，长模型请求期间只有 footer 的 `working events` 提示，感知上像卡住。
+- 本轮不重新暴露内部 plan/tool 输出，而是让 footer 对隐藏事件给出更明确的状态：`task.planning` 显示 `thinking`，sandbox 准备阶段显示 `preparing / waiting for model`，plan ready 后显示 `running tools`。这样仍保持 Claude Code 式的低噪声主 transcript，但用户能知道任务还在动。
+- 如果一轮任务结束时没有任何可见 stream 输出，full-screen TUI 会补一个 `Assistant: Completed.`，避免停在只有 `You` 的空白对话区。正常 `task.summary`、Diff、Approval、Error 仍优先显示，不会被 fallback 覆盖。
+- 中文输入截图里 block cursor 会压住宽字符，尤其在“写一个代码”这种双宽字符之间很像字被吞掉。本轮把 `textinput` 的真实光标形状从默认 block 改为 `tea.CursorBar`，保留 Bubble Tea v2 的真实 cursor 和 `SetVirtualCursor(false)`，降低中文输入法候选窗和可读性的冲突。
+
+## 2026-07-01 TUI 中文输入组件切换
+
+- 用户反馈中文输入法仍然不够好。继续查 Bubble Tea v2 组件后发现 `textinput.Cursor()` 使用单行水平 viewport 的 `Position()` 计算，虽然支持真实 cursor，但在中文宽字符和 IME 组合态下更容易出现光标贴字、候选窗锚点不自然的问题。
+- 本轮把 full-screen 输入层从 `textinput.Model` 切到 `textarea.Model`，但配置为单行：`ShowLineNumbers=false`、`MaxHeight=1`、`SetHeight(1)`，并继续 `SetVirtualCursor(false)` + `tea.CursorBar`。`textarea.Cursor()` 基于 `LineInfo().CharOffset` 计算宽字符位置，更贴近 Bubble Tea v2 文档里针对 CJK/IME 的推荐路径。
+- Enter 仍由外层 TUI 捕获并提交，不交给 textarea 插入换行；因此交互形态保持单行 prompt，不改变 `/help`、`/cancel` 等命令行为。测试新增中文字符串光标宽度断言，防止以后退回 rune-count 定位。
+
+## 2026-07-01 Skill / MCP 工具底座
+
+- 用户要求推进 agent 基础能力，重点是 skill、MCP 工具调用、高可用和性能。本轮不重写 agent loop，而是在既有 daemon/runtime/agent 主链路上补最小能力闭环，避免和当前未提交的 TUI 改动互相干扰。
+- Skill 目录继续沿用全局 `LIORA_HOME/skills/<name>/SKILL.md` 与工作区 `.liora/skills/<name>/SKILL.md` 两级来源；工作区 skill 优先用于当前项目，后续如需团队共享再考虑仓库内模板或 marketplace。
+- Skill 列表改为 metadata-first：扫描阶段只读取文件头部，避免把大型 skill 全文塞进 planner context；完整内容只在用户 `/skill <name>` 或模型调用 `skill` 工具时按需分页读取。这是对 “渐进式读取” 的当前解释。
+- 新增的 `skill` 工具归类为 read-only，和 `read/document/search` 一样不触发外部审批；它只能读取 Liora skill 根目录下的 `SKILL.md`，不接受任意路径，避免变成绕过 workspace 限制的文件读取口。
+- MCP 仍归类为 external 工具并沿用现有审批策略；本轮优化 discovery：多个 MCP server 的 `tools/list` 并发执行，单个 server 失败不应拖垮内建工具或其它 MCP server 的可见性。调用阶段仍保持显式 `mcp <server> <tool> <json>`，长连接池留到后续。
+- 性能成功标准先用单元测试锁定 “扫描 skill 不读取完整 body” 和 “MCP list 并发/部分失败”；真实大仓性能基准后续再引入 benchmark，避免这轮扩大到 profiling 工程。
+- oversized 文件处理：本轮新增的 skill 存储实现已从历史较大的 `internal/store/store.go` 拆到 `internal/store/skills.go`；`internal/runtime/runtime.go` 与 `internal/daemon/server.go` 仍是既有大文件，当前只做必要接线和测试，后续若继续扩展 runtime/daemon 命令应优先拆 command handler / HTTP handler，而不是继续堆在单文件里。
+- reviewer 指出 MCP client 文件因并发 discovery 追加后超过 250 行。本轮将 MCP 拆为 `client.go`（公开 client 调用）、`manager.go`（server fan-out、部分失败与排序）、`session.go`（进程和 JSON-RPC 生命周期），行为不变，但降低后续维护时把 manager、session、wire protocol 混在一起的风险。
+- 同名 skill 的可见语义统一放在 `ScanSkills`：全局 skill 先进入集合，工作区 `.liora/skills/<name>` 后进入并覆盖同名全局 metadata。这样 `/skills`、planner context 和 `ReadSkill` 不会分别实现不同的覆盖规则；工作区项目约束始终优先。
+
+## 2026-07-01 GitHub / npm 安装入口
+
+- 为了接近 Claude Code 的安装体验，本轮在根 `package.json` 暴露 `liora` bin，并新增 `scripts/npm/liora.cjs` 作为 Node shim。shim 不实现 agent 逻辑，只负责转发参数到 Go 构建出的 `bin/liora`，避免出现两套 agent runtime。
+- `postinstall` 选择在安装端执行 `go build -o bin/liora ./apps/cli`，因此 `npm install -g github:Lioooooo123/liora` 需要用户机器有 Go 1.24+。这是当前最小可用方案；后续正式发 npm registry 时，应改成按平台下载 GitHub Release 预编译产物，降低安装端工具链要求。
+- 根包仍保留 `private: true`，防止误发 npm registry；GitHub 安装路径不依赖 npm publish。后续如果要正式发布 `@lioooooo123/liora`，需要先补 registry 权限、跨平台预编译产物和 package provenance。

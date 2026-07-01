@@ -87,6 +87,20 @@ diff
 
 ## 安装
 
+像 Claude Code 一样用 npm 从 GitHub 安装：
+
+```sh
+npm install -g github:Lioooooo123/liora
+```
+
+这个安装方式会在本机用 Go 构建 `liora` 二进制，因此需要先安装 Go 1.24+。安装后可在任意项目目录运行：
+
+```sh
+liora
+```
+
+如果只想使用本地源码安装：
+
 ```sh
 ./scripts/install-local.sh
 ```

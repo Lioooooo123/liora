@@ -73,6 +73,8 @@ func toolInput(call llm.ToolCall) string {
 		return strings.TrimSpace(argString(args, "server") + " " + argString(args, "tool"))
 	case "search":
 		return argString(args, "query")
+	case "skill":
+		return argString(args, "name")
 	case "glob":
 		return strings.TrimSpace(argString(args, "pattern") + " " + argString(args, "path"))
 	case "diff":

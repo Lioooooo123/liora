@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -163,29 +162,6 @@ func (s *Store) SearchMemories(query string, limit int) ([]Memory, error) {
 		return queryMemories(db, "", limit)
 	}
 	return queryMemories(db, query, limit)
-}
-
-func (s *Store) ScanSkills(workspaceRoot string) ([]Skill, error) {
-	var skills []Skill
-	global, err := scanSkillDir(filepath.Join(s.root, "skills"), "global")
-	if err != nil {
-		return nil, err
-	}
-	skills = append(skills, global...)
-	if strings.TrimSpace(workspaceRoot) != "" {
-		local, err := scanSkillDir(filepath.Join(workspaceRoot, ".liora", "skills"), "workspace")
-		if err != nil {
-			return nil, err
-		}
-		skills = append(skills, local...)
-	}
-	sort.Slice(skills, func(i, j int) bool {
-		if skills[i].Name == skills[j].Name {
-			return skills[i].Source < skills[j].Source
-		}
-		return skills[i].Name < skills[j].Name
-	})
-	return skills, nil
 }
 
 func (s *Store) SaveMCPConfig(config MCPConfig) error {
@@ -478,63 +454,4 @@ func parseTime(value string) time.Time {
 		return time.Time{}
 	}
 	return parsed
-}
-
-func scanSkillDir(root string, source string) ([]Skill, error) {
-	entries, err := os.ReadDir(root)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var skills []Skill
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		path := filepath.Join(root, entry.Name(), "SKILL.md")
-		data, err := os.ReadFile(path)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		skill := parseSkill(entry.Name(), path, string(data), source)
-		skills = append(skills, skill)
-	}
-	return skills, nil
-}
-
-func parseSkill(name string, path string, body string, source string) Skill {
-	skill := Skill{Name: name, Title: name, Path: path, Body: body, Source: source}
-	lines := strings.Split(body, "\n")
-	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
-		for _, line := range lines[1:] {
-			line = strings.TrimSpace(line)
-			if line == "---" {
-				break
-			}
-			key, value, ok := strings.Cut(line, ":")
-			if !ok {
-				continue
-			}
-			switch strings.TrimSpace(strings.ToLower(key)) {
-			case "name", "title":
-				skill.Title = strings.TrimSpace(value)
-			case "description":
-				skill.Description = strings.TrimSpace(value)
-			}
-		}
-		return skill
-	}
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "# ") {
-			skill.Title = strings.TrimSpace(strings.TrimPrefix(line, "# "))
-			break
-		}
-	}
-	return skill
 }

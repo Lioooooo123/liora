@@ -247,6 +247,63 @@ func TestServerServesMCPToolsInCapabilities(t *testing.T) {
 	}
 }
 
+func TestServerServesMCPToolsAndErrorWhenOneServerFails(t *testing.T) {
+	storeRoot := t.TempDir()
+	s := store.New(storeRoot)
+	if err := s.SaveMCPConfig(store.MCPConfig{Servers: map[string]store.MCPServerConfig{
+		"bad": {
+			Command: os.Args[0],
+			Args:    []string{"-test.run=TestServerServesMCPToolsAndErrorWhenOneServerFails"},
+			Env:     map[string]string{"LIORA_DAEMON_FAKE_MCP_SERVER": "fail"},
+		},
+		"fake": {
+			Command: os.Args[0],
+			Args:    []string{"-test.run=TestServerServesMCPToolsAndErrorWhenOneServerFails"},
+			Env:     map[string]string{"LIORA_DAEMON_FAKE_MCP_SERVER": "1"},
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := s.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := httptest.NewServer(NewServer(Config{Repository: taskpkg.NewRepository(db), Store: s}))
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/v1/capabilities")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status %d", resp.StatusCode)
+	}
+	var body struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+		MCPTools []struct {
+			Server string `json:"server"`
+			Name   string `json:"name"`
+		} `json:"mcp_tools"`
+		MCPError string `json:"mcp_error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Tools) == 0 {
+		t.Fatalf("expected builtin tools to remain available")
+	}
+	if len(body.MCPTools) != 1 || body.MCPTools[0].Server != "fake" || body.MCPTools[0].Name != "echo" {
+		t.Fatalf("unexpected mcp capabilities %#v", body.MCPTools)
+	}
+	if !strings.Contains(body.MCPError, "bad") {
+		t.Fatalf("expected partial mcp error for bad server, got %q", body.MCPError)
+	}
+}
+
 func TestServerServesSessionTranscript(t *testing.T) {
 	workspace := t.TempDir()
 	db, err := store.New(t.TempDir()).OpenDB()
@@ -1071,6 +1128,9 @@ func runDaemonFakeMCPServer() {
 }
 
 func TestMain(m *testing.M) {
+	if os.Getenv("LIORA_DAEMON_FAKE_MCP_SERVER") == "fail" {
+		os.Exit(7)
+	}
 	if os.Getenv("LIORA_DAEMON_FAKE_MCP_SERVER") == "1" {
 		runDaemonFakeMCPServer()
 		return

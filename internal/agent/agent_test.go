@@ -24,11 +24,26 @@ type fakeShellExecutor struct {
 	command   string
 }
 
+type fakeSkillReader struct {
+	workspaceRoot string
+	name          string
+	startLine     int
+	lineCount     int
+}
+
 func (f *fakeMCPExecutor) Call(_ context.Context, server string, tool string, args map[string]any) (string, error) {
 	f.server = server
 	f.tool = tool
 	f.args = args
 	return "mcp output", nil
+}
+
+func (f *fakeSkillReader) ReadSkill(workspaceRoot string, name string, startLine int, lineCount int) (string, error) {
+	f.workspaceRoot = workspaceRoot
+	f.name = name
+	f.startLine = startLine
+	f.lineCount = lineCount
+	return "2\tuse table-driven tests\n3\tkeep output concise\n", nil
 }
 
 func (f *fakeShellExecutor) Run(_ context.Context, workspace string, command string) (tools.ShellResult, error) {
@@ -345,6 +360,33 @@ func TestAgentExecutesMCPTool(t *testing.T) {
 	events := recorder.Events()
 	if len(events) != 1 || events[0].Tool != "mcp" || !strings.Contains(events[0].Output, "mcp output") {
 		t.Fatalf("unexpected MCP trace events %#v", events)
+	}
+}
+
+func TestAgentExecutesSkillTool(t *testing.T) {
+	root := t.TempDir()
+	workspace, err := tools.NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := trace.NewMemoryRecorder()
+	reader := &fakeSkillReader{}
+	runner := New(workspace, recorder)
+	runner.SetSkillReader(reader)
+
+	result, err := runner.Run(t.Context(), "skill review 2 2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusCompleted {
+		t.Fatalf("expected completed, got %s", result.Status)
+	}
+	if reader.workspaceRoot != root || reader.name != "review" || reader.startLine != 2 || reader.lineCount != 2 {
+		t.Fatalf("unexpected skill call root=%q name=%q start=%d count=%d", reader.workspaceRoot, reader.name, reader.startLine, reader.lineCount)
+	}
+	events := recorder.Events()
+	if len(events) != 1 || events[0].Tool != "skill" || !strings.Contains(events[0].Output, "table-driven tests") {
+		t.Fatalf("unexpected skill trace events %#v", events)
 	}
 }
 

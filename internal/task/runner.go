@@ -12,6 +12,7 @@ import (
 	"github.com/Lioooooo123/liora/internal/permission"
 	"github.com/Lioooooo123/liora/internal/runtime"
 	"github.com/Lioooooo123/liora/internal/sandbox"
+	"github.com/Lioooooo123/liora/internal/store"
 	"github.com/Lioooooo123/liora/internal/tools"
 	"github.com/Lioooooo123/liora/internal/trace"
 )
@@ -19,13 +20,14 @@ import (
 type Runner struct {
 	repo       *Repository
 	planner    *llm.Planner
+	store      *store.Store
 	sandboxRun sandbox.Executor
 	patchMode  bool
 	permission permission.Policy
 }
 
 func NewRunner(repo *Repository, planner *llm.Planner) *Runner {
-	return &Runner{repo: repo, planner: planner, permission: permission.Policy{Mode: permission.ModeAuto}}
+	return &Runner{repo: repo, planner: planner, store: store.New(""), permission: permission.Policy{Mode: permission.ModeAuto}}
 }
 
 func (r *Runner) SetSandbox(executor sandbox.Executor) {
@@ -38,6 +40,12 @@ func (r *Runner) SetPatchMode(enabled bool) {
 
 func (r *Runner) SetPermissionPolicy(policy permission.Policy) {
 	r.permission = policy
+}
+
+func (r *Runner) SetStore(s *store.Store) {
+	if s != nil {
+		r.store = s
+	}
 }
 
 func (r *Runner) Run(ctx context.Context, taskID string) error {
@@ -114,7 +122,7 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 	defer session.Cleanup()
 	_ = r.repo.AppendEvent(ctx, task.ID, EventSandboxWorkspace, EventPayload{Message: "workspace mode: " + string(session.Mode)})
 	if task.Natural {
-		turnRuntime, err := runtime.New(session.Root, r.planner)
+		turnRuntime, err := runtime.New(session.Root, r.planner, r.store)
 		if err != nil {
 			return runtimeResult{}, err
 		}
@@ -154,6 +162,7 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 	recorder := newRepositoryRecorder(ctx, r, task.ID)
 	runner := agent.New(workspace, recorder)
 	runner.SetPermissionChecker(r.permissionChecker(task))
+	runner.SetSkillReader(r.store)
 	if r.sandboxRun != nil {
 		runner.SetShellExecutor(r.sandboxRun)
 	}

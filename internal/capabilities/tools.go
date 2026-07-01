@@ -62,6 +62,12 @@ var builtinTools = []ToolSpec{
 			"start_line": integerProp("起始行号，从 1 开始，默认 1。"),
 			"line_count": integerProp("读取行数，默认 1000。"),
 		}, []string{"path"})},
+	{Name: "skill", Usage: "skill <name> [start line] [line count]", Description: "按需读取已安装 Liora skill 的 SKILL.md 内容。", Kind: ToolReadOnly,
+		InputSchema: objectSchema(props{
+			"name":       stringProp("Skill 名称，对应 skills/<name>/SKILL.md。"),
+			"start_line": integerProp("起始行号，从 1 开始，默认 1。"),
+			"line_count": integerProp("读取行数，默认 1000。"),
+		}, []string{"name"})},
 	{Name: "search", Usage: "search <query>", Description: "优先使用 ripgrep 在 workspace 内搜索文本。", Kind: ToolReadOnly,
 		InputSchema: objectSchema(props{
 			"query": stringProp("要搜索的文本或正则。"),

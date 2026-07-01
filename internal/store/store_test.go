@@ -155,6 +155,142 @@ func TestScanSkillsFromGlobalAndWorkspace(t *testing.T) {
 	}
 }
 
+func TestScanSkillsDoesNotReadFullBodies(t *testing.T) {
+	root := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".liora", "skills", "review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "# Review Skill\n" + strings.Repeat("large body line\n", 10_000) + "MUST_NOT_LOAD_BODY\n"
+	if err := os.WriteFile(filepath.Join(workspace, ".liora", "skills", "review", "SKILL.md"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := New(root).ScanSkills(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("expected one skill, got %#v", skills)
+	}
+	if skills[0].Body != "" {
+		t.Fatalf("ScanSkills should only load metadata, got body length %d", len(skills[0].Body))
+	}
+}
+
+func TestScanSkillsWorkspaceOverridesGlobalMetadata(t *testing.T) {
+	root := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "skills", "review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, ".liora", "skills", "review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "skills", "review", "SKILL.md"), []byte("# Global Review\nUse global rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".liora", "skills", "review", "SKILL.md"), []byte("# Workspace Review\nUse workspace rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := New(root).ScanSkills(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("expected one visible skill after workspace override, got %#v", skills)
+	}
+	if skills[0].Name != "review" || skills[0].Source != "workspace" || skills[0].Title != "Workspace Review" {
+		t.Fatalf("expected workspace metadata to win, got %#v", skills[0])
+	}
+}
+
+func TestReadSkillReturnsPagedBody(t *testing.T) {
+	root := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".liora", "skills", "review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Join([]string{
+		"# Review Skill",
+		"line one",
+		"line two",
+		"line three",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspace, ".liora", "skills", "review", "SKILL.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := New(root).ReadSkill(workspace, "review", 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "Review Skill") || !strings.Contains(out, "2\tline one") || !strings.Contains(out, "3\tline two") {
+		t.Fatalf("unexpected paged skill body:\n%s", out)
+	}
+}
+
+func TestReadSkillPrefersWorkspaceSkill(t *testing.T) {
+	root := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "skills", "review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, ".liora", "skills", "review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "skills", "review", "SKILL.md"), []byte("# Global Review\nUse global rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".liora", "skills", "review", "SKILL.md"), []byte("# Workspace Review\nUse workspace rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := New(root).ReadSkill(workspace, "review", 1, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Workspace Review") || strings.Contains(out, "Global Review") {
+		t.Fatalf("expected workspace skill to win, got:\n%s", out)
+	}
+}
+
+func TestReadSkillRejectsMissingSkill(t *testing.T) {
+	_, err := New(t.TempDir()).ReadSkill(t.TempDir(), "missing", 1, 1)
+	if err == nil || !strings.Contains(err.Error(), `skill "missing" not found`) {
+		t.Fatalf("expected missing skill error, got %v", err)
+	}
+}
+
+func TestReadSkillRejectsEmptyName(t *testing.T) {
+	_, err := New(t.TempDir()).ReadSkill(t.TempDir(), "", 1, 1)
+	if err == nil || !strings.Contains(err.Error(), "skill name is required") {
+		t.Fatalf("expected empty skill name error, got %v", err)
+	}
+}
+
+func TestReadSkillRejectsSymlinkedSkillFile(t *testing.T) {
+	root := t.TempDir()
+	workspace := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("# Escaped\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	skillDir := filepath.Join(workspace, ".liora", "skills", "review")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(skillDir, "SKILL.md")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	_, err := New(root).ReadSkill(workspace, "review", 1, 1)
+	if err == nil || !strings.Contains(err.Error(), "symlink is not allowed") {
+		t.Fatalf("expected symlink rejection, got %v", err)
+	}
+}
+
 func TestMCPConfigRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)

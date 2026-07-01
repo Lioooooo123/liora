@@ -39,7 +39,7 @@ func TestRenderWelcomeShowsWorkspaceAndModel(t *testing.T) {
 		Safety:    "patch-first",
 	})
 
-	for _, want := range []string{"Liora", "local agent workbench", "workspace", "/tmp/project", "model", "deepseek-v4-pro", "core", "embedded daemon", "safety", "patch-first", "/help", "/workbench", "/memory", "/exit"} {
+	for _, want := range []string{"✦", "LIORA", "local agent workbench", "workspace", "/tmp/project", "model", "deepseek-v4-pro", "core", "embedded daemon", "safety", "patch-first", "/help", "/workbench", "/memory", "/exit"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected welcome output to contain %q, got:\n%s", want, output)
 		}
@@ -79,13 +79,15 @@ func TestInteractiveLoopSubmitsPromptAndExits(t *testing.T) {
 		t.Fatalf("unexpected submitted inputs %#v", submitter.inputs)
 	}
 	rendered := out.String()
-	for _, want := range []string{"Task - started", "Plan", "Tools", "Summary", "completed 2 steps", "Bye"} {
+	for _, want := range []string{"You", "看一下 app.txt", "Assistant", "completed 2 steps", "Bye"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected rendered output to contain %q, got:\n%s", want, rendered)
 		}
 	}
-	if strings.Contains(rendered, "You") {
-		t.Fatalf("interactive output should not repeat user input in a You block, got:\n%s", rendered)
+	for _, avoid := range []string{"Plan", "Tools", "Task - started", "hello"} {
+		if strings.Contains(rendered, avoid) {
+			t.Fatalf("interactive output should hide internal %q, got:\n%s", avoid, rendered)
+		}
 	}
 }
 
@@ -136,30 +138,27 @@ func TestInteractiveLoopStreamsTaskEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	rendered := out.String()
-	for _, want := range []string{"Task - started", "Plan", "- list .", "Tools", "README.md", "Summary", "completed 1 step", "Status", "completed"} {
+	for _, want := range []string{"You", "看看目录", "Assistant", "completed 1 step"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected streamed output to contain %q, got:\n%s", want, rendered)
 		}
 	}
-	if strings.Contains(rendered, "You") {
-		t.Fatalf("interactive stream output should not repeat user input, got:\n%s", rendered)
+	for _, avoid := range []string{"Task - started", "Plan", "- list .", "Tools", "README.md", "Status", "tool.result"} {
+		if strings.Contains(rendered, avoid) {
+			t.Fatalf("stream output should hide internal %q, got:\n%s", avoid, rendered)
+		}
 	}
 }
 
-func TestRenderStreamUpdateUsesCompactProgressLines(t *testing.T) {
+func TestRenderStreamUpdateHidesInternalProgress(t *testing.T) {
 	var out strings.Builder
 	RenderStreamUpdate(&out, streamUpdate("task.planning", eventPayload{Message: "Planning task"}))
 	RenderStreamUpdate(&out, streamUpdate("tool.call", eventPayload{Tool: "list", Input: "."}))
 
 	rendered := out.String()
-	for _, want := range []string{"Status - Planning task", "Tool - list ."} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("expected compact progress output to contain %q, got:\n%s", want, rendered)
-		}
-	}
-	for _, avoid := range []string{"│ Status", "│ Tool"} {
+	for _, avoid := range []string{"Status - Planning task", "Tool - list .", "│ Status", "│ Tool"} {
 		if strings.Contains(rendered, avoid) {
-			t.Fatalf("expected progress output not to render boxed %q, got:\n%s", avoid, rendered)
+			t.Fatalf("expected progress output to hide %q, got:\n%s", avoid, rendered)
 		}
 	}
 }
@@ -224,14 +223,19 @@ func TestStreamingLoopHandlesCommandWhileTaskRuns(t *testing.T) {
 		t.Fatal("interactive loop did not exit")
 	}
 	rendered := out.String()
-	for _, want := range []string{"Task - started", "Plan", "Cancelled task", "cancelled from test", "Bye"} {
+	for _, want := range []string{"Cancelled task", "cancelled from test", "Bye"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected streaming command output to contain %q, got:\n%s", want, rendered)
 		}
 	}
+	for _, avoid := range []string{"Task - started", "Plan"} {
+		if strings.Contains(rendered, avoid) {
+			t.Fatalf("streaming command output should hide internal %q, got:\n%s", avoid, rendered)
+		}
+	}
 }
 
-func TestInteractiveLoopRendersMultilineToolOutput(t *testing.T) {
+func TestInteractiveLoopHidesMultilineToolOutput(t *testing.T) {
 	submitter := SubmitterFunc(func(_ context.Context, input string) (TurnResult, error) {
 		return TurnResult{
 			PlannedSteps: "list .",
@@ -254,9 +258,14 @@ func TestInteractiveLoopRendersMultilineToolOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	rendered := out.String()
-	for _, want := range []string{"README.md", "cmd/", "internal/"} {
+	for _, want := range []string{"You", "看看目录", "Assistant", "completed 1 step"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected rendered output to contain %q, got:\n%s", want, rendered)
+		}
+	}
+	for _, avoid := range []string{"README.md", "cmd/", "internal/", "Tools", "Plan"} {
+		if strings.Contains(rendered, avoid) {
+			t.Fatalf("expected rendered output to hide %q, got:\n%s", avoid, rendered)
 		}
 	}
 }
@@ -285,9 +294,14 @@ func TestRenderTurnSeparatesSections(t *testing.T) {
 	})
 
 	rendered := out.String()
-	for _, want := range []string{"You", "Plan", "Tools", "Summary", "README.md", "cmd/", "│"} {
+	for _, want := range []string{"You", "Assistant", "completed 1 step", "│"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected rendered turn to contain %q, got:\n%s", want, rendered)
+		}
+	}
+	for _, avoid := range []string{"Plan", "Tools", "README.md", "cmd/"} {
+		if strings.Contains(rendered, avoid) {
+			t.Fatalf("expected rendered turn to hide internal %q, got:\n%s", avoid, rendered)
 		}
 	}
 }

@@ -101,7 +101,7 @@ func main() {
 		repo := taskpkg.NewRepository(db)
 		server := daemon.NewServer(daemon.Config{
 			Repository: repo,
-			Runner:     newTaskRunner(repo, planner, sandboxExecutor, patchMode),
+			Runner:     newTaskRunner(repo, planner, persistentStore, sandboxExecutor, patchMode),
 			Store:      persistentStore,
 		})
 		fmt.Printf("Liora daemon listening on %s (sandbox=%s patch_mode=%t)\n", *daemonAddr, sandbox.Label(sandboxExecutor), patchMode)
@@ -207,6 +207,7 @@ func main() {
 	recorder := trace.NewMemoryRecorder()
 	runner := agent.New(workspace, recorder)
 	runner.SetShellExecutor(sandboxExecutor)
+	runner.SetSkillReader(persistentStore)
 	manager, err := mcpManagerFromStore(persistentStore)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -259,7 +260,7 @@ func startEmbeddedDaemon(persistentStore *store.Store, planner *llm.Planner, exe
 	repo := taskpkg.NewRepository(db)
 	server := &http.Server{Handler: daemon.NewServer(daemon.Config{
 		Repository: repo,
-		Runner:     newTaskRunner(repo, planner, executor, patchMode),
+		Runner:     newTaskRunner(repo, planner, persistentStore, executor, patchMode),
 		Store:      persistentStore,
 	})}
 	embedded := &embeddedDaemon{
@@ -312,8 +313,9 @@ func toBool(v string) bool {
 	return s == "1" || s == "true" || s == "yes" || s == "on"
 }
 
-func newTaskRunner(repo *taskpkg.Repository, planner *llm.Planner, executor sandbox.Executor, patchMode bool) *taskpkg.Runner {
+func newTaskRunner(repo *taskpkg.Repository, planner *llm.Planner, persistentStore *store.Store, executor sandbox.Executor, patchMode bool) *taskpkg.Runner {
 	runner := taskpkg.NewRunner(repo, planner)
+	runner.SetStore(persistentStore)
 	runner.SetSandbox(executor)
 	runner.SetPatchMode(patchMode)
 	runner.SetPermissionPolicy(permissionPolicy(patchMode))

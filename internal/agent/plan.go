@@ -52,7 +52,7 @@ func parseStepLine(line string) (Step, bool) {
 		if strings.TrimSpace(argsJSON) != "" {
 			step.Args = append(step.Args, strings.TrimSpace(argsJSON))
 		}
-	case "read", "document":
+	case "read", "document", "skill":
 		step.Args = parsePathWithOptionalNumbers(splitStepFields(rest), 2)
 	case "stat", "list", "mkdir", "delete":
 		fields := splitStepFields(rest)

@@ -54,6 +54,15 @@ func (l *ToolLoop) executeToolCall(ctx context.Context, name string, args map[st
 			return "", fmt.Errorf("document expects a path")
 		}
 		return workspace.ReadDocumentRange(path, argInt(args, "start_line", 1), argInt(args, "line_count", 1000))
+	case "skill":
+		if l.agent.skills == nil {
+			return "", fmt.Errorf("no skill reader configured")
+		}
+		name := argString(args, "name")
+		if name == "" {
+			return "", fmt.Errorf("skill expects a name")
+		}
+		return l.agent.skills.ReadSkill(workspace.Root(), name, argInt(args, "start_line", 1), argInt(args, "line_count", 1000))
 	case "search":
 		query := argString(args, "query")
 		if query == "" {

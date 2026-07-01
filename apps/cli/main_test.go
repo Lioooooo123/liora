@@ -415,13 +415,15 @@ func TestCLIInteractiveModeRunsTurns(t *testing.T) {
 		t.Fatalf("command failed: %v\n%s", err, string(output))
 	}
 	rendered := string(output)
-	for _, want := range []string{"Liora", "Plan", "Tools", "Summary", "Diff", "Next", "Bye"} {
+	for _, want := range []string{"Liora", "You", "把 old 改成 new", "Assistant", "Replaced old with new in app.txt.", "Diff", "Next", "Bye"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, rendered)
 		}
 	}
-	if strings.Contains(rendered, "You") {
-		t.Fatalf("interactive output should not duplicate user input, got:\n%s", rendered)
+	for _, avoid := range []string{"Plan", "Tools", "Task - started"} {
+		if strings.Contains(rendered, avoid) {
+			t.Fatalf("interactive output should hide internal %q, got:\n%s", avoid, rendered)
+		}
 	}
 	updated, err := os.ReadFile(filepath.Join(workspace, "app.txt"))
 	if err != nil {
@@ -607,9 +609,14 @@ func TestCLIInteractiveCanStreamThroughDaemon(t *testing.T) {
 		t.Fatalf("command failed: %v\n%s", err, string(output))
 	}
 	rendered := string(output)
-	for _, want := range []string{"Status", "Planning task", "Plan", "- list .", "Tools", "README.md", "notes.txt", "completed"} {
+	for _, want := range []string{"Assistant", "Listed the workspace directory."} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected daemon-backed TUI output to contain %q, got:\n%s", want, rendered)
+		}
+	}
+	for _, avoid := range []string{"Status", "Planning task", "Plan", "- list .", "Tools", "README.md", "notes.txt", "completed"} {
+		if strings.Contains(rendered, avoid) {
+			t.Fatalf("daemon-backed TUI output should hide internal %q, got:\n%s", avoid, rendered)
 		}
 	}
 }
@@ -840,9 +847,14 @@ func TestCLIInteractiveDirectoryListingShowsMultipleEntries(t *testing.T) {
 		t.Fatalf("command failed: %v\n%s", err, string(output))
 	}
 	rendered := string(output)
-	for _, want := range []string{"Plan", "- list .", "README.md", "notes.txt"} {
+	for _, want := range []string{"Assistant", "Listed the workspace directory."} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, rendered)
+		}
+	}
+	for _, avoid := range []string{"Plan", "- list .", "README.md", "notes.txt", "Tools"} {
+		if strings.Contains(rendered, avoid) {
+			t.Fatalf("interactive directory listing should hide internal %q, got:\n%s", avoid, rendered)
 		}
 	}
 }

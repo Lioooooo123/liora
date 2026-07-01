@@ -13,7 +13,7 @@ func TestBuiltinToolsExposePlannerAndHumanViews(t *testing.T) {
 		t.Fatal("unexpected unsupported tool")
 	}
 	planner := PlannerToolList()
-	for _, want := range []string{"read <path>", "document <path>", "run <shell command>", "mcp <server> <tool> <json arguments>"} {
+	for _, want := range []string{"read <path>", "document <path>", "skill <name>", "run <shell command>", "mcp <server> <tool> <json arguments>"} {
 		if !strings.Contains(planner, want) {
 			t.Fatalf("expected planner list to contain %q, got:\n%s", want, planner)
 		}
@@ -53,5 +53,53 @@ func TestToolSchemasAreClosedObjects(t *testing.T) {
 	properties, ok := read.InputSchema["properties"].(map[string]any)
 	if !ok || properties["path"] == nil || properties["start_line"] == nil {
 		t.Fatalf("expected read properties to include path and start_line, got %#v", read.InputSchema["properties"])
+	}
+}
+
+func TestCapabilitySkillToolIsReadOnlyWithSchema(t *testing.T) {
+	var skill ToolSpec
+	for _, spec := range ToolSchemas() {
+		if spec.Name == "skill" {
+			skill = spec
+			break
+		}
+	}
+	if skill.Name == "" {
+		t.Fatal("expected skill tool schema")
+	}
+	if skill.Kind != ToolReadOnly {
+		t.Fatalf("expected skill to be read-only, got %s", skill.Kind)
+	}
+	required, ok := skill.InputSchema["required"].([]string)
+	if !ok || len(required) != 1 || required[0] != "name" {
+		t.Fatalf("expected skill to require name, got %#v", skill.InputSchema["required"])
+	}
+	properties, ok := skill.InputSchema["properties"].(map[string]any)
+	if !ok || properties["name"] == nil || properties["start_line"] == nil || properties["line_count"] == nil {
+		t.Fatalf("expected skill schema properties, got %#v", skill.InputSchema["properties"])
+	}
+}
+
+func TestCapabilityMCPIsSingleExternalTool(t *testing.T) {
+	var mcpTools []ToolSpec
+	for _, spec := range ToolSchemas() {
+		if spec.Name == "mcp" {
+			mcpTools = append(mcpTools, spec)
+		}
+	}
+	if len(mcpTools) != 1 {
+		t.Fatalf("expected one builtin mcp tool, got %#v", mcpTools)
+	}
+	mcp := mcpTools[0]
+	if mcp.Kind != ToolExternal {
+		t.Fatalf("expected mcp to be external, got %s", mcp.Kind)
+	}
+	required, ok := mcp.InputSchema["required"].([]string)
+	if !ok || strings.Join(required, ",") != "server,tool" {
+		t.Fatalf("expected mcp to require server and tool, got %#v", mcp.InputSchema["required"])
+	}
+	properties, ok := mcp.InputSchema["properties"].(map[string]any)
+	if !ok || properties["server"] == nil || properties["tool"] == nil || properties["arguments"] == nil {
+		t.Fatalf("expected mcp schema properties, got %#v", mcp.InputSchema["properties"])
 	}
 }

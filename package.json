@@ -1,10 +1,22 @@
 {
-  "name": "liora-monorepo",
+  "name": "@lioooooo123/liora",
   "private": true,
   "version": "0.1.0",
   "description": "Local-first agent monorepo for Liora.",
+  "bin": {
+    "liora": "./scripts/npm/liora.cjs"
+  },
+  "files": [
+    "apps/cli",
+    "internal",
+    "scripts/npm",
+    "README.md",
+    "go.mod",
+    "go.sum"
+  ],
   "scripts": {
     "build:cli": "go build -o dist/dev/liora ./apps/cli",
+    "postinstall": "node ./scripts/npm/postinstall.cjs",
     "test:go": "GOTOOLCHAIN=local go test -count=1 ./...",
     "test:protocol": "pnpm --filter @liora/protocol test",
     "smoke:tui": "./scripts/tui-smoke.sh \"$PWD\"",

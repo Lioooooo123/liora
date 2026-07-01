@@ -214,7 +214,7 @@ func TestRuntimeListsBuiltinToolsCommand(t *testing.T) {
 	if !handled {
 		t.Fatal("expected /tools to be handled")
 	}
-	for _, want := range []string{"read <path>", "document <path>", "run <shell command>", "mcp <server>", "read_only", "shell"} {
+	for _, want := range []string{"read <path>", "document <path>", "skill <name>", "run <shell command>", "mcp <server>", "read_only", "shell"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected /tools output to contain %q, got:\n%s", want, out)
 		}
@@ -252,6 +252,123 @@ func TestRuntimeListsSkillsCommand(t *testing.T) {
 	}
 }
 
+func TestRuntimeSkillCommandReadsPagedSkill(t *testing.T) {
+	root := t.TempDir()
+	storeRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".liora", "skills", "tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Join([]string{
+		"# Test Skill",
+		"metadata line",
+		"progressive body line one",
+		"progressive body line two",
+		"tail line",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(root, ".liora", "skills", "tests", "SKILL.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := New(root, llm.NewPlanner(&fakeGenerator{response: "ANSWER: unused"}), store.New(storeRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, handled, err := runtime.HandleCommand(t.Context(), "/skill tests 3 2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled {
+		t.Fatal("expected /skill to be handled")
+	}
+	if !strings.Contains(out, "3\tprogressive body line one") || !strings.Contains(out, "4\tprogressive body line two") {
+		t.Fatalf("expected paged skill lines, got:\n%s", out)
+	}
+	if strings.Contains(out, "metadata line") || strings.Contains(out, "tail line") {
+		t.Fatalf("expected only requested page, got:\n%s", out)
+	}
+}
+
+func TestRuntimeSkillMetadataUsesWorkspaceOverride(t *testing.T) {
+	root := t.TempDir()
+	storeRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(storeRoot, "skills", "review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".liora", "skills", "review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(storeRoot, "skills", "review", "SKILL.md"), []byte("# Global Review\nUse global rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".liora", "skills", "review", "SKILL.md"), []byte("# Workspace Review\nUse workspace rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	generator := &fakeGenerator{response: "ANSWER: ok"}
+	runtime, err := New(root, llm.NewPlanner(generator), store.New(storeRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, handled, err := runtime.HandleCommand(t.Context(), "/skills")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, "Workspace Review") || strings.Contains(out, "Global Review") {
+		t.Fatalf("expected /skills to show only workspace override, handled=%v out=%q", handled, out)
+	}
+	if _, err := runtime.Submit(t.Context(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	userPrompt := generator.messages[1].Content
+	if !strings.Contains(userPrompt, "review: Workspace Review") || strings.Contains(userPrompt, "Global Review") {
+		t.Fatalf("expected planner context to show only workspace override, got:\n%s", userPrompt)
+	}
+}
+
+func TestRuntimeInjectsSkillMetadataWithoutBody(t *testing.T) {
+	root := t.TempDir()
+	storeRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".liora", "skills", "tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "# Test Skill\nGenerate tests\nMUST_NOT_LOAD_BODY\n"
+	if err := os.WriteFile(filepath.Join(root, ".liora", "skills", "tests", "SKILL.md"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	generator := &fakeGenerator{response: "ANSWER: ok"}
+	runtime, err := New(root, llm.NewPlanner(generator), store.New(storeRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runtime.Submit(t.Context(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	userPrompt := generator.messages[1].Content
+	if !strings.Contains(userPrompt, "tests: Test Skill") {
+		t.Fatalf("expected skill metadata in planner context, got:\n%s", userPrompt)
+	}
+	if strings.Contains(userPrompt, "MUST_NOT_LOAD_BODY") || strings.Contains(userPrompt, "Generate tests") {
+		t.Fatalf("planner context should not include skill body, got:\n%s", userPrompt)
+	}
+}
+
+func TestRuntimeSkillCommandReportsMissingSkill(t *testing.T) {
+	root := t.TempDir()
+	runtime, err := New(root, llm.NewPlanner(&fakeGenerator{response: "ANSWER: unused"}), store.New(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, handled, err := runtime.HandleCommand(t.Context(), "/skill missing")
+	if !handled {
+		t.Fatal("expected /skill to be handled")
+	}
+	if err == nil || !strings.Contains(err.Error(), `skill "missing" not found`) {
+		t.Fatalf("expected missing skill error, got %v", err)
+	}
+}
+
 func TestRuntimeInjectsPersistentContextIntoPlanner(t *testing.T) {
 	root := t.TempDir()
 	storeRoot := t.TempDir()
@@ -281,10 +398,13 @@ func TestRuntimeInjectsPersistentContextIntoPlanner(t *testing.T) {
 		t.Fatalf("unexpected messages %#v", generator.messages)
 	}
 	userPrompt := generator.messages[1].Content
-	for _, want := range []string{"Current goal: support MCP", "remember concise output", "tests: Test Skill", "Generate tests"} {
+	for _, want := range []string{"Current goal: support MCP", "remember concise output", "tests: Test Skill"} {
 		if !strings.Contains(userPrompt, want) {
 			t.Fatalf("expected planner context to contain %q, got:\n%s", want, userPrompt)
 		}
+	}
+	if strings.Contains(userPrompt, "Generate tests") {
+		t.Fatalf("planner context should only include skill metadata, got:\n%s", userPrompt)
 	}
 }
 

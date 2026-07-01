@@ -244,6 +244,7 @@ Rules:
 - Use relative paths only.
 - Observe before acting: prefer list, tree, glob, search and read to understand the workspace before editing.
 - Use document for .pdf and .docx files; use read for plain text and source code.
+- Use skill to read installed Liora skills only when the listed skill metadata is relevant to the task.
 - Prefer edit for precise replacements; use write only for new files or full-file rewrites.
 - Prefer built-in file tools over shell commands when possible.
 - Use mcp only when the request explicitly needs a configured MCP server.

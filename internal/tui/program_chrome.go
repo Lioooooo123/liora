@@ -10,49 +10,83 @@ import (
 var (
 	chromeTitleStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("230")).
-				Background(lipgloss.Color("58")).
-				Padding(0, 1)
+				Foreground(lipgloss.Color("230"))
 	chromePillStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("229")).
 			Background(lipgloss.Color("236")).
 			Padding(0, 1)
-	chromeRuleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
-	chromeHotStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("222")).Bold(true)
+	chromeRuleStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
+	chromeHotStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("222")).Bold(true)
+	chromeCardBorderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("75"))
+	chromeInputBorderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	chromeWelcomeLogoStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("149")).Bold(true)
+	chromeWelcomeTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Bold(true)
 )
 
 func (m *model) headerView() string {
-	width := m.vp.Width
+	if m.isTranscriptEmpty() {
+		return ""
+	}
+	width := m.vp.Width()
 	if width <= 0 {
 		width = 80
 	}
-	left := chromeTitleStyle.Render("Liora")
+	left := chromeTitleStyle.Render(brandInline())
 	right := chromePillStyle.Render(m.statusLabel())
 	top := joinEdge(left, right, width)
-	meta := strings.Join([]string{
-		metaItem("workspace", compactMiddle(m.cfg.Workspace, 42)),
-		metaItem("model", valueOr(m.cfg.Model, "scripted")),
-		metaItem("core", valueOr(m.cfg.Core, "-")),
-		metaItem("safety", valueOr(m.cfg.Safety, "-")),
-	}, mutedStyle.Render("  "))
-	commands := strings.Join([]string{
-		chromeHotStyle.Render("/help"),
-		chromeHotStyle.Render("/workbench"),
-		chromeHotStyle.Render("/timeline"),
-		chromeHotStyle.Render("/diff"),
-		chromeHotStyle.Render("/apply"),
-		chromeHotStyle.Render("/cancel"),
-	}, mutedStyle.Render(" "))
 	return strings.Join([]string{
 		top,
-		truncateCells(meta, width),
-		truncateCells(commands, width),
 		chromeRuleStyle.Render(strings.Repeat("─", width)),
 	}, "\n")
 }
 
+func (m *model) welcomeCardView() string {
+	width := m.vp.Width()
+	if width <= 0 {
+		width = 80
+	}
+	if width < 24 {
+		return truncateCells(brandInline()+"  "+valueOr(m.cfg.Workspace, "workspace"), width)
+	}
+	innerWidth := width - 2
+	if innerWidth < 1 {
+		innerWidth = 1
+	}
+	top := chromeCardBorderStyle.Render("╭" + strings.Repeat("─", innerWidth) + "╮")
+	bottom := chromeCardBorderStyle.Render("╰" + strings.Repeat("─", innerWidth) + "╯")
+	empty := cardLine("", innerWidth)
+	logo := chromeWelcomeLogoStyle.Render("▟██▙")
+	title := chromeWelcomeTextStyle.Render("Welcome to Liora")
+	tagline := mutedStyle.Render("Ask, inspect, patch, then apply.")
+	lines := []string{
+		top,
+		empty,
+		cardLine("  "+logo+"  "+title, innerWidth),
+		cardLine("        "+tagline, innerWidth),
+		empty,
+		cardLine("  "+metaItem("Directory:", valueOr(m.cfg.Workspace, "-")), innerWidth),
+		cardLine("  "+metaItem("Model:", valueOr(m.cfg.Model, "scripted")), innerWidth),
+		cardLine("  "+metaItem("Core:", valueOr(m.cfg.Core, "-")), innerWidth),
+		cardLine("  "+metaItem("Safety:", valueOr(m.cfg.Safety, "-")), innerWidth),
+		empty,
+		cardLine("  "+chromeHotStyle.Render("/help")+" commands  "+chromeHotStyle.Render("/diff")+" review  "+chromeHotStyle.Render("/apply")+" write", innerWidth),
+		empty,
+		bottom,
+	}
+	return strings.Join(lines, "\n")
+}
+
+func cardLine(content string, innerWidth int) string {
+	content = truncateCells(content, innerWidth)
+	padding := innerWidth - lipgloss.Width(content)
+	if padding < 0 {
+		padding = 0
+	}
+	return chromeCardBorderStyle.Render("│") + content + strings.Repeat(" ", padding) + chromeCardBorderStyle.Render("│")
+}
+
 func (m *model) statusLine() string {
-	width := m.vp.Width
+	width := m.vp.Width()
 	if width <= 0 {
 		width = 80
 	}
@@ -66,7 +100,12 @@ func (m *model) statusLine() string {
 		metaItem("events", strconv.Itoa(m.eventCount)),
 		pending,
 	}), mutedStyle.Render("  "))
-	right := chromeHotStyle.Render(valueOr(m.nextAction, "type a request"))
+	rightText := valueOr(m.nextAction, "type a request")
+	available := width - lipgloss.Width(left) - 2
+	if available > 0 {
+		rightText = truncateCells(rightText, available)
+	}
+	right := chromeHotStyle.Render(rightText)
 	return joinEdge(left, right, width)
 }
 

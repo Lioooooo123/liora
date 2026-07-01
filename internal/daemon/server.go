@@ -77,7 +77,8 @@ func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	mcpTools, err := s.mcpTools(r.Context())
 	if err != nil {
 		body["mcp_error"] = err.Error()
-	} else if len(mcpTools) > 0 {
+	}
+	if len(mcpTools) > 0 {
 		body["mcp_tools"] = mcpTools
 	}
 	writeJSON(w, http.StatusOK, body)
@@ -145,10 +146,7 @@ func (s *server) mcpTools(ctx context.Context) ([]capabilities.MCPToolSpec, erro
 			Env:     server.Env,
 		}
 	}
-	tools, err := mcppkg.NewManager(mcppkg.Config{Servers: servers}).ListTools(ctx)
-	if err != nil {
-		return nil, err
-	}
+	tools, err := mcppkg.NewManager(mcppkg.Config{Servers: servers}).ListToolsDetailed(ctx)
 	specs := make([]capabilities.MCPToolSpec, 0, len(tools))
 	for _, tool := range tools {
 		specs = append(specs, capabilities.MCPToolSpec{
@@ -160,7 +158,7 @@ func (s *server) mcpTools(ctx context.Context) ([]capabilities.MCPToolSpec, erro
 			InputSchema: tool.InputSchema,
 		})
 	}
-	return specs, nil
+	return specs, err
 }
 
 func (s *server) handleWorkbench(w http.ResponseWriter, r *http.Request) {

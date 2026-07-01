@@ -30,6 +30,7 @@ type Agent struct {
 	workspace *tools.Workspace
 	recorder  trace.Recorder
 	mcp       MCPExecutor
+	skills    SkillReader
 	shell     ShellExecutor
 	checker   permission.Checker
 }
@@ -42,12 +43,20 @@ type ShellExecutor interface {
 	Run(ctx context.Context, workspace string, command string) (tools.ShellResult, error)
 }
 
+type SkillReader interface {
+	ReadSkill(workspaceRoot string, name string, startLine int, lineCount int) (string, error)
+}
+
 func New(workspace *tools.Workspace, recorder trace.Recorder) *Agent {
 	return &Agent{workspace: workspace, recorder: recorder}
 }
 
 func (a *Agent) SetMCP(executor MCPExecutor) {
 	a.mcp = executor
+}
+
+func (a *Agent) SetSkillReader(reader SkillReader) {
+	a.skills = reader
 }
 
 func (a *Agent) SetShellExecutor(executor ShellExecutor) {
@@ -222,6 +231,30 @@ func (a *Agent) execute(ctx context.Context, step Step) (output string, diff str
 			}
 		}
 		content, err := a.workspace.ReadDocumentRange(step.Args[0], startLine, lineCount)
+		return content, "", err
+	case "skill":
+		if a.skills == nil {
+			return "", "", fmt.Errorf("no skill reader configured")
+		}
+		if len(step.Args) < 1 || len(step.Args) > 3 {
+			return "", "", fmt.Errorf("skill expects name [start_line] [line_count]")
+		}
+		startLine := 1
+		lineCount := 1000
+		var err error
+		if len(step.Args) > 1 {
+			startLine, err = strconv.Atoi(step.Args[1])
+			if err != nil {
+				return "", "", fmt.Errorf("skill start_line must be a number")
+			}
+		}
+		if len(step.Args) > 2 {
+			lineCount, err = strconv.Atoi(step.Args[2])
+			if err != nil {
+				return "", "", fmt.Errorf("skill line_count must be a number")
+			}
+		}
+		content, err := a.skills.ReadSkill(a.workspace.Root(), step.Args[0], startLine, lineCount)
 		return content, "", err
 	case "search":
 		if len(step.Args) < 1 {

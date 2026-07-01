@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func (m *model) submitPending() tea.Cmd {
@@ -19,9 +19,15 @@ func (m *model) noteStreamUpdate(update StreamUpdate) {
 	m.eventCount++
 	payload := decodeEventPayload(update.PayloadJSON)
 	switch update.Type {
+	case "task.planning":
+		m.lastStatus = "thinking"
+		m.nextAction = "/cancel to stop"
+	case "sandbox.workspace", "sandbox.run":
+		m.lastStatus = "preparing"
+		m.nextAction = "waiting for model"
 	case "task.plan_ready":
 		m.lastStatus = "planned"
-		m.nextAction = "watch tools"
+		m.nextAction = "running tools"
 	case "tool.call":
 		m.lastStatus = "running tool"
 		if payload.Tool != "" {

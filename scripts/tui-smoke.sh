@@ -153,8 +153,10 @@ printf '/tools\n看看目录\n/tail 8\n/timeline\n/exit\n' | (
     -llm-model test-model
 ) >"$STREAM_OUT"
 
-grep -q 'Plan' "$STREAM_OUT"
-grep -q 'Tools' "$STREAM_OUT"
+grep -q 'Assistant' "$STREAM_OUT"
+grep -q 'Done.' "$STREAM_OUT"
+! grep -q 'Plan' "$STREAM_OUT"
+! grep -q 'Tools' "$STREAM_OUT"
 grep -q 'MCP tools' "$STREAM_OUT"
 grep -q 'mcp fake echo <json arguments>' "$STREAM_OUT"
 grep -q 'Tail task_' "$STREAM_OUT"
