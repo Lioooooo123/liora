@@ -8,7 +8,6 @@
   },
   "files": [
     "apps/cli",
-    "bin",
     "internal",
     "scripts/npm",
     "README.md",
@@ -17,7 +16,6 @@
   ],
   "scripts": {
     "build:cli": "go build -o dist/dev/liora ./apps/cli",
-    "prepare": "node ./scripts/npm/build.cjs",
     "test:go": "GOTOOLCHAIN=local go test -count=1 ./...",
     "test:protocol": "pnpm --filter @liora/protocol test",
     "smoke:tui": "./scripts/tui-smoke.sh \"$PWD\"",

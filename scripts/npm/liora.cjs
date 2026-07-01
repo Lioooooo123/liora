@@ -10,9 +10,17 @@ const executable = process.platform === "win32" ? "liora.exe" : "liora";
 const binaryPath = join(packageRoot, "bin", executable);
 
 if (!existsSync(binaryPath)) {
-  console.error(`Liora binary is missing at ${binaryPath}.`);
-  console.error("Run `npm rebuild -g @lioooooo123/liora` or reinstall the package.");
-  process.exit(1);
+  const build = spawnSync(process.execPath, [join(__dirname, "build.cjs")], {
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (build.error) {
+    console.error(build.error.message);
+    process.exit(1);
+  }
+  if (build.status !== 0) {
+    process.exit(build.status ?? 1);
+  }
 }
 
 const result = spawnSync(binaryPath, process.argv.slice(2), { stdio: "inherit" });

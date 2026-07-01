@@ -93,7 +93,7 @@ diff
 npm install -g github:Lioooooo123/liora
 ```
 
-这个安装方式会在 npm 拉取 GitHub package 时用 Go 构建 `liora` 二进制，因此需要先安装 Go 1.24+。安装后可在任意项目目录运行：
+这个安装方式会在第一次运行 `liora` 时用 Go 构建二进制，因此需要先安装 Go 1.24+。安装后可在任意项目目录运行：
 
 ```sh
 liora
