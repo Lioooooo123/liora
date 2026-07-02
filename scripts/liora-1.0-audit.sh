@@ -23,7 +23,16 @@ ensure_protocol_deps() {
   )
 }
 
+current_schema_version() {
+  sed -nE 's/^const CurrentSchemaVersion = ([0-9]+)$/\1/p' "$ROOT/internal/store/schema.go"
+}
+
 ensure_protocol_deps
+SCHEMA_VERSION="${CURRENT_SCHEMA_VERSION:-$(current_schema_version)}"
+if [[ -z "$SCHEMA_VERSION" ]]; then
+  echo "could not determine current schema version" >&2
+  exit 1
+fi
 
 echo "[1/14] protocol package"
 (
@@ -103,7 +112,7 @@ echo "[10/14] doctor binary smoke"
     LIORA_LLM_MODEL=claude-audit \
     "$AUDIT_TMP/liora" -doctor >"$AUDIT_TMP/doctor.txt"
   grep -q 'database: ok' "$AUDIT_TMP/doctor.txt"
-  grep -q "schema_version: ${CURRENT_SCHEMA_VERSION:-16}" "$AUDIT_TMP/doctor.txt"
+  grep -q "schema_version: $SCHEMA_VERSION" "$AUDIT_TMP/doctor.txt"
   grep -q 'migration: complete' "$AUDIT_TMP/doctor.txt"
   grep -q 'api_key: configured' "$AUDIT_TMP/doctor.txt"
   if grep -q 'audit-secret' "$AUDIT_TMP/doctor.txt"; then

@@ -109,6 +109,27 @@ func TestLioraAuditBootstrapsProtocolDependencies_whenNodeModulesMissing(t *test
 	}
 }
 
+func TestLioraAuditReadsCurrentSchemaVersionFromStore(t *testing.T) {
+	data, err := os.ReadFile("liora-1.0-audit.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"current_schema_version",
+		"CurrentSchemaVersion",
+		`SCHEMA_VERSION="${CURRENT_SCHEMA_VERSION:-$(current_schema_version)}"`,
+		`grep -q "schema_version: $SCHEMA_VERSION"`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected 1.0 audit script to contain %q, got:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, `schema_version: ${CURRENT_SCHEMA_VERSION:-16}`) {
+		t.Fatalf("1.0 audit script still hard-codes the old schema default:\n%s", content)
+	}
+}
+
 func TestLioraAuditRunsLoopRetryAndBudgetGuards(t *testing.T) {
 	data, err := os.ReadFile("liora-1.0-audit.sh")
 	if err != nil {
