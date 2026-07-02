@@ -17,6 +17,10 @@ func (s *server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	s.handleTaskCreateWithRequest(w, r, request)
+}
+
+func (s *server) handleTaskCreateWithRequest(w http.ResponseWriter, r *http.Request, request taskpkg.CreateRequest) {
 	thread, threadBound, err := s.prepareThreadTask(r.Context(), &request)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -77,6 +81,7 @@ func (s *server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	if task.Origin == taskpkg.OriginSchedule && schedule.ID != "" {
 		_ = s.repo.AppendEvent(r.Context(), task.ID, taskpkg.EventScheduleTriggered, taskpkg.EventPayload{
 			ID:            schedule.ID,
+			ScheduleID:    schedule.ID,
 			Message:       "Schedule triggered.",
 			Status:        string(task.Status),
 			Origin:        string(task.Origin),

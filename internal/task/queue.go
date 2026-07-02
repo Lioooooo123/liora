@@ -67,7 +67,7 @@ func (r *Repository) NextQueuedTask(ctx context.Context, sessionID string) (Task
 		return Task{}, false, fmt.Errorf("session id is required")
 	}
 	row := r.db.QueryRowContext(ctx, `
-			SELECT id, session_id, title, user_input, natural, status, workspace, origin, automation_kind, automation_risk, automation_source, automation_trigger, approval_granted, parent_task_id, parent_thread_id, child_thread_id, subagent_name, role, model_provider, model_name, model_base_url, model_profile, model_source, created_at, updated_at, completed_at
+			SELECT id, session_id, title, user_input, natural, status, workspace, origin, automation_kind, automation_risk, automation_source, automation_trigger, schedule_id, schedule_catch_up_policy, schedule_missed_runs, schedule_max_catch_up_runs, schedule_catch_up_runs, approval_granted, parent_task_id, parent_thread_id, child_thread_id, subagent_name, role, model_provider, model_name, model_base_url, model_profile, model_source, created_at, updated_at, completed_at
 		FROM tasks
 		WHERE session_id = ? AND status = ?
 		ORDER BY created_at ASC, id ASC
@@ -636,11 +636,12 @@ func scanTask(row scanner) (Task, error) {
 	var completedAt sql.NullString
 	var modelProvider, modelName, modelBaseURL, modelProfile, modelSource string
 	var natural, approvalGranted int
-	if err := row.Scan(&task.ID, &task.SessionID, &task.Title, &task.UserInput, &natural, &task.Status, &task.Workspace, &task.Origin, &task.Automation.Kind, &task.Automation.Risk, &task.Automation.Source, &task.Automation.Trigger, &approvalGranted, &task.ParentTaskID, &task.ParentThreadID, &task.ChildThreadID, &task.SubagentName, &task.Role, &modelProvider, &modelName, &modelBaseURL, &modelProfile, &modelSource, &createdAt, &updatedAt, &completedAt); err != nil {
+	if err := row.Scan(&task.ID, &task.SessionID, &task.Title, &task.UserInput, &natural, &task.Status, &task.Workspace, &task.Origin, &task.Automation.Kind, &task.Automation.Risk, &task.Automation.Source, &task.Automation.Trigger, &task.Schedule.ID, &task.Schedule.CatchUpPolicy, &task.Schedule.MissedRuns, &task.Schedule.MaxCatchUpRuns, &task.Schedule.CatchUpRuns, &approvalGranted, &task.ParentTaskID, &task.ParentThreadID, &task.ChildThreadID, &task.SubagentName, &task.Role, &modelProvider, &modelName, &modelBaseURL, &modelProfile, &modelSource, &createdAt, &updatedAt, &completedAt); err != nil {
 		return Task{}, err
 	}
 	task.Natural = natural != 0
 	task.ApprovalGranted = approvalGranted != 0
+	task.ScheduleID = task.Schedule.ID
 	task.ModelConfig = normalizeModelConfig(&ModelConfig{Provider: modelProvider, Model: modelName, BaseURL: modelBaseURL, Profile: modelProfile, Source: modelSource})
 	task.CreatedAt = parseTime(createdAt)
 	task.UpdatedAt = parseTime(updatedAt)

@@ -211,6 +211,7 @@ describe("daemon event fixture parser", () => {
         id: "3",
         data: {
           id: "schedule-001",
+          schedule_id: "schedule-001",
           trigger: "0 2 * * *",
           message: "nightly audit",
           missed_runs: 5,
@@ -525,8 +526,10 @@ describe("daemon protocol client", () => {
               task: daemonTask({
                 id: "task-001",
                 workspace: "/repo",
-                origin: "background",
-                automation: { kind: "background", risk: "safe" },
+                origin: "schedule",
+                automation: { kind: "schedule", risk: "safe", trigger: "schedule" },
+                schedule_id: "schedule-001",
+                schedule: { id: "schedule-001", missed_runs: 2, catch_up_policy: "run_once", catch_up_runs: 1 },
                 parent_task_id: "task-parent",
                 parent_thread_id: "thread-parent",
                 child_thread_id: "thread-child",
@@ -644,6 +647,8 @@ describe("daemon protocol client", () => {
 
     expect(created.task.id).toBe("task-001")
     expect(created.task.automation.risk).toBe("safe")
+    expect(created.task.schedule_id).toBe("schedule-001")
+    expect(created.task.schedule?.catch_up_runs).toBe(1)
     expect(created.task.parent_task_id).toBe("task-parent")
     expect(created.task.parent_thread_id).toBe("thread-parent")
     expect(created.task.child_thread_id).toBe("thread-child")
@@ -941,7 +946,7 @@ describe("daemon protocol client", () => {
   it("parses daemon task SSE frames and event payload JSON", () => {
     const frames = parseTaskEventStream(`event: task.created
 id: 1
-data: {"seq":1,"id":"evt-1","task_id":"task-001","type":"task.created","payload_json":"{\\"message\\":\\"created\\",\\"origin\\":\\"background\\"}","created_at":"2026-07-01T00:00:00Z"}
+data: {"seq":1,"id":"evt-1","task_id":"task-001","type":"task.created","payload_json":"{\\"message\\":\\"created\\",\\"origin\\":\\"background\\",\\"schedule_id\\":\\"schedule-001\\"}","created_at":"2026-07-01T00:00:00Z"}
 
 `)
 
@@ -950,6 +955,7 @@ data: {"seq":1,"id":"evt-1","task_id":"task-001","type":"task.created","payload_
     expect(parseTaskEventPayload(frames[0]!.data)).toMatchObject({
       message: "created",
       origin: "background",
+      schedule_id: "schedule-001",
     })
   })
 

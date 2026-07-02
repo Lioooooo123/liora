@@ -26,6 +26,7 @@ const clientEventPayloadSchema = z
     kind: z.string().optional(),
     source: z.string().optional(),
     trigger: z.string().optional(),
+    schedule_id: z.string().optional(),
     missed_runs: z.number().int().optional(),
     catch_up_policy: z.string().optional(),
     catch_up_runs: z.number().int().optional(),
@@ -64,6 +65,16 @@ export const automationMetadataSchema = z
     risk: z.string().optional(),
     source: z.string().optional(),
     trigger: z.string().optional(),
+  })
+  .strict()
+
+export const taskScheduleMetadataSchema = z
+  .object({
+    id: z.string().optional(),
+    catch_up_policy: z.string().optional(),
+    missed_runs: z.number().int().optional(),
+    max_catch_up_runs: z.number().int().optional(),
+    catch_up_runs: z.number().int().optional(),
   })
   .strict()
 
@@ -110,6 +121,8 @@ export const taskSchema = z
     workspace: z.string(),
     origin: z.string(),
     automation: automationMetadataSchema,
+    schedule_id: z.string().optional(),
+    schedule: taskScheduleMetadataSchema.optional(),
     approval_granted: z.boolean().optional(),
     parent_task_id: z.string().optional(),
     parent_thread_id: z.string().optional(),
@@ -137,16 +150,7 @@ export const createTaskRequestSchema = z
     queue: z.boolean().optional(),
     origin: z.string().optional(),
     automation: automationMetadataSchema.optional(),
-    schedule: z
-      .object({
-        id: z.string().optional(),
-        catch_up_policy: z.string().optional(),
-        missed_runs: z.number().int().optional(),
-        max_catch_up_runs: z.number().int().optional(),
-        catch_up_runs: z.number().int().optional(),
-      })
-      .strict()
-      .optional(),
+    schedule: taskScheduleMetadataSchema.optional(),
     parent_task_id: z.string().optional(),
     parent_thread_id: z.string().optional(),
     child_thread_id: z.string().optional(),

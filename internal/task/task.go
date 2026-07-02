@@ -194,6 +194,8 @@ type Task struct {
 	Workspace                string             `json:"workspace"`
 	Origin                   Origin             `json:"origin"`
 	Automation               AutomationMetadata `json:"automation"`
+	ScheduleID               string             `json:"schedule_id,omitempty"`
+	Schedule                 ScheduleMetadata   `json:"schedule,omitempty"`
 	ApprovalGranted          bool               `json:"approval_granted,omitempty"`
 	ParentTaskID             string             `json:"parent_task_id,omitempty"`
 	ParentThreadID           string             `json:"parent_thread_id,omitempty"`
@@ -516,6 +518,7 @@ type EventPayload struct {
 	Kind            string `json:"kind,omitempty"`
 	Source          string `json:"source,omitempty"`
 	Trigger         string `json:"trigger,omitempty"`
+	ScheduleID      string `json:"schedule_id,omitempty"`
 	MissedRuns      int    `json:"missed_runs,omitempty"`
 	CatchUpPolicy   string `json:"catch_up_policy,omitempty"`
 	CatchUpRuns     int    `json:"catch_up_runs,omitempty"`

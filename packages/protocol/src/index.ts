@@ -26,6 +26,7 @@ export const eventPayloadSchema = z
     kind: z.string().optional(),
     source: z.string().optional(),
     trigger: z.string().optional(),
+    schedule_id: z.string().optional(),
     missed_runs: z.number().int().optional(),
     catch_up_policy: z.string().optional(),
     catch_up_runs: z.number().int().optional(),

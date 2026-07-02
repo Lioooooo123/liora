@@ -82,6 +82,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("/v1/timeline/search", s.requireCapability(s.handleTimelineSearch))
 	mux.HandleFunc("/v1/threads", s.requireCapability(s.handleThreads))
 	mux.HandleFunc("/v1/threads/", s.requireCapability(s.handleThread))
+	mux.HandleFunc("/v1/schedules/", s.requireCapability(s.handleSchedule))
 	mux.HandleFunc("/v1/sessions", s.requireCapability(s.handleSessions))
 	mux.HandleFunc("/v1/sessions/", s.requireCapability(s.handleSession))
 	mux.HandleFunc("/v1/tasks", s.requireCapability(s.handleTasks))

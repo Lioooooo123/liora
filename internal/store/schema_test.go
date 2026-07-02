@@ -70,6 +70,9 @@ func TestStoreSchemaReportMigratesOldDatabaseFixtureIdempotently(t *testing.T) {
 	for _, column := range scheduleModelColumns() {
 		assertTableHasColumn(t, db, "schedules", column)
 	}
+	for _, column := range taskScheduleColumns() {
+		assertTableHasColumn(t, db, "tasks", column)
+	}
 	assertTableHasColumn(t, db, "todos", "priority")
 }
 
@@ -101,6 +104,9 @@ func TestStoreSchemaReportRunsMigrationFixtureMatrixIdempotently(t *testing.T) {
 			}
 			for _, column := range scheduleModelColumns() {
 				assertTableHasColumn(t, db, "schedules", column)
+			}
+			for _, column := range taskScheduleColumns() {
+				assertTableHasColumn(t, db, "tasks", column)
 			}
 			var version int
 			if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
@@ -136,6 +142,9 @@ func TestStoreSchemaReportCreatesFreshVersionedSurfaces(t *testing.T) {
 	}
 	for _, column := range scheduleModelColumns() {
 		assertTableHasColumn(t, db, "schedules", column)
+	}
+	for _, column := range taskScheduleColumns() {
+		assertTableHasColumn(t, db, "tasks", column)
 	}
 	for _, kind := range []string{"note", "preference", "rule", "automation", "credential_hint"} {
 		var count int
@@ -414,6 +423,16 @@ func scheduleModelColumns() []string {
 		"timezone",
 		"quiet_hours_start",
 		"quiet_hours_end",
+	}
+}
+
+func taskScheduleColumns() []string {
+	return []string{
+		"schedule_id",
+		"schedule_catch_up_policy",
+		"schedule_missed_runs",
+		"schedule_max_catch_up_runs",
+		"schedule_catch_up_runs",
 	}
 }
 

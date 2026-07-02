@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -154,6 +155,141 @@ func TestServerScheduleAndSubagentInheritThreadOrParentModelUnlessOverridden(t *
 	}`)
 	if override.Task.ModelConfig == nil || override.Task.ModelConfig.Model != "explicit-model" || override.Task.ModelConfig.Profile != "explicit" {
 		t.Fatalf("expected explicit child override to win, got %#v", override.Task.ModelConfig)
+	}
+}
+
+func TestServerScheduleTriggerCreatesTaskWithScheduleScope(t *testing.T) {
+	workspace := t.TempDir()
+	st := store.New(t.TempDir())
+	db, err := st.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "ANSWER: scheduled work accepted."}))
+	server := httptest.NewServer(NewServer(Config{Repository: repo, Runner: runner, Store: st}))
+	defer server.Close()
+
+	schedule, err := st.CreateSchedule(store.CreateScheduleRequest{
+		ID:          "schedule-nightly",
+		Workspace:   workspace,
+		TriggerKind: store.ScheduleTriggerCron,
+		Trigger:     "0 2 * * *",
+		Prompt:      "run scheduled maintenance",
+		Timezone:    "UTC",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := repo.CreateSession(t.Context(), taskpkg.CreateSessionRequest{Workspace: workspace, Title: "Scheduled session"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Post(server.URL+"/v1/schedules/"+schedule.ID+"/trigger", "application/json", strings.NewReader(`{
+		"session_id":`+quote(session.ID)+`,
+		"risk":"safe",
+		"source":"scheduler:test",
+		"missed_runs":2
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("unexpected trigger status %d: %s", resp.StatusCode, string(body))
+	}
+	var created taskpkg.CreateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Task.Workspace != workspace || created.Task.SessionID != session.ID {
+		t.Fatalf("expected workspace/session scope, got %#v", created.Task)
+	}
+	if created.Task.Origin != taskpkg.OriginSchedule || created.Task.Automation.Trigger != "schedule" {
+		t.Fatalf("expected schedule task trigger metadata, got %#v", created.Task)
+	}
+	if created.Task.ScheduleID != schedule.ID || created.Task.Schedule.ID != schedule.ID || created.Task.Schedule.MissedRuns != 2 {
+		t.Fatalf("expected persisted schedule metadata, got %#v", created.Task.Schedule)
+	}
+	payload := schedulePayload(t, repo, created.Task.ID)
+	if payload.ID != schedule.ID || payload.ScheduleID != schedule.ID || payload.Trigger != "schedule" || payload.MissedRuns != 2 || payload.CatchUpRuns != 1 {
+		t.Fatalf("expected schedule.triggered payload for schedule task, got %#v", payload)
+	}
+	workbenchResp, err := http.Get(server.URL + "/v1/workbench?workspace=" + url.QueryEscape(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workbenchResp.Body.Close()
+	if workbenchResp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected workbench status %d", workbenchResp.StatusCode)
+	}
+	var workbench taskpkg.Workbench
+	if err := json.NewDecoder(workbenchResp.Body).Decode(&workbench); err != nil {
+		t.Fatal(err)
+	}
+	if !taskListContainsID(workbench.BackgroundTasks, created.Task.ID) {
+		t.Fatalf("expected schedule task in workbench background tasks, got %#v", workbench.BackgroundTasks)
+	}
+}
+
+func TestServerScheduleTriggerRejectsDisabledUnknownAndMalformed(t *testing.T) {
+	workspace := t.TempDir()
+	st := store.New(t.TempDir())
+	db, err := st.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	server := httptest.NewServer(NewServer(Config{Repository: repo, Store: st}))
+	defer server.Close()
+
+	disabled := false
+	if _, err := st.CreateSchedule(store.CreateScheduleRequest{
+		ID:          "schedule-disabled",
+		Workspace:   workspace,
+		TriggerKind: store.ScheduleTriggerCron,
+		Trigger:     "0 2 * * *",
+		Prompt:      "disabled schedule",
+		Enabled:     &disabled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name       string
+		path       string
+		body       string
+		wantStatus int
+	}{
+		{"missing id", "/v1/schedules//trigger", `{}`, http.StatusNotFound},
+		{"unknown id", "/v1/schedules/missing-schedule/trigger", `{}`, http.StatusNotFound},
+		{"disabled", "/v1/schedules/schedule-disabled/trigger", `{}`, http.StatusConflict},
+		{"malformed risk", "/v1/schedules/schedule-disabled/trigger", `{"risk":"maybe"}`, http.StatusBadRequest},
+		{"malformed catchup", "/v1/schedules/schedule-disabled/trigger", `{"missed_runs":-1}`, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := http.Post(server.URL+tc.path, "application/json", strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != tc.wantStatus {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("unexpected status %d, want %d: %s", resp.StatusCode, tc.wantStatus, string(body))
+			}
+		})
+	}
+	tasks, err := repo.ListByWorkspace(t.Context(), workspace, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("malformed or disabled schedule trigger created tasks: %#v", tasks)
 	}
 }
 
