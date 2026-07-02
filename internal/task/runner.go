@@ -236,6 +236,10 @@ func (r *Runner) permissionChecker(task Task) permission.Checker {
 		request.Workspace = task.Workspace
 		request.SessionID = task.SessionID
 		policyForRequest := policy
+		if taskUsesChildPermissionBoundary(task) {
+			policyForRequest.NetworkAllowlist = append([]string(nil), task.Scope.NetworkHosts...)
+			policyForRequest.Rules = permissionRulesForChildTask(policyForRequest.Rules)
+		}
 		if r.store != nil {
 			rules, err := r.store.ListPermissionRules(store.PermissionRuleListOptions{
 				Workspace: task.Workspace,
@@ -244,7 +248,11 @@ func (r *Runner) permissionChecker(task Task) permission.Checker {
 			if err != nil {
 				return fmt.Errorf("load permission rules: %w", err)
 			}
-			policyForRequest.Rules = permissionRulesFromStore(rules)
+			storeRules := permissionRulesFromStore(rules)
+			if taskUsesChildPermissionBoundary(task) {
+				storeRules = permissionRulesForChildTask(storeRules)
+			}
+			policyForRequest.Rules = storeRules
 		}
 		err := policyForRequest.Check(ctx, request)
 		if err == nil {
@@ -263,6 +271,21 @@ func (r *Runner) permissionChecker(task Task) permission.Checker {
 		}
 		return err
 	})
+}
+
+func taskUsesChildPermissionBoundary(task Task) bool {
+	return task.ParentTaskID != "" || task.Origin == OriginSubagent
+}
+
+func permissionRulesForChildTask(rules []permission.Rule) []permission.Rule {
+	filtered := make([]permission.Rule, 0, len(rules))
+	for _, rule := range rules {
+		if rule.Action == permission.RuleAlwaysAllow {
+			continue
+		}
+		filtered = append(filtered, rule)
+	}
+	return filtered
 }
 
 func permissionRulesFromStore(rules []store.PermissionRule) []permission.Rule {

@@ -838,6 +838,90 @@ func TestRunnerWaitsForPermissionBeforeNetworkShell(t *testing.T) {
 	}
 }
 
+func TestRunnerChildTaskDoesNotInheritParentPermissionShortcuts(t *testing.T) {
+	workspace := t.TempDir()
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	parent, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "parent",
+		Scope: TaskScope{
+			Paths:        []string{workspace},
+			NetworkHosts: []string{"api.internal"},
+			MCPServers:   []string{"docs"},
+			MCPTools:     []string{"docs.search"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := persistentStore.CreatePermissionRule(store.CreatePermissionRuleRequest{
+		Action:    store.PermissionRuleAlwaysAllow,
+		Workspace: workspace,
+		SessionID: parent.SessionID,
+		Tool:      "run",
+		Risk:      "dangerous_shell",
+		Reason:    "parent shortcut",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := persistentStore.CreatePermissionRule(store.CreatePermissionRuleRequest{
+		Action:    store.PermissionRuleAlwaysAllow,
+		Workspace: workspace,
+		SessionID: parent.SessionID,
+		Tool:      "mcp",
+		Risk:      "external",
+		Reason:    "parent external shortcut",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	child, err := repo.Create(t.Context(), CreateRequest{
+		Workspace:    workspace,
+		Prompt:       "child",
+		ParentTaskID: parent.ID,
+		Origin:       OriginSubagent,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childWithNetwork, err := repo.Create(t.Context(), CreateRequest{
+		Workspace:    workspace,
+		Prompt:       "network child",
+		ParentTaskID: parent.ID,
+		Origin:       OriginSubagent,
+		Scope:        TaskScope{NetworkHosts: []string{"api.internal"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: ""}))
+	runner.SetStore(persistentStore)
+	runner.SetPermissionPolicy(permission.Policy{
+		Mode:               permission.ModePrompt,
+		NetworkDefaultDeny: true,
+		NetworkAllowlist:   []string{"api.internal"},
+	})
+
+	parentChecker := runner.permissionChecker(parent)
+	if err := parentChecker.Check(t.Context(), permission.Request{Tool: "run", Input: "rm -rf build"}); err != nil {
+		t.Fatalf("expected parent always-allow rule to apply, got %v", err)
+	}
+	childChecker := runner.permissionChecker(child)
+	assertPermissionRequired(t, childChecker.Check(t.Context(), permission.Request{Tool: "run", Input: "rm -rf build"}), "dangerous_shell")
+	assertPermissionRequired(t, childChecker.Check(t.Context(), permission.Request{Tool: "run", Input: "curl https://api.internal/data.json"}), "network")
+	assertPermissionRequired(t, childChecker.Check(t.Context(), permission.Request{Tool: "mcp", Input: "docs search {}"}), "external")
+
+	networkChecker := runner.permissionChecker(childWithNetwork)
+	if err := networkChecker.Check(t.Context(), permission.Request{Tool: "run", Input: "curl https://api.internal/data.json"}); err != nil {
+		t.Fatalf("expected explicit child network scope to allow matching host, got %v", err)
+	}
+}
+
 func TestRunnerDefaultDeniesAutomationNetworkShell(t *testing.T) {
 	workspace := t.TempDir()
 	db, err := store.New(t.TempDir()).OpenDB()
@@ -1015,6 +1099,17 @@ func countEventType(events []EventType, want EventType) int {
 		}
 	}
 	return count
+}
+
+func assertPermissionRequired(t *testing.T, err error, wantRisk string) {
+	t.Helper()
+	var required *permission.RequiredError
+	if !errors.As(err, &required) {
+		t.Fatalf("expected permission required for risk %q, got %v", wantRisk, err)
+	}
+	if required.Request.Risk != wantRisk {
+		t.Fatalf("expected permission risk %q, got %#v", wantRisk, required.Request)
+	}
 }
 
 func waitUntil(t *testing.T, timeout time.Duration, condition func() bool) {

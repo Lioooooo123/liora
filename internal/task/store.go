@@ -133,6 +133,7 @@ func (r *Repository) Create(ctx context.Context, request CreateRequest) (Task, e
 		if len(approvalGrants) > 0 {
 			return Task{}, fmt.Errorf("child task approval grants are not allowed")
 		}
+		scope = defaultChildScope(parent.Scope, scope)
 		if err := validateChildScopeWithinParent(parent.Scope, scope); err != nil {
 			return Task{}, err
 		}
@@ -1936,6 +1937,15 @@ func uniqueNonEmpty(values []string) []string {
 		unique = append(unique, value)
 	}
 	return unique
+}
+
+func defaultChildScope(parent TaskScope, child TaskScope) TaskScope {
+	parent = normalizeTaskScope(parent)
+	child = normalizeTaskScope(child)
+	if len(child.Paths) == 0 {
+		child.Paths = append([]string(nil), parent.Paths...)
+	}
+	return child
 }
 
 func normalizeTaskScope(scope TaskScope) TaskScope {

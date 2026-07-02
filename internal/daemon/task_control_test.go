@@ -27,7 +27,13 @@ func TestTaskControlCreatesSafeChildTask(t *testing.T) {
 		Prompt:    "parent",
 		Natural:   true,
 		Origin:    taskpkg.OriginForeground,
-		Scope:     taskpkg.TaskScope{Paths: []string{workspace}},
+		Scope: taskpkg.TaskScope{
+			Paths:           []string{workspace},
+			NetworkHosts:    []string{"api.internal"},
+			MCPServers:      []string{"docs"},
+			MCPTools:        []string{"docs.search"},
+			ApprovalActions: []string{"run"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +46,6 @@ func TestTaskControlCreatesSafeChildTask(t *testing.T) {
 		Prompt:       "inspect child scope",
 		SubagentName: "explorer",
 		Role:         "search",
-		Scope:        taskpkg.TaskScope{Paths: []string{workspace}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +55,15 @@ func TestTaskControlCreatesSafeChildTask(t *testing.T) {
 	}
 	if child.Automation.Source != "model_tool" || child.Automation.Trigger != "Task" {
 		t.Fatalf("unexpected child automation %#v", child.Automation)
+	}
+	if child.SessionID != parent.SessionID || !child.InheritedScopeFromParent {
+		t.Fatalf("expected child to inherit parent thread/session scope, got child=%#v parent=%#v", child, parent)
+	}
+	if got := child.Scope.Paths; len(got) != 1 || got[0] != workspace {
+		t.Fatalf("expected child to default to parent workspace path scope, got %#v", child.Scope)
+	}
+	if len(child.Scope.NetworkHosts) != 0 || len(child.Scope.MCPServers) != 0 || len(child.Scope.MCPTools) != 0 || len(child.Scope.ApprovalActions) != 0 {
+		t.Fatalf("child must not inherit parent capability lists, got %#v", child.Scope)
 	}
 	parentEvents, err := repo.Events(t.Context(), parent.ID, 0)
 	if err != nil {

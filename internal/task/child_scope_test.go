@@ -66,6 +66,59 @@ func TestRepositoryChildTaskScopeIsBoundedByParent(t *testing.T) {
 	assertSubagentRelation(t, db, parent.ID, child.ID)
 }
 
+func TestRepositoryChildTaskDefaultsToParentPathScopeOnly(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	repo := NewRepository(db)
+	parent, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: "/repo",
+		Prompt:    "parent task",
+		Scope: TaskScope{
+			Paths:           []string{"/repo", "/tmp/shared"},
+			NetworkHosts:    []string{"api.internal"},
+			MCPServers:      []string{"filesystem"},
+			MCPTools:        []string{"filesystem.read"},
+			ApprovalActions: []string{"apply_patch"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	child, err := repo.Create(t.Context(), CreateRequest{
+		Workspace:    "/repo",
+		Prompt:       "child task",
+		ParentTaskID: parent.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !child.InheritedScopeFromParent {
+		t.Fatalf("expected child to record inherited scope, got %#v", child)
+	}
+	if got := child.Scope.Paths; len(got) != 2 || got[0] != "/repo" || got[1] != "/tmp/shared" {
+		t.Fatalf("expected child to default to parent paths only, got %#v", child.Scope)
+	}
+	if len(child.Scope.NetworkHosts) != 0 || len(child.Scope.MCPServers) != 0 || len(child.Scope.MCPTools) != 0 || len(child.Scope.ApprovalActions) != 0 {
+		t.Fatalf("child must not inherit parent capability lists, got %#v", child.Scope)
+	}
+
+	got, err := repo.Get(t.Context(), child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Scope.Paths) != 2 || got.Scope.Paths[0] != "/repo" || got.Scope.Paths[1] != "/tmp/shared" {
+		t.Fatalf("expected persisted child path defaults, got %#v", got.Scope)
+	}
+	if len(got.Scope.NetworkHosts) != 0 || len(got.Scope.MCPServers) != 0 || len(got.Scope.MCPTools) != 0 || len(got.Scope.ApprovalActions) != 0 {
+		t.Fatalf("persisted child must not inherit parent capability lists, got %#v", got.Scope)
+	}
+}
+
 func TestRepositoryChildTaskInheritsParentModelUnlessOverridden(t *testing.T) {
 	db, err := store.New(t.TempDir()).OpenDB()
 	if err != nil {
