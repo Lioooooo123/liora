@@ -49,6 +49,36 @@ func TestCapabilityTodoToolsExposeNativeSchemas(t *testing.T) {
 	}
 }
 
+func TestCapabilityTaskControlToolsExposeNativeSchemas(t *testing.T) {
+	if !HasBuiltinTool("task") || !HasBuiltinTool("TASKOUTPUT") || !HasBuiltinTool("TaskStop") {
+		t.Fatal("expected task-control tools to be found case-insensitively")
+	}
+	byName := map[string]ToolSpec{}
+	for _, spec := range ToolSchemas() {
+		byName[spec.Name] = spec
+	}
+	task := byName["Task"]
+	if task.Name == "" || task.Kind != ToolExternal {
+		t.Fatalf("expected external Task schema, got %#v", task)
+	}
+	output := byName["TaskOutput"]
+	if output.Name == "" || output.Kind != ToolReadOnly {
+		t.Fatalf("expected read-only TaskOutput schema, got %#v", output)
+	}
+	stop := byName["TaskStop"]
+	if stop.Name == "" || stop.Kind != ToolExternal {
+		t.Fatalf("expected external TaskStop schema, got %#v", stop)
+	}
+	required, ok := task.InputSchema["required"].([]string)
+	if !ok || strings.Join(required, ",") != "prompt" {
+		t.Fatalf("expected Task to require prompt, got %#v", task.InputSchema["required"])
+	}
+	required, ok = output.InputSchema["required"].([]string)
+	if !ok || strings.Join(required, ",") != "task_id" {
+		t.Fatalf("expected TaskOutput to require task_id, got %#v", output.InputSchema["required"])
+	}
+}
+
 func TestToolSchemasAreClosedObjects(t *testing.T) {
 	schemas := ToolSchemas()
 	if len(schemas) != len(builtinTools) {

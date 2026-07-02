@@ -121,6 +121,30 @@ var builtinTools = []ToolSpec{
 				"source_task_id": stringProp("可选来源 task id；必须匹配当前 task。"),
 			}, []string{"content"})),
 		}, []string{"todos"})},
+	{Name: "Task", Usage: "Task <prompt>", Description: "启动一个安全的子任务，把可独立探索或执行的工作交给子 agent。", Kind: ToolExternal,
+		InputSchema: objectSchema(props{
+			"prompt":        stringProp("子任务要完成的明确目标。"),
+			"subagent_name": stringProp("可选子 agent 名称，用于展示和审计。"),
+			"role":          stringProp("可选职责标签，例如 explorer、tester。"),
+			"scope": objectSchema(props{
+				"paths":            arrayProp("子任务允许访问的路径范围。", stringProp("路径。")),
+				"network_hosts":    arrayProp("子任务允许访问的网络主机。", stringProp("主机名。")),
+				"mcp_servers":      arrayProp("子任务允许使用的 MCP server。", stringProp("MCP server 名称。")),
+				"mcp_tools":        arrayProp("子任务允许使用的 MCP tool。", stringProp("MCP tool 名称。")),
+				"approval_actions": arrayProp("子任务允许请求的审批动作。", stringProp("审批动作。")),
+			}, nil),
+		}, []string{"prompt"})},
+	{Name: "TaskOutput", Usage: "TaskOutput <task_id> [wait_ms] [limit]", Description: "读取当前父任务创建的子任务输出和状态。", Kind: ToolReadOnly,
+		InputSchema: objectSchema(props{
+			"task_id": stringProp("要读取的子任务 id。"),
+			"wait_ms": integerProp("可选等待毫秒数，用于短暂等待子任务产生新输出或结束。"),
+			"limit":   integerProp("输出最大字符数，默认 4000。"),
+		}, []string{"task_id"})},
+	{Name: "TaskStop", Usage: "TaskStop <task_id> [reason]", Description: "取消当前父任务创建的子任务，不改变父任务状态。", Kind: ToolExternal,
+		InputSchema: objectSchema(props{
+			"task_id": stringProp("要取消的子任务 id。"),
+			"reason":  stringProp("可选取消原因。"),
+		}, []string{"task_id"})},
 	{Name: "mcp", Usage: "mcp <server> <tool> <json arguments>", Description: "仅当用户明确需要已配置 MCP server 时调用外部工具。", Kind: ToolExternal,
 		InputSchema: objectSchema(props{
 			"server":    stringProp("已配置的 MCP server 名称。"),
@@ -140,7 +164,7 @@ func BuiltinTools() []ToolSpec {
 func HasBuiltinTool(name string) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
 	for _, tool := range builtinTools {
-		if tool.Name == name {
+		if strings.EqualFold(tool.Name, name) {
 			return true
 		}
 	}

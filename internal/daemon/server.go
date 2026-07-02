@@ -63,6 +63,9 @@ func newServer(config Config) *server {
 	if s.runner != nil && s.store != nil {
 		s.runner.SetStore(s.store)
 	}
+	if s.runner != nil {
+		s.runner.SetTaskControl(s)
+	}
 	return s
 }
 

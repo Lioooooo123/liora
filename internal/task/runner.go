@@ -27,6 +27,7 @@ type Runner struct {
 	sandboxRun sandbox.Executor
 	patchMode  bool
 	permission permission.Policy
+	tasks      TaskController
 }
 
 func NewRunner(repo *Repository, planner *llm.Planner) *Runner {
@@ -49,6 +50,10 @@ func (r *Runner) SetStore(s *store.Store) {
 	if s != nil {
 		r.store = s
 	}
+}
+
+func (r *Runner) SetTaskControl(controller TaskController) {
+	r.tasks = controller
 }
 
 func (r *Runner) SetLLMRegistry(registry *llm.Registry) {
@@ -162,6 +167,7 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 			sessionID:    task.SessionID,
 			sourceTaskID: task.ID,
 		})
+		turnRuntime.SetTaskExecutor(newTaskToolExecutor(task, r.tasks))
 		recorder := newRepositoryRecorder(ctx, r, task.ID)
 		planReadyEmitted := false
 		prompt, err := r.taskPrompt(ctx, task)
@@ -210,6 +216,7 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 		sessionID:    task.SessionID,
 		sourceTaskID: task.ID,
 	})
+	runner.SetTaskExecutor(newTaskToolExecutor(task, r.tasks))
 	if r.sandboxRun != nil {
 		runner.SetShellExecutor(r.sandboxRun)
 	}

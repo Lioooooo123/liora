@@ -157,6 +157,12 @@ func (l *ToolLoop) executeToolCall(ctx context.Context, name string, args map[st
 		return l.agent.executeTodoWrite(ctx, args)
 	case "todo_read":
 		return l.agent.executeTodoRead(ctx)
+	case "Task":
+		return l.agent.executeTask(ctx, args)
+	case "TaskOutput":
+		return l.agent.executeTaskOutput(ctx, args)
+	case "TaskStop":
+		return l.agent.executeTaskStop(ctx, args)
 	case "mcp":
 		if l.agent.mcp == nil {
 			return "", fmt.Errorf("no MCP servers configured")

@@ -36,6 +36,7 @@ type Agent struct {
 	checker   permission.Checker
 	outputs   ToolOutputSink
 	todos     TodoExecutor
+	tasks     TaskExecutor
 	traceSeq  int
 	replay    CompletedToolLookup
 }
@@ -76,6 +77,54 @@ type TodoExecutor interface {
 	ReadTodos(ctx context.Context) ([]Todo, error)
 }
 
+type TaskToolScope struct {
+	Paths           []string
+	NetworkHosts    []string
+	MCPServers      []string
+	MCPTools        []string
+	ApprovalActions []string
+}
+
+type TaskRequest struct {
+	Prompt       string
+	SubagentName string
+	Role         string
+	Scope        TaskToolScope
+}
+
+type TaskResult struct {
+	TaskID string
+	Status string
+}
+
+type TaskOutputRequest struct {
+	TaskID           string
+	WaitMilliseconds int
+	Limit            int
+}
+
+type TaskOutputResult struct {
+	TaskID string
+	Status string
+	Output string
+}
+
+type TaskStopRequest struct {
+	TaskID string
+	Reason string
+}
+
+type TaskStopResult struct {
+	TaskID string
+	Status string
+}
+
+type TaskExecutor interface {
+	StartTask(ctx context.Context, request TaskRequest) (TaskResult, error)
+	ReadTaskOutput(ctx context.Context, request TaskOutputRequest) (TaskOutputResult, error)
+	StopTask(ctx context.Context, request TaskStopRequest) (TaskStopResult, error)
+}
+
 func New(workspace *tools.Workspace, recorder trace.Recorder) *Agent {
 	return &Agent{workspace: workspace, recorder: recorder}
 }
@@ -102,6 +151,10 @@ func (a *Agent) SetToolOutputSink(sink ToolOutputSink) {
 
 func (a *Agent) SetTodoExecutor(executor TodoExecutor) {
 	a.todos = executor
+}
+
+func (a *Agent) SetTaskExecutor(executor TaskExecutor) {
+	a.tasks = executor
 }
 
 func (a *Agent) SetCompletedToolLookup(lookup CompletedToolLookup) {

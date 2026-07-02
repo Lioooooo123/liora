@@ -84,6 +84,12 @@ func toolInput(call llm.ToolCall) string {
 		return argTodoSummary(args)
 	case "todo_read":
 		return ""
+	case "Task":
+		return strings.TrimSpace(argString(args, "subagent_name") + " " + argString(args, "prompt"))
+	case "TaskOutput":
+		return argString(args, "task_id")
+	case "TaskStop":
+		return strings.TrimSpace(argString(args, "task_id") + " " + argString(args, "reason"))
 	case "write", "append":
 		return strings.TrimSpace(argString(args, "path") + " " + argString(args, "content"))
 	case "edit":

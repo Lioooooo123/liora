@@ -29,6 +29,7 @@ type Runtime struct {
 	checker   permission.Checker
 	outputs   agent.ToolOutputSink
 	todos     agent.TodoExecutor
+	tasks     agent.TaskExecutor
 	replay    agent.CompletedToolLookup
 }
 
@@ -68,6 +69,10 @@ func (r *Runtime) SetToolOutputSink(sink agent.ToolOutputSink) {
 
 func (r *Runtime) SetTodoExecutor(executor agent.TodoExecutor) {
 	r.todos = executor
+}
+
+func (r *Runtime) SetTaskExecutor(executor agent.TaskExecutor) {
+	r.tasks = executor
 }
 
 func (r *Runtime) SetCompletedToolLookup(lookup agent.CompletedToolLookup) {
@@ -198,6 +203,9 @@ func (r *Runtime) newAgent(recorder trace.Recorder) *agent.Agent {
 	}
 	if r.todos != nil {
 		runner.SetTodoExecutor(r.todos)
+	}
+	if r.tasks != nil {
+		runner.SetTaskExecutor(r.tasks)
 	}
 	if r.sandbox != nil {
 		runner.SetShellExecutor(r.sandbox)
