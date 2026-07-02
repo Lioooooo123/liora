@@ -1303,6 +1303,21 @@ func initDB(db *sql.DB) error {
 				created_at TEXT NOT NULL DEFAULT '',
 				updated_at TEXT NOT NULL DEFAULT ''
 			)`,
+		`CREATE TABLE IF NOT EXISTS hook_runs (
+				id TEXT PRIMARY KEY,
+				hook_id TEXT NOT NULL DEFAULT '',
+				event TEXT NOT NULL DEFAULT '',
+				workspace TEXT NOT NULL DEFAULT '',
+				payload_json TEXT NOT NULL DEFAULT '',
+				status TEXT NOT NULL DEFAULT '',
+				exit_code INTEGER NOT NULL DEFAULT 0,
+				stdout TEXT NOT NULL DEFAULT '',
+				stderr TEXT NOT NULL DEFAULT '',
+				output_truncated INTEGER NOT NULL DEFAULT 0,
+				replay_of_run_id TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL DEFAULT ''
+			)`,
+		`CREATE INDEX IF NOT EXISTS idx_hook_runs_hook_created ON hook_runs(hook_id, created_at)`,
 		`CREATE TABLE IF NOT EXISTS conversation_threads (
 					id TEXT PRIMARY KEY,
 					title TEXT NOT NULL DEFAULT '',

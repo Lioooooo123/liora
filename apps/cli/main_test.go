@@ -193,6 +193,95 @@ func TestCLIInteractiveDoctorCommandReportsConfigWithoutSecret(t *testing.T) {
 	}
 }
 
+func TestCLIHookConfigRunReplayAndDoctorSurface(t *testing.T) {
+	// Given
+	home := t.TempDir()
+	workspace := t.TempDir()
+	command := "echo hook-run >> hook.log; echo hook-failed >&2; exit 9"
+	add := exec.Command("go", "run", ".", "-workspace", workspace, "hook", "add", "--id", "pre-run", "--event", "PreToolUse", "--command", command)
+	add.Env = cleanLLMEnv(t, "LIORA_HOME="+home, "LIORA_LLM_PROVIDER=gemini", "LIORA_LLM_MODEL=gemini-test")
+	if output, err := add.CombinedOutput(); err != nil {
+		t.Fatalf("hook add failed: %v\n%s", err, string(output))
+	}
+
+	// When
+	list := exec.Command("go", "run", ".", "-workspace", workspace, "hook", "list")
+	list.Env = cleanLLMEnv(t, "LIORA_HOME="+home, "LIORA_LLM_PROVIDER=gemini", "LIORA_LLM_MODEL=gemini-test")
+	listOutput, err := list.CombinedOutput()
+
+	// Then
+	if err != nil {
+		t.Fatalf("hook list failed: %v\n%s", err, string(listOutput))
+	}
+	for _, want := range []string{"pre-run", "PreToolUse", "enabled", "hook_side_effect"} {
+		if !strings.Contains(string(listOutput), want) {
+			t.Fatalf("expected hook list to contain %q, got:\n%s", want, string(listOutput))
+		}
+	}
+	if strings.Contains(string(listOutput), command) {
+		t.Fatalf("hook list should not print raw command with possible secrets:\n%s", string(listOutput))
+	}
+
+	// When
+	run := exec.Command("go", "run", ".", "-workspace", workspace, "hook", "run", "--event", "PreToolUse", "--payload", `{"tool":"run"}`)
+	run.Env = cleanLLMEnv(t, "LIORA_HOME="+home, "LIORA_LLM_PROVIDER=gemini", "LIORA_LLM_MODEL=gemini-test", "API_KEY=secret-from-test")
+	runOutput, runErr := run.CombinedOutput()
+
+	// Then
+	if runErr == nil {
+		t.Fatalf("expected failing hook run, got success:\n%s", string(runOutput))
+	}
+	if !strings.Contains(string(runOutput), "hook pre-run failed") || strings.Contains(string(runOutput), "secret-from-test") {
+		t.Fatalf("expected redacted hook failure output, got:\n%s", string(runOutput))
+	}
+	logData, err := os.ReadFile(filepath.Join(workspace, "hook.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logData), "hook-run") {
+		t.Fatalf("expected hook to run through CLI, log=%q", string(logData))
+	}
+
+	// When
+	replay := exec.Command("go", "run", ".", "-workspace", workspace, "hook", "replay-failure", "pre-run")
+	replay.Env = cleanLLMEnv(t, "LIORA_HOME="+home, "LIORA_LLM_PROVIDER=gemini", "LIORA_LLM_MODEL=gemini-test")
+	replayOutput, replayErr := replay.CombinedOutput()
+
+	// Then
+	if replayErr == nil {
+		t.Fatalf("expected replayed failure, got success:\n%s", string(replayOutput))
+	}
+	logData, err = os.ReadFile(filepath.Join(workspace, "hook.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(logData), "hook-run") != 2 {
+		t.Fatalf("expected replay to run the hook a second time, log=%q output=%s", string(logData), string(replayOutput))
+	}
+
+	// When
+	doctor := exec.Command("go", "run", ".", "-doctor")
+	doctor.Env = cleanLLMEnv(t, "LIORA_HOME="+home, "LIORA_LLM_PROVIDER=gemini", "LIORA_LLM_MODEL=gemini-test")
+	doctorOutput, err := doctor.CombinedOutput()
+
+	// Then
+	if err != nil {
+		t.Fatalf("doctor command failed: %v\n%s", err, string(doctorOutput))
+	}
+	for _, want := range []string{
+		"hook_status: configured total=1 enabled=1 disabled=0",
+		"hook_security.hook_side_effect: 1",
+		"hook_last_failure: failed total=2",
+	} {
+		if !strings.Contains(string(doctorOutput), want) {
+			t.Fatalf("expected doctor output to contain %q, got:\n%s", want, string(doctorOutput))
+		}
+	}
+	if strings.Contains(string(doctorOutput), command) {
+		t.Fatalf("doctor should not print raw hook command:\n%s", string(doctorOutput))
+	}
+}
+
 func cleanLLMEnv(t *testing.T, extra ...string) []string {
 	t.Helper()
 	blocked := map[string]bool{

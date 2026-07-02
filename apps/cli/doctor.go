@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"sort"
 	"strings"
 
+	hookpkg "github.com/Lioooooo123/liora/internal/hook"
 	"github.com/Lioooooo123/liora/internal/llm"
 	"github.com/Lioooooo123/liora/internal/store"
 )
@@ -170,8 +172,36 @@ func renderAutomationStatus(reportContext doctorReportContext) []string {
 		lines = append(lines, "hook_status: unavailable")
 	} else {
 		lines = append(lines, automationStatusLine("hook", hooks))
+		lines = append(lines, hookSecurityStatus(reportContext.Store)...)
 	}
 	return lines
+}
+
+func hookSecurityStatus(persistentStore *store.Store) []string {
+	summary, failures, err := hookpkg.SecuritySummary(contextless(), persistentStore)
+	if err != nil {
+		return []string{"hook_security: unavailable"}
+	}
+	lines := []string{"hook_security: none"}
+	if len(summary) > 0 {
+		lines = lines[:0]
+		keys := make([]string, 0, len(summary))
+		for risk := range summary {
+			keys = append(keys, risk)
+		}
+		sort.Strings(keys)
+		for _, risk := range keys {
+			lines = append(lines, fmt.Sprintf("hook_security.%s: %d", risk, summary[risk]))
+		}
+	}
+	if failures > 0 {
+		lines = append(lines, fmt.Sprintf("hook_last_failure: failed total=%d", failures))
+	}
+	return lines
+}
+
+func contextless() context.Context {
+	return context.Background()
 }
 
 func automationConfigSummaryFor(persistentStore *store.Store, table string) (automationConfigSummary, error) {

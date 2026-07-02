@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const CurrentSchemaVersion = 16
+const CurrentSchemaVersion = 17
 
 type RetentionPolicy string
 
@@ -93,6 +93,7 @@ func schemaTables() []SchemaTableReport {
 		{Name: "permission_rules", Retention: RetentionLongTerm, RetentionRationale: "user permission policy decisions"},
 		{Name: "schedules", Retention: RetentionLongTerm, RetentionRationale: "user automation configuration"},
 		{Name: "hooks", Retention: RetentionLongTerm, RetentionRationale: "workspace automation configuration"},
+		{Name: "hook_runs", Retention: RetentionCleanable, RetentionRationale: "hook failure and replay audit trail"},
 		{Name: "conversation_threads", Retention: RetentionLongTerm, RetentionRationale: "thread identity and navigation state"},
 		{Name: "workspace_model_bindings", Retention: RetentionLongTerm, RetentionRationale: "workspace default model selection state"},
 		{Name: "thread_model_bindings", Retention: RetentionLongTerm, RetentionRationale: "thread model selection state"},
