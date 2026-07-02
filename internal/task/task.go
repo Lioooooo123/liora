@@ -196,6 +196,10 @@ type Task struct {
 	Automation               AutomationMetadata `json:"automation"`
 	ApprovalGranted          bool               `json:"approval_granted,omitempty"`
 	ParentTaskID             string             `json:"parent_task_id,omitempty"`
+	ParentThreadID           string             `json:"parent_thread_id,omitempty"`
+	ChildThreadID            string             `json:"child_thread_id,omitempty"`
+	SubagentName             string             `json:"subagent_name,omitempty"`
+	Role                     string             `json:"role,omitempty"`
 	Scope                    TaskScope          `json:"scope,omitempty"`
 	InheritedScopeFromParent bool               `json:"inherited_scope_from_parent,omitempty"`
 	ApprovalGrants           []string           `json:"approval_grants,omitempty"`
@@ -263,6 +267,10 @@ type CreateRequest struct {
 	Automation        AutomationMetadata `json:"automation,omitempty"`
 	Schedule          ScheduleMetadata   `json:"schedule,omitempty"`
 	ParentTaskID      string             `json:"parent_task_id,omitempty"`
+	ParentThreadID    string             `json:"parent_thread_id,omitempty"`
+	ChildThreadID     string             `json:"child_thread_id,omitempty"`
+	SubagentName      string             `json:"subagent_name,omitempty"`
+	Role              string             `json:"role,omitempty"`
 	Scope             TaskScope          `json:"scope,omitempty"`
 	ApprovalGrants    []string           `json:"approval_grants,omitempty"`
 	AutoApproveParent bool               `json:"auto_approve_parent,omitempty"`
@@ -502,6 +510,10 @@ type EventPayload struct {
 	Trust           string `json:"trust,omitempty"`
 	ContentSource   string `json:"content_source,omitempty"`
 	ParentTaskID    string `json:"parent_task_id,omitempty"`
+	ParentThreadID  string `json:"parent_thread_id,omitempty"`
+	ChildThreadID   string `json:"child_thread_id,omitempty"`
+	SubagentName    string `json:"subagent_name,omitempty"`
+	Role            string `json:"role,omitempty"`
 	SourceTaskID    string `json:"source_task_id,omitempty"`
 	SourceStartID   string `json:"source_start_id,omitempty"`
 	SourceEndID     string `json:"source_end_id,omitempty"`

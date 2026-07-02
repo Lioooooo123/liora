@@ -1141,6 +1141,10 @@ func initDB(db *sql.DB) error {
 					automation_trigger TEXT NOT NULL DEFAULT '',
 					approval_granted INTEGER NOT NULL DEFAULT 0,
 					parent_task_id TEXT NOT NULL DEFAULT '',
+					parent_thread_id TEXT NOT NULL DEFAULT '',
+					child_thread_id TEXT NOT NULL DEFAULT '',
+					subagent_name TEXT NOT NULL DEFAULT '',
+					role TEXT NOT NULL DEFAULT '',
 						scope_json TEXT NOT NULL DEFAULT '{}',
 						inherited_scope_from_parent INTEGER NOT NULL DEFAULT 0,
 						approval_grants_json TEXT NOT NULL DEFAULT '[]',
@@ -1401,6 +1405,10 @@ func initDB(db *sql.DB) error {
 		`ALTER TABLE tasks ADD COLUMN automation_source TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE tasks ADD COLUMN automation_trigger TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE tasks ADD COLUMN parent_task_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tasks ADD COLUMN parent_thread_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tasks ADD COLUMN child_thread_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tasks ADD COLUMN subagent_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tasks ADD COLUMN role TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE tasks ADD COLUMN scope_json TEXT NOT NULL DEFAULT '{}'`,
 		`ALTER TABLE tasks ADD COLUMN inherited_scope_from_parent INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE tasks ADD COLUMN approval_grants_json TEXT NOT NULL DEFAULT '[]'`,
@@ -1458,6 +1466,12 @@ func initDB(db *sql.DB) error {
 		return err
 	}
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_tasks_parent_thread ON tasks(parent_thread_id)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_tasks_child_thread ON tasks(child_thread_id)`); err != nil {
 		return err
 	}
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_workspace_created ON memories(workspace, created_at)`); err != nil {

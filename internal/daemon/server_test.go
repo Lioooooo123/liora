@@ -200,6 +200,93 @@ func TestServerChildTaskScopeRequiresParentSubset(t *testing.T) {
 	}
 }
 
+func TestServerTaskRelationMetadataRoundTrips(t *testing.T) {
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	server := httptest.NewServer(NewServer(Config{Repository: repo, Store: persistentStore}))
+	defer server.Close()
+	workspace := t.TempDir()
+	parentThread := createTestThread(t, server.URL, workspace, "Parent thread")
+	childThread := createTestThread(t, server.URL, workspace, "Child thread")
+
+	parent := postTaskForTest(t, server.URL, `{
+		"workspace":`+quote(workspace)+`,
+		"thread_id":`+quote(parentThread.ID)+`,
+		"prompt":"parent relation",
+		"scope":{"paths":[`+quote(workspace)+`]}
+	}`)
+	child := postTaskForTest(t, server.URL, fmt.Sprintf(`{
+		"workspace":%s,
+		"thread_id":%s,
+		"prompt":"child relation",
+		"parent_task_id":%s,
+		"parent_thread_id":%s,
+		"child_thread_id":%s,
+		"subagent_name":"review-worker",
+		"role":"reviewer",
+		"scope":{"paths":[%s]}
+	}`, quote(workspace), quote(childThread.ID), quote(parent.Task.ID), quote(parentThread.ID), quote(childThread.ID), quote(workspace+"/src")))
+	if child.Task.ParentThreadID != parentThread.ID || child.Task.ChildThreadID != childThread.ID {
+		t.Fatalf("expected child relation metadata in create response, got %#v", child.Task)
+	}
+	if child.Task.SubagentName != "review-worker" || child.Task.Role != "reviewer" {
+		t.Fatalf("expected child subagent metadata in create response, got %#v", child.Task)
+	}
+
+	resp, err := http.Get(server.URL + "/v1/tasks/" + child.Task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected get status %d", resp.StatusCode)
+	}
+	var got taskpkg.Task
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ParentThreadID != parentThread.ID || got.ChildThreadID != childThread.ID || got.SubagentName != "review-worker" || got.Role != "reviewer" {
+		t.Fatalf("expected get to round-trip relation metadata, got %#v", got)
+	}
+
+	resp, err = http.Get(server.URL + "/v1/tasks?workspace=" + url.QueryEscape(workspace) + "&limit=10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected list status %d", resp.StatusCode)
+	}
+	var listed []taskpkg.Task
+	if err := json.NewDecoder(resp.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if !taskListHasRelationMetadata(listed, child.Task.ID, parentThread.ID, childThread.ID) {
+		t.Fatalf("expected list to include child relation metadata, got %#v", listed)
+	}
+
+	resp, err = http.Get(server.URL + "/v1/workbench?workspace=" + url.QueryEscape(workspace) + "&limit=10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected workbench status %d", resp.StatusCode)
+	}
+	var workbench taskpkg.Workbench
+	if err := json.NewDecoder(resp.Body).Decode(&workbench); err != nil {
+		t.Fatal(err)
+	}
+	if !workbenchHasRelationMetadata(workbench, child.Task.ID, parentThread.ID, childThread.ID) {
+		t.Fatalf("expected workbench to include child relation metadata, got %#v", workbench)
+	}
+}
+
 func TestServerPermissionRulesPersistAndAffectTasks(t *testing.T) {
 	workspace := t.TempDir()
 	persistentStore := store.New(t.TempDir())
@@ -322,6 +409,31 @@ func postTaskForTest(t *testing.T, baseURL string, body string) taskpkg.CreateRe
 		t.Fatal(err)
 	}
 	return created
+}
+
+func taskListHasRelationMetadata(tasks []taskpkg.Task, taskID string, parentThreadID string, childThreadID string) bool {
+	for _, task := range tasks {
+		if task.ID == taskID && task.ParentThreadID == parentThreadID && task.ChildThreadID == childThreadID {
+			return true
+		}
+	}
+	return false
+}
+
+func workbenchHasRelationMetadata(workbench taskpkg.Workbench, taskID string, parentThreadID string, childThreadID string) bool {
+	if taskListHasRelationMetadata(workbench.ActiveTasks, taskID, parentThreadID, childThreadID) ||
+		taskListHasRelationMetadata(workbench.QueuedTasks, taskID, parentThreadID, childThreadID) ||
+		taskListHasRelationMetadata(workbench.RecentTasks, taskID, parentThreadID, childThreadID) {
+		return true
+	}
+	for _, thread := range workbench.Threads {
+		if taskListHasRelationMetadata(thread.ActiveTasks, taskID, parentThreadID, childThreadID) ||
+			taskListHasRelationMetadata(thread.QueuedTasks, taskID, parentThreadID, childThreadID) ||
+			taskListHasRelationMetadata(thread.RecentTasks, taskID, parentThreadID, childThreadID) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestServerServesCapabilities(t *testing.T) {

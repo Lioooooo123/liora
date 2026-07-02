@@ -475,6 +475,10 @@ describe("daemon protocol client", () => {
             run_async: true,
             origin: "background",
             parent_task_id: "task-parent",
+            parent_thread_id: "thread-parent",
+            child_thread_id: "thread-child",
+            subagent_name: "review-worker",
+            role: "reviewer",
             scope: {
               paths: ["/repo/src"],
               network_hosts: ["api.internal"],
@@ -491,6 +495,10 @@ describe("daemon protocol client", () => {
                 origin: "background",
                 automation: { kind: "background", risk: "safe" },
                 parent_task_id: "task-parent",
+                parent_thread_id: "thread-parent",
+                child_thread_id: "thread-child",
+                subagent_name: "review-worker",
+                role: "reviewer",
                 inherited_scope_from_parent: true,
                 scope: {
                   paths: ["/repo/src"],
@@ -569,6 +577,10 @@ describe("daemon protocol client", () => {
       origin: "background",
       automation: { kind: "background", risk: "safe" },
       parent_task_id: "task-parent",
+      parent_thread_id: "thread-parent",
+      child_thread_id: "thread-child",
+      subagent_name: "review-worker",
+      role: "reviewer",
       scope: {
         paths: ["/repo/src"],
         network_hosts: ["api.internal"],
@@ -582,6 +594,10 @@ describe("daemon protocol client", () => {
     expect(created.task.id).toBe("task-001")
     expect(created.task.automation.risk).toBe("safe")
     expect(created.task.parent_task_id).toBe("task-parent")
+    expect(created.task.parent_thread_id).toBe("thread-parent")
+    expect(created.task.child_thread_id).toBe("thread-child")
+    expect(created.task.subagent_name).toBe("review-worker")
+    expect(created.task.role).toBe("reviewer")
     expect(created.task.scope?.paths).toEqual(["/repo/src"])
     expect(created.task.approval_grants).toEqual([])
     expect(workbench.sessions).toEqual([])

@@ -70,6 +70,197 @@ func TestRepositoryCreatesListsAndReadsTaskEvents(t *testing.T) {
 	}
 }
 
+func TestRepositoryPersistsTaskThreadRelationMetadata(t *testing.T) {
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	workspace := t.TempDir()
+	parentThread, err := persistentStore.CreateConversationThread(store.CreateConversationThreadRequest{
+		Workspace: workspace,
+		Title:     "Parent thread",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childThread, err := persistentStore.CreateConversationThread(store.CreateConversationThreadRequest{
+		Workspace: workspace,
+		Title:     "Child thread",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "parent task",
+		Scope: TaskScope{
+			Paths:           []string{workspace},
+			NetworkHosts:    []string{"api.internal"},
+			MCPServers:      []string{"filesystem"},
+			MCPTools:        []string{"filesystem.read"},
+			ApprovalActions: []string{"apply_patch"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	child, err := repo.Create(t.Context(), CreateRequest{
+		Workspace:      workspace,
+		Prompt:         "child task",
+		ParentTaskID:   parent.ID,
+		ParentThreadID: " " + parentThread.ID + " ",
+		ChildThreadID:  " " + childThread.ID + " ",
+		SubagentName:   " review-worker ",
+		Role:           " reviewer ",
+		Scope:          TaskScope{Paths: []string{workspace + "/src"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.ParentThreadID != parentThread.ID || child.ChildThreadID != childThread.ID {
+		t.Fatalf("expected normalized thread relation ids, got %#v", child)
+	}
+	if child.SubagentName != "review-worker" || child.Role != "reviewer" {
+		t.Fatalf("expected normalized subagent metadata, got %#v", child)
+	}
+
+	got, err := repo.Get(t.Context(), child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ParentThreadID != parentThread.ID || got.ChildThreadID != childThread.ID || got.SubagentName != "review-worker" || got.Role != "reviewer" {
+		t.Fatalf("expected get to round-trip task relation metadata, got %#v", got)
+	}
+	listed, err := repo.ListByWorkspace(t.Context(), workspace, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listedChild Task
+	for _, item := range listed {
+		if item.ID == child.ID {
+			listedChild = item
+			break
+		}
+	}
+	if listedChild.ID == "" || listedChild.ParentThreadID != parentThread.ID || listedChild.ChildThreadID != childThread.ID {
+		t.Fatalf("expected list to round-trip task relation metadata, got %#v", listed)
+	}
+	var parentThreadID, childThreadID, subagentName, role string
+	if err := db.QueryRow(`
+		SELECT parent_thread_id, child_thread_id, subagent_name, role
+		FROM tasks
+		WHERE id = ?
+	`, child.ID).Scan(&parentThreadID, &childThreadID, &subagentName, &role); err != nil {
+		t.Fatal(err)
+	}
+	if parentThreadID != parentThread.ID || childThreadID != childThread.ID || subagentName != "review-worker" || role != "reviewer" {
+		t.Fatalf("unexpected raw relation row parent=%q child=%q subagent=%q role=%q", parentThreadID, childThreadID, subagentName, role)
+	}
+}
+
+func TestRepositoryRejectsInvalidTaskThreadRelations(t *testing.T) {
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	workspace := t.TempDir()
+	parentThread, err := persistentStore.CreateConversationThread(store.CreateConversationThreadRequest{
+		Workspace: workspace,
+		Title:     "Parent thread",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherThread, err := persistentStore.CreateConversationThread(store.CreateConversationThreadRequest{
+		Workspace: t.TempDir(),
+		Title:     "Other thread",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "parent scope",
+		Scope:     TaskScope{NetworkHosts: []string{"api.internal"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := repo.ListByWorkspace(t.Context(), workspace, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		request CreateRequest
+		want    string
+	}{
+		{
+			name: "missing parent thread",
+			request: CreateRequest{
+				Workspace:      workspace,
+				Prompt:         "missing parent thread",
+				ParentTaskID:   parent.ID,
+				ParentThreadID: "thread_missing",
+			},
+			want: "parent_thread_id",
+		},
+		{
+			name: "cross workspace child thread",
+			request: CreateRequest{
+				Workspace:      workspace,
+				Prompt:         "cross child thread",
+				ParentTaskID:   parent.ID,
+				ParentThreadID: parentThread.ID,
+				ChildThreadID:  otherThread.ID,
+			},
+			want: "child_thread_id",
+		},
+		{
+			name: "oversized subagent name",
+			request: CreateRequest{
+				Workspace:    workspace,
+				Prompt:       "oversized subagent",
+				ParentTaskID: parent.ID,
+				SubagentName: strings.Repeat("x", 65),
+			},
+			want: "subagent_name",
+		},
+		{
+			name: "scope outside parent",
+			request: CreateRequest{
+				Workspace:    workspace,
+				Prompt:       "outside scope",
+				ParentTaskID: parent.ID,
+				Scope:        TaskScope{NetworkHosts: []string{"public.example.com"}},
+			},
+			want: "outside parent scope",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := repo.Create(t.Context(), tc.request)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+	after, err := repo.ListByWorkspace(t.Context(), workspace, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("invalid relation requests should not insert tasks, before=%d after=%d", len(before), len(after))
+	}
+}
+
 func TestEventCatalogCoversFirstClassEventFamilies(t *testing.T) {
 	definitions := EventDefinitions()
 	families := map[EventFamily]bool{}

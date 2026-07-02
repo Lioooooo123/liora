@@ -61,14 +61,18 @@ func (s *server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	_ = s.repo.AppendEvent(r.Context(), task.ID, taskpkg.EventTaskCreated, taskpkg.EventPayload{
-		Message:      task.UserInput,
-		Status:       string(task.Status),
-		Origin:       string(task.Origin),
-		Kind:         string(task.Automation.Kind),
-		Risk:         string(task.Automation.Risk),
-		Source:       task.Automation.Source,
-		Trigger:      task.Automation.Trigger,
-		ParentTaskID: task.ParentTaskID,
+		Message:        task.UserInput,
+		Status:         string(task.Status),
+		Origin:         string(task.Origin),
+		Kind:           string(task.Automation.Kind),
+		Risk:           string(task.Automation.Risk),
+		Source:         task.Automation.Source,
+		Trigger:        task.Automation.Trigger,
+		ParentTaskID:   task.ParentTaskID,
+		ParentThreadID: task.ParentThreadID,
+		ChildThreadID:  task.ChildThreadID,
+		SubagentName:   task.SubagentName,
+		Role:           task.Role,
 	})
 	if task.Origin == taskpkg.OriginSchedule && schedule.ID != "" {
 		_ = s.repo.AppendEvent(r.Context(), task.ID, taskpkg.EventScheduleTriggered, taskpkg.EventPayload{
@@ -211,15 +215,19 @@ func (s *server) pauseDangerousAutomation(ctx context.Context, task taskpkg.Task
 		return err
 	}
 	return s.repo.AppendEvent(ctx, task.ID, taskpkg.EventPermissionRequest, taskpkg.EventPayload{
-		Message:      "Dangerous automation requires user approval before starting.",
-		Status:       string(taskpkg.StatusWaitingUser),
-		Risk:         string(task.Automation.Risk),
-		Origin:       string(task.Origin),
-		Kind:         string(task.Automation.Kind),
-		Source:       task.Automation.Source,
-		Trigger:      task.Automation.Trigger,
-		ParentTaskID: task.ParentTaskID,
-		ExpiresAt:    taskpkg.ExpiresAtAfter(taskpkg.DefaultWaitExpiry),
+		Message:        "Dangerous automation requires user approval before starting.",
+		Status:         string(taskpkg.StatusWaitingUser),
+		Risk:           string(task.Automation.Risk),
+		Origin:         string(task.Origin),
+		Kind:           string(task.Automation.Kind),
+		Source:         task.Automation.Source,
+		Trigger:        task.Automation.Trigger,
+		ParentTaskID:   task.ParentTaskID,
+		ParentThreadID: task.ParentThreadID,
+		ChildThreadID:  task.ChildThreadID,
+		SubagentName:   task.SubagentName,
+		Role:           task.Role,
+		ExpiresAt:      taskpkg.ExpiresAtAfter(taskpkg.DefaultWaitExpiry),
 	})
 }
 

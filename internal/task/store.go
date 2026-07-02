@@ -21,10 +21,46 @@ type Repository struct {
 	subscribers   map[string][]chan struct{}
 }
 
-const transcriptEntrySchemaVersion = 9
+const (
+	transcriptEntrySchemaVersion = 9
+	maxTaskRelationLabelRunes    = 64
+)
 
 func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db, subscribers: map[string][]chan struct{}{}}
+}
+
+func normalizeTaskRelationLabel(field string, value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if len([]rune(trimmed)) > maxTaskRelationLabelRunes {
+		return "", fmt.Errorf("%s must be at most %d characters", field, maxTaskRelationLabelRunes)
+	}
+	return trimmed, nil
+}
+
+func (r *Repository) ensureThreadInWorkspaceTx(ctx context.Context, querier sessionQuerier, field string, id string, workspace string) error {
+	if id == "" {
+		return nil
+	}
+	var threadWorkspace, archivedAt string
+	err := querier.QueryRowContext(ctx, `
+		SELECT workspace, archived_at
+		FROM conversation_threads
+		WHERE id = ?
+	`, id).Scan(&threadWorkspace, &archivedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%s %q: thread not found", field, id)
+	}
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(archivedAt) != "" {
+		return fmt.Errorf("%s %q is archived", field, id)
+	}
+	if threadWorkspace != workspace {
+		return fmt.Errorf("%s %q belongs to workspace %q, not %q", field, id, threadWorkspace, workspace)
+	}
+	return nil
 }
 
 func (r *Repository) Create(ctx context.Context, request CreateRequest) (Task, error) {
@@ -44,6 +80,16 @@ func (r *Repository) Create(ctx context.Context, request CreateRequest) (Task, e
 		return Task{}, err
 	}
 	parentTaskID := strings.TrimSpace(request.ParentTaskID)
+	parentThreadID := strings.TrimSpace(request.ParentThreadID)
+	childThreadID := strings.TrimSpace(request.ChildThreadID)
+	subagentName, err := normalizeTaskRelationLabel("subagent_name", request.SubagentName)
+	if err != nil {
+		return Task{}, err
+	}
+	role, err := normalizeTaskRelationLabel("role", request.Role)
+	if err != nil {
+		return Task{}, err
+	}
 	requestModelConfig := request.ModelConfig
 	scope := normalizeTaskScope(request.Scope)
 	approvalGrants := normalizeStringList(request.ApprovalGrants)
@@ -53,6 +99,12 @@ func (r *Repository) Create(ctx context.Context, request CreateRequest) (Task, e
 		return Task{}, err
 	}
 	defer tx.Rollback()
+	if err := r.ensureThreadInWorkspaceTx(ctx, tx, "parent_thread_id", parentThreadID, workspace); err != nil {
+		return Task{}, err
+	}
+	if err := r.ensureThreadInWorkspaceTx(ctx, tx, "child_thread_id", childThreadID, workspace); err != nil {
+		return Task{}, err
+	}
 	sessionID := strings.TrimSpace(request.SessionID)
 	if sessionID == "" {
 		sessionID = newID("session")
@@ -112,6 +164,10 @@ func (r *Repository) Create(ctx context.Context, request CreateRequest) (Task, e
 		Automation:               automation,
 		ApprovalGranted:          false,
 		ParentTaskID:             parentTaskID,
+		ParentThreadID:           parentThreadID,
+		ChildThreadID:            childThreadID,
+		SubagentName:             subagentName,
+		Role:                     role,
 		Scope:                    scope,
 		InheritedScopeFromParent: inheritedScopeFromParent,
 		ApprovalGrants:           approvalGrants,
@@ -120,9 +176,9 @@ func (r *Repository) Create(ctx context.Context, request CreateRequest) (Task, e
 		UpdatedAt:                now,
 	}
 	_, err = tx.ExecContext(ctx, `
-				INSERT INTO tasks (id, session_id, title, user_input, natural, status, workspace, origin, automation_kind, automation_risk, automation_source, automation_trigger, approval_granted, parent_task_id, scope_json, inherited_scope_from_parent, approval_grants_json, model_provider, model_name, model_base_url, model_profile, model_source, created_at, updated_at, completed_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
-			`, task.ID, task.SessionID, task.Title, task.UserInput, boolInt(task.Natural), string(task.Status), task.Workspace, string(task.Origin), string(task.Automation.Kind), string(task.Automation.Risk), task.Automation.Source, task.Automation.Trigger, boolInt(task.ApprovalGranted), task.ParentTaskID, scopeJSON, boolInt(task.InheritedScopeFromParent), approvalGrantsJSON, modelConfigValue(modelConfig, "provider"), modelConfigValue(modelConfig, "model"), modelConfigValue(modelConfig, "base_url"), modelConfigValue(modelConfig, "profile"), modelConfigValue(modelConfig, "source"), formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
+				INSERT INTO tasks (id, session_id, title, user_input, natural, status, workspace, origin, automation_kind, automation_risk, automation_source, automation_trigger, approval_granted, parent_task_id, parent_thread_id, child_thread_id, subagent_name, role, scope_json, inherited_scope_from_parent, approval_grants_json, model_provider, model_name, model_base_url, model_profile, model_source, created_at, updated_at, completed_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+			`, task.ID, task.SessionID, task.Title, task.UserInput, boolInt(task.Natural), string(task.Status), task.Workspace, string(task.Origin), string(task.Automation.Kind), string(task.Automation.Risk), task.Automation.Source, task.Automation.Trigger, boolInt(task.ApprovalGranted), task.ParentTaskID, task.ParentThreadID, task.ChildThreadID, task.SubagentName, task.Role, scopeJSON, boolInt(task.InheritedScopeFromParent), approvalGrantsJSON, modelConfigValue(modelConfig, "provider"), modelConfigValue(modelConfig, "model"), modelConfigValue(modelConfig, "base_url"), modelConfigValue(modelConfig, "profile"), modelConfigValue(modelConfig, "source"), formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
 	if err != nil {
 		return Task{}, err
 	}
@@ -195,10 +251,10 @@ func (r *Repository) getTaskTx(ctx context.Context, querier sessionQuerier, id s
 	var modelProvider, modelName, modelBaseURL, modelProfile, modelSource string
 	var natural, approvalGranted, inheritedScopeFromParent int
 	err := querier.QueryRowContext(ctx, `
-				SELECT id, session_id, title, user_input, natural, status, workspace, origin, automation_kind, automation_risk, automation_source, automation_trigger, approval_granted, parent_task_id, scope_json, inherited_scope_from_parent, approval_grants_json, model_provider, model_name, model_base_url, model_profile, model_source, created_at, updated_at, completed_at
+				SELECT id, session_id, title, user_input, natural, status, workspace, origin, automation_kind, automation_risk, automation_source, automation_trigger, approval_granted, parent_task_id, parent_thread_id, child_thread_id, subagent_name, role, scope_json, inherited_scope_from_parent, approval_grants_json, model_provider, model_name, model_base_url, model_profile, model_source, created_at, updated_at, completed_at
 				FROM tasks
 				WHERE id = ?
-			`, id).Scan(&task.ID, &task.SessionID, &task.Title, &task.UserInput, &natural, &task.Status, &task.Workspace, &task.Origin, &task.Automation.Kind, &task.Automation.Risk, &task.Automation.Source, &task.Automation.Trigger, &approvalGranted, &task.ParentTaskID, &scopeJSON, &inheritedScopeFromParent, &approvalGrantsJSON, &modelProvider, &modelName, &modelBaseURL, &modelProfile, &modelSource, &createdAt, &updatedAt, &completedAt)
+			`, id).Scan(&task.ID, &task.SessionID, &task.Title, &task.UserInput, &natural, &task.Status, &task.Workspace, &task.Origin, &task.Automation.Kind, &task.Automation.Risk, &task.Automation.Source, &task.Automation.Trigger, &approvalGranted, &task.ParentTaskID, &task.ParentThreadID, &task.ChildThreadID, &task.SubagentName, &task.Role, &scopeJSON, &inheritedScopeFromParent, &approvalGrantsJSON, &modelProvider, &modelName, &modelBaseURL, &modelProfile, &modelSource, &createdAt, &updatedAt, &completedAt)
 	if err != nil {
 		return Task{}, err
 	}
@@ -222,7 +278,7 @@ func (r *Repository) List(ctx context.Context, limit int) ([]Task, error) {
 		limit = 50
 	}
 	rows, err := r.db.QueryContext(ctx, `
-			SELECT id, session_id, title, user_input, natural, status, workspace, origin, automation_kind, automation_risk, automation_source, automation_trigger, approval_granted, parent_task_id, scope_json, inherited_scope_from_parent, approval_grants_json, model_provider, model_name, model_base_url, model_profile, model_source, created_at, updated_at, completed_at
+			SELECT id, session_id, title, user_input, natural, status, workspace, origin, automation_kind, automation_risk, automation_source, automation_trigger, approval_granted, parent_task_id, parent_thread_id, child_thread_id, subagent_name, role, scope_json, inherited_scope_from_parent, approval_grants_json, model_provider, model_name, model_base_url, model_profile, model_source, created_at, updated_at, completed_at
 			FROM tasks
 			ORDER BY updated_at DESC, id DESC
 			LIMIT ?
@@ -243,7 +299,7 @@ func (r *Repository) ListByWorkspace(ctx context.Context, workspace string, limi
 		limit = 50
 	}
 	rows, err := r.db.QueryContext(ctx, `
-			SELECT id, session_id, title, user_input, natural, status, workspace, origin, automation_kind, automation_risk, automation_source, automation_trigger, approval_granted, parent_task_id, scope_json, inherited_scope_from_parent, approval_grants_json, model_provider, model_name, model_base_url, model_profile, model_source, created_at, updated_at, completed_at
+			SELECT id, session_id, title, user_input, natural, status, workspace, origin, automation_kind, automation_risk, automation_source, automation_trigger, approval_granted, parent_task_id, parent_thread_id, child_thread_id, subagent_name, role, scope_json, inherited_scope_from_parent, approval_grants_json, model_provider, model_name, model_base_url, model_profile, model_source, created_at, updated_at, completed_at
 			FROM tasks
 			WHERE workspace = ?
 			ORDER BY updated_at DESC, id DESC
@@ -265,7 +321,7 @@ func (r *Repository) ListBySession(ctx context.Context, sessionID string, limit 
 		limit = 50
 	}
 	rows, err := r.db.QueryContext(ctx, `
-			SELECT id, session_id, title, user_input, natural, status, workspace, origin, automation_kind, automation_risk, automation_source, automation_trigger, approval_granted, parent_task_id, scope_json, inherited_scope_from_parent, approval_grants_json, model_provider, model_name, model_base_url, model_profile, model_source, created_at, updated_at, completed_at
+			SELECT id, session_id, title, user_input, natural, status, workspace, origin, automation_kind, automation_risk, automation_source, automation_trigger, approval_granted, parent_task_id, parent_thread_id, child_thread_id, subagent_name, role, scope_json, inherited_scope_from_parent, approval_grants_json, model_provider, model_name, model_base_url, model_profile, model_source, created_at, updated_at, completed_at
 			FROM tasks
 			WHERE session_id = ?
 			ORDER BY updated_at DESC, id DESC
@@ -1491,7 +1547,7 @@ func escapeLike(value string) string {
 
 func (r *Repository) listBySessionAsc(ctx context.Context, sessionID string) ([]Task, error) {
 	rows, err := r.db.QueryContext(ctx, `
-			SELECT id, session_id, title, user_input, natural, status, workspace, origin, automation_kind, automation_risk, automation_source, automation_trigger, approval_granted, parent_task_id, scope_json, inherited_scope_from_parent, approval_grants_json, model_provider, model_name, model_base_url, model_profile, model_source, created_at, updated_at, completed_at
+			SELECT id, session_id, title, user_input, natural, status, workspace, origin, automation_kind, automation_risk, automation_source, automation_trigger, approval_granted, parent_task_id, parent_thread_id, child_thread_id, subagent_name, role, scope_json, inherited_scope_from_parent, approval_grants_json, model_provider, model_name, model_base_url, model_profile, model_source, created_at, updated_at, completed_at
 			FROM tasks
 			WHERE session_id = ?
 			ORDER BY created_at ASC, id ASC
@@ -2058,7 +2114,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		var scopeJSON, approvalGrantsJSON string
 		var modelProvider, modelName, modelBaseURL, modelProfile, modelSource string
 		var natural, approvalGranted, inheritedScopeFromParent int
-		if err := rows.Scan(&task.ID, &task.SessionID, &task.Title, &task.UserInput, &natural, &task.Status, &task.Workspace, &task.Origin, &task.Automation.Kind, &task.Automation.Risk, &task.Automation.Source, &task.Automation.Trigger, &approvalGranted, &task.ParentTaskID, &scopeJSON, &inheritedScopeFromParent, &approvalGrantsJSON, &modelProvider, &modelName, &modelBaseURL, &modelProfile, &modelSource, &createdAt, &updatedAt, &completedAt); err != nil {
+		if err := rows.Scan(&task.ID, &task.SessionID, &task.Title, &task.UserInput, &natural, &task.Status, &task.Workspace, &task.Origin, &task.Automation.Kind, &task.Automation.Risk, &task.Automation.Source, &task.Automation.Trigger, &approvalGranted, &task.ParentTaskID, &task.ParentThreadID, &task.ChildThreadID, &task.SubagentName, &task.Role, &scopeJSON, &inheritedScopeFromParent, &approvalGrantsJSON, &modelProvider, &modelName, &modelBaseURL, &modelProfile, &modelSource, &createdAt, &updatedAt, &completedAt); err != nil {
 			return nil, err
 		}
 		task.Natural = natural != 0
