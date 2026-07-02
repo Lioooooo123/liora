@@ -15,7 +15,14 @@ func NewManager(config Config) *Manager {
 	if config.Servers == nil {
 		config.Servers = map[string]ServerConfig{}
 	}
-	return &Manager{config: config}
+	clients := make(map[string]*Client, len(config.Servers))
+	for name, server := range config.Servers {
+		if !server.IsEnabled() {
+			continue
+		}
+		clients[name] = NewClient(server)
+	}
+	return &Manager{config: config, clients: clients}
 }
 
 func (m *Manager) ListTools(ctx context.Context) ([]Tool, error) {
@@ -46,12 +53,27 @@ func (m *Manager) Call(ctx context.Context, server string, tool string, args map
 	if !ok {
 		return "", fmt.Errorf("unknown MCP server %q", server)
 	}
-	return NewClient(config).CallTool(ctx, tool, args)
+	if !config.IsEnabled() {
+		return "", fmt.Errorf("MCP server %q is disabled", server)
+	}
+	return m.clientFor(server).CallTool(ctx, tool, args)
+}
+
+func (m *Manager) Close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, client := range m.clients {
+		client.Close()
+	}
+	m.clients = map[string]*Client{}
 }
 
 func (m *Manager) serverNames() []string {
 	names := make([]string, 0, len(m.config.Servers))
-	for name := range m.config.Servers {
+	for name, server := range m.config.Servers {
+		if !server.IsEnabled() {
+			continue
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -66,7 +88,7 @@ type listToolsResult struct {
 func (m *Manager) listOneServer(ctx context.Context, name string) listToolsResult {
 	serverCtx, cancel := context.WithTimeout(ctx, listToolsTimeout)
 	defer cancel()
-	serverTools, err := NewClient(m.config.Servers[name]).ListTools(serverCtx)
+	serverTools, err := m.clientFor(name).ListTools(serverCtx)
 	if err != nil {
 		return listToolsResult{err: fmt.Errorf("%s: %w", name, err)}
 	}
@@ -74,6 +96,17 @@ func (m *Manager) listOneServer(ctx context.Context, name string) listToolsResul
 		serverTools[i].Server = name
 	}
 	return listToolsResult{tools: serverTools}
+}
+
+func (m *Manager) clientFor(name string) *Client {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	client, ok := m.clients[name]
+	if !ok {
+		client = NewClient(m.config.Servers[name])
+		m.clients[name] = client
+	}
+	return client
 }
 
 func collectListToolsResults(results []listToolsResult) ([]Tool, error) {

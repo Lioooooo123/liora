@@ -484,9 +484,13 @@ func mcpManagerFromStore(s *store.Store) (*mcppkg.Manager, error) {
 	servers := make(map[string]mcppkg.ServerConfig, len(config.Servers))
 	for name, server := range config.Servers {
 		servers[name] = mcppkg.ServerConfig{
-			Command: server.Command,
-			Args:    server.Args,
-			Env:     server.Env,
+			Command:     server.Command,
+			Args:        server.Args,
+			Env:         server.Env,
+			Enabled:     server.Enabled,
+			Source:      server.Source,
+			Version:     server.Version,
+			Permissions: server.Permissions,
 		}
 	}
 	return mcppkg.NewManager(mcppkg.Config{Servers: servers}), nil

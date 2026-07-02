@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -12,9 +13,13 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Command string            `json:"command"`
-	Args    []string          `json:"args,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
+	Command     string            `json:"command"`
+	Args        []string          `json:"args,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	Enabled     *bool             `json:"enabled,omitempty"`
+	Source      string            `json:"source,omitempty"`
+	Version     string            `json:"version,omitempty"`
+	Permissions []string          `json:"permissions,omitempty"`
 }
 
 type Tool struct {
@@ -25,12 +30,16 @@ type Tool struct {
 }
 
 type Client struct {
-	config ServerConfig
-	nextID atomic.Int64
+	config  ServerConfig
+	nextID  atomic.Int64
+	mu      sync.Mutex
+	session *session
 }
 
 type Manager struct {
-	config Config
+	config  Config
+	mu      sync.Mutex
+	clients map[string]*Client
 }
 
 func NewClient(config ServerConfig) *Client {
@@ -38,30 +47,27 @@ func NewClient(config ServerConfig) *Client {
 }
 
 func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
-	session, err := c.start(ctx)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	session, err := c.ensureSession(ctx)
 	if err != nil {
-		return nil, err
-	}
-	defer session.close()
-	if err := session.initialize(ctx); err != nil {
 		return nil, err
 	}
 	var result struct {
 		Tools []Tool `json:"tools"`
 	}
 	if err := session.request(ctx, "tools/list", nil, &result); err != nil {
+		c.resetSession()
 		return nil, err
 	}
 	return result.Tools, nil
 }
 
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]any) (string, error) {
-	session, err := c.start(ctx)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	session, err := c.ensureSession(ctx)
 	if err != nil {
-		return "", err
-	}
-	defer session.close()
-	if err := session.initialize(ctx); err != nil {
 		return "", err
 	}
 	var result struct {
@@ -73,6 +79,7 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 	}
 	params := map[string]any{"name": name, "arguments": args}
 	if err := session.request(ctx, "tools/call", params, &result); err != nil {
+		c.resetSession()
 		return "", err
 	}
 	var lines []string
@@ -86,4 +93,38 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 		return output, errors.New(output)
 	}
 	return output, nil
+}
+
+func (c *Client) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.resetSession()
+}
+
+func (c *Client) ensureSession(ctx context.Context) (*session, error) {
+	if c.session != nil {
+		return c.session, nil
+	}
+	session, err := c.start(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := session.initialize(ctx); err != nil {
+		session.close()
+		return nil, err
+	}
+	c.session = session
+	return session, nil
+}
+
+func (c *Client) resetSession() {
+	if c.session == nil {
+		return
+	}
+	c.session.close()
+	c.session = nil
+}
+
+func (s ServerConfig) IsEnabled() bool {
+	return s.Enabled == nil || *s.Enabled
 }

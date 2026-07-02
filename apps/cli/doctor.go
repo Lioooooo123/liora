@@ -134,20 +134,41 @@ func renderMCPStatus(reportContext doctorReportContext) []string {
 		return []string{"mcp_status: none servers=0"}
 	}
 	names := make([]string, 0, len(config.Servers))
+	enabledCount := 0
 	for name := range config.Servers {
 		names = append(names, name)
+		if mcpServerEnabled(config.Servers[name]) {
+			enabledCount++
+		}
 	}
 	sort.Strings(names)
-	lines := []string{fmt.Sprintf("mcp_status: configured servers=%d", len(names))}
+	lines := []string{fmt.Sprintf("mcp_status: configured servers=%d enabled=%d disabled=%d", len(names), enabledCount, len(names)-enabledCount)}
 	for _, name := range names {
 		server := config.Servers[name]
 		commandStatus := "missing"
 		if strings.TrimSpace(server.Command) != "" {
 			commandStatus = "configured"
 		}
-		lines = append(lines, fmt.Sprintf("mcp.server.%s: configured command=%s args=%d env=redacted(%d) tool_count=unknown auth=not_probed", name, commandStatus, len(server.Args), len(server.Env)))
+		state := "disabled"
+		if mcpServerEnabled(server) {
+			state = "enabled"
+		}
+		lines = append(lines, fmt.Sprintf("mcp.server.%s: %s command=%s args=%d env=redacted(%d) permissions=%s source=%s version=%s tool_count=unknown auth=not_probed", name, state, commandStatus, len(server.Args), len(server.Env), mcpPermissionsSummary(server.Permissions), emptyDiagnosticValue(server.Source), emptyDiagnosticValue(server.Version)))
 	}
 	return lines
+}
+
+func mcpServerEnabled(server store.MCPServerConfig) bool {
+	return server.Enabled == nil || *server.Enabled
+}
+
+func mcpPermissionsSummary(permissions []string) string {
+	if len(permissions) == 0 {
+		return "none"
+	}
+	values := append([]string(nil), permissions...)
+	sort.Strings(values)
+	return strings.Join(values, ",")
 }
 
 type automationConfigSummary struct {

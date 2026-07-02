@@ -175,11 +175,23 @@ func TestDoctorReportIncludesProviderCapabilityAndThreadOverrides(t *testing.T) 
 
 func TestDoctorReportIncludesRuntimeMCPAndAutomationStatus(t *testing.T) {
 	persistentStore := store.New(t.TempDir())
+	disabled := false
 	if err := persistentStore.SaveMCPConfig(store.MCPConfig{Servers: map[string]store.MCPServerConfig{
+		"disabled": {
+			Command:     "node",
+			Args:        []string{"disabled.js", "--token", "disabled-secret"},
+			Enabled:     &disabled,
+			Source:      "workspace",
+			Version:     "0.9.0",
+			Permissions: []string{"network:api.example.test"},
+		},
 		"fake": {
-			Command: "python3",
-			Args:    []string{"server.py", "--token", "mcp-secret-arg"},
-			Env:     map[string]string{"API_KEY": "mcp-secret-env"},
+			Command:     "python3",
+			Args:        []string{"server.py", "--token", "mcp-secret-arg"},
+			Env:         map[string]string{"API_KEY": "mcp-secret-env"},
+			Source:      "global",
+			Version:     "1.2.3",
+			Permissions: []string{"filesystem:read", "network:api.example.test"},
 		},
 	}}); err != nil {
 		t.Fatal(err)
@@ -219,8 +231,9 @@ func TestDoctorReportIncludesRuntimeMCPAndAutomationStatus(t *testing.T) {
 		"permission.mode: prompt",
 		"network.default: deny",
 		"network.allowlist: api.example.test,registry.example.test",
-		"mcp_status: configured servers=1",
-		"mcp.server.fake: configured command=configured args=3 env=redacted(1) tool_count=unknown auth=not_probed",
+		"mcp_status: configured servers=2 enabled=1 disabled=1",
+		"mcp.server.disabled: disabled command=configured args=3 env=redacted(0) permissions=network:api.example.test source=workspace version=0.9.0 tool_count=unknown auth=not_probed",
+		"mcp.server.fake: enabled command=configured args=3 env=redacted(1) permissions=filesystem:read,network:api.example.test source=global version=1.2.3 tool_count=unknown auth=not_probed",
 		"schedule_status: configured total=2 enabled=1 disabled=1",
 		"hook_status: configured total=1 enabled=1 disabled=0",
 	} {
@@ -228,7 +241,7 @@ func TestDoctorReportIncludesRuntimeMCPAndAutomationStatus(t *testing.T) {
 			t.Fatalf("expected doctor report to contain %q, got:\n%s", want, report)
 		}
 	}
-	for _, secret := range []string{"mcp-secret-arg", "mcp-secret-env", "--token", "API_KEY"} {
+	for _, secret := range []string{"mcp-secret-arg", "mcp-secret-env", "disabled-secret", "--token", "API_KEY"} {
 		if strings.Contains(report, secret) {
 			t.Fatalf("doctor report leaked %q:\n%s", secret, report)
 		}

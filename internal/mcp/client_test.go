@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -40,6 +41,48 @@ func TestClientListsAndCallsTools(t *testing.T) {
 	}
 }
 
+func TestClientReusesInitializedSession_whenListingThenCalling(t *testing.T) {
+	// Given
+	if os.Getenv("LIORA_FAKE_MCP_SERVER") == "1" {
+		runFakeMCPServer()
+		return
+	}
+	countPath := filepath.Join(t.TempDir(), "initializes.txt")
+	cfg := ServerConfig{
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestClientReusesInitializedSession_whenListingThenCalling"},
+		Env: map[string]string{
+			"LIORA_FAKE_MCP_SERVER":     "1",
+			"LIORA_FAKE_MCP_COUNT_FILE": countPath,
+		},
+	}
+	client := NewClient(cfg)
+	if closer, ok := any(client).(interface{ Close() }); ok {
+		t.Cleanup(closer.Close)
+	}
+
+	// When
+	if _, err := client.ListTools(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	output, err := client.CallTool(t.Context(), "echo", map[string]any{"text": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Then
+	if !strings.Contains(output, "hello") {
+		t.Fatalf("unexpected tool output %q", output)
+	}
+	data, err := os.ReadFile(countPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), "initialize\n"); got != 1 {
+		t.Fatalf("expected one initialized MCP session, got %d entries:\n%s", got, string(data))
+	}
+}
+
 func TestManagerListsConfiguredServers(t *testing.T) {
 	if os.Getenv("LIORA_FAKE_MCP_SERVER") == "1" {
 		runFakeMCPServer()
@@ -58,6 +101,34 @@ func TestManagerListsConfiguredServers(t *testing.T) {
 	}
 	if len(tools) != 1 || tools[0].Server != "fake" || tools[0].Name != "echo" {
 		t.Fatalf("unexpected manager tools %#v", tools)
+	}
+}
+
+func TestManagerSkipsDisabledServersAndRejectsCalls(t *testing.T) {
+	// Given
+	enabled := false
+	manager := NewManager(Config{Servers: map[string]ServerConfig{
+		"disabled": {
+			Command: os.Args[0],
+			Args:    []string{"-test.run=TestManagerSkipsDisabledServersAndRejectsCalls"},
+			Env:     map[string]string{"LIORA_FAKE_MCP_SERVER": "fail"},
+			Enabled: &enabled,
+		},
+	}})
+
+	// When
+	tools, listErr := manager.ListToolsDetailed(t.Context())
+	_, callErr := manager.Call(t.Context(), "disabled", "echo", map[string]any{"text": "blocked"})
+
+	// Then
+	if listErr != nil {
+		t.Fatalf("disabled server should not be started during list, got %v", listErr)
+	}
+	if len(tools) != 0 {
+		t.Fatalf("disabled server exposed tools: %#v", tools)
+	}
+	if callErr == nil || !strings.Contains(callErr.Error(), "disabled") {
+		t.Fatalf("expected disabled call error, got %v", callErr)
 	}
 }
 
@@ -182,6 +253,13 @@ func runFakeMCPServer() {
 		}
 		switch method {
 		case "initialize":
+			if countPath := os.Getenv("LIORA_FAKE_MCP_COUNT_FILE"); countPath != "" {
+				f, err := os.OpenFile(countPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+				if err == nil {
+					_, _ = f.WriteString("initialize\n")
+					_ = f.Close()
+				}
+			}
 			_ = encoder.Encode(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      id,

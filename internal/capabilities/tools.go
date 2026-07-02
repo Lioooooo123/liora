@@ -29,6 +29,18 @@ type MCPToolSpec struct {
 	Description string         `json:"description"`
 	Kind        ToolKind       `json:"kind"`
 	InputSchema map[string]any `json:"input_schema,omitempty"`
+	Permissions []string       `json:"permissions,omitempty"`
+}
+
+type MCPServerStatus struct {
+	Name        string   `json:"name"`
+	Enabled     bool     `json:"enabled"`
+	Source      string   `json:"source,omitempty"`
+	Version     string   `json:"version,omitempty"`
+	Permissions []string `json:"permissions,omitempty"`
+	ToolCount   int      `json:"tool_count"`
+	Auth        string   `json:"auth"`
+	LastError   string   `json:"last_error,omitempty"`
 }
 
 var builtinTools = []ToolSpec{
