@@ -511,31 +511,6 @@ func commandResultTitle(line string) string {
 	return "System"
 }
 
-func (m *model) refresh() {
-	m.rebuildBody()
-	if m.isTranscriptEmpty() {
-		m.vp.SetContent(m.welcomeCardView())
-		m.vp.GotoTop()
-		return
-	}
-	m.vp.SetContent(strings.TrimLeft(m.body.String(), "\n"))
-	m.vp.GotoBottom()
-}
-
-func (m *model) rebuildBody() {
-	if len(m.blocks) == 0 {
-		return
-	}
-	m.body.Reset()
-	for _, block := range m.blocks {
-		block(&m.body, m.vp.Width())
-	}
-}
-
-func (m *model) isTranscriptEmpty() bool {
-	return strings.TrimSpace(m.body.String()) == ""
-}
-
 func joinViewSections(sections ...string) string {
 	visible := make([]string, 0, len(sections))
 	for _, section := range sections {
