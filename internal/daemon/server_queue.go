@@ -472,7 +472,7 @@ func (s *server) startNextQueuedAfter(taskID string) {
 	}
 	_ = s.repo.AppendEvent(ctx, next.ID, taskpkg.EventTaskQueued, taskpkg.EventPayload{
 		Message: "Queued task starting.",
-		Status:  string(taskpkg.StatusDraft),
+		Status:  string(taskpkg.StatusPlanning),
 	})
 	_ = s.startTaskAsync(next.ID)
 }
@@ -509,7 +509,7 @@ func (s *server) startNextForegroundQueued() {
 	}
 	_ = s.repo.AppendEvent(ctx, next.ID, taskpkg.EventTaskQueued, taskpkg.EventPayload{
 		Message: "Queued foreground task starting.",
-		Status:  string(taskpkg.StatusDraft),
+		Status:  string(taskpkg.StatusPlanning),
 		Origin:  string(next.Origin),
 	})
 	_ = s.startTaskAsync(next.ID)
@@ -578,7 +578,7 @@ func (s *server) startNextBackgroundQueued() {
 	}
 	_ = s.repo.AppendEvent(ctx, next.ID, taskpkg.EventTaskQueued, taskpkg.EventPayload{
 		Message: "Queued background task starting.",
-		Status:  string(taskpkg.StatusDraft),
+		Status:  string(taskpkg.StatusPlanning),
 		Origin:  string(next.Origin),
 		Kind:    string(next.Automation.Kind),
 	})

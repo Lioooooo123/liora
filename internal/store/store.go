@@ -1089,6 +1089,7 @@ func (s *Store) OpenDB() (*sql.DB, error) {
 func sqliteDSN(path string) string {
 	dsn := url.URL{Scheme: "file", Path: path}
 	query := dsn.Query()
+	query.Set("_txlock", "immediate")
 	query.Add("_pragma", "journal_mode(WAL)")
 	query.Add("_pragma", "busy_timeout(10000)")
 	dsn.RawQuery = query.Encode()

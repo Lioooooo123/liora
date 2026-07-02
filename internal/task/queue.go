@@ -658,7 +658,7 @@ func (r *Repository) ActivateQueuedTask(ctx context.Context, task Task) error {
 		UPDATE tasks
 		SET status = ?, updated_at = ?, completed_at = NULL
 		WHERE id = ? AND status = ?
-	`, string(StatusDraft), formatTime(now), task.ID, string(StatusQueued))
+	`, string(StatusPlanning), formatTime(now), task.ID, string(StatusQueued))
 	return err
 }
 

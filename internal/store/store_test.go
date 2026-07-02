@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,16 @@ func TestStoreOpenDBConfiguresSQLiteBusyTimeout(t *testing.T) {
 	}
 	if timeout != 10000 {
 		t.Fatalf("expected busy_timeout=10000, got %d", timeout)
+	}
+}
+
+func TestStoreSQLiteDSNConfiguresImmediateTransactions(t *testing.T) {
+	parsed, err := url.Parse(sqliteDSN(filepath.Join(t.TempDir(), "liora.db")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Query().Get("_txlock") != "immediate" {
+		t.Fatalf("expected _txlock=immediate, got %q", parsed.Query().Get("_txlock"))
 	}
 }
 
