@@ -61,10 +61,5 @@ func (c *Client) GenerateWithTools(ctx context.Context, messages []Message, tool
 
 // SupportsTools reports whether the provider can run the structured tool-use loop.
 func (c *Client) SupportsTools() bool {
-	switch NormalizeProvider(c.config.Provider) {
-	case ProviderOpenAIChat, ProviderDeepSeek, ProviderAnthropic:
-		return true
-	default:
-		return false
-	}
+	return c.config.Capability.NativeToolUse
 }

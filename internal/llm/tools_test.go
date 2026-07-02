@@ -136,6 +136,30 @@ func TestGenerateWithToolsAnthropicToolUse(t *testing.T) {
 	}
 }
 
+func TestClientSupportsToolsFollowsResolvedCapability(t *testing.T) {
+	openAI := NewOpenAICompatibleClient(Config{
+		Provider: ProviderOpenAIChat,
+		BaseURL:  "http://localhost",
+		APIKey:   "key",
+		Model:    "gpt-5",
+	})
+	if !openAI.SupportsTools() {
+		t.Fatal("expected OpenAI chat capability to enable native tool-use")
+	}
+	responses, err := NewClient(Config{
+		Provider: ProviderOpenAIResponses,
+		BaseURL:  "http://localhost",
+		APIKey:   "key",
+		Model:    "gpt-5",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if responses.SupportsTools() {
+		t.Fatal("expected responses adapter to fall back until native tool loop is implemented")
+	}
+}
+
 func TestGenerateWithToolsUnsupportedProvider(t *testing.T) {
 	client, err := NewClient(Config{Provider: ProviderGemini, APIKey: "key", Model: "gemini-test"})
 	if err != nil {

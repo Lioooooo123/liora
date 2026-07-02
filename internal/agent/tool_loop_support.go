@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -79,9 +80,31 @@ func toolInput(call llm.ToolCall) string {
 		return strings.TrimSpace(argString(args, "pattern") + " " + argString(args, "path"))
 	case "diff":
 		return ""
+	case "todo_write":
+		return argTodoSummary(args)
+	case "todo_read":
+		return ""
+	case "write", "append":
+		return strings.TrimSpace(argString(args, "path") + " " + argString(args, "content"))
+	case "edit":
+		input := strings.TrimSpace(argString(args, "path") + " " + argString(args, "old_text") + " " + argString(args, "new_text"))
+		if argBool(args, "all") {
+			input += " all"
+		}
+		return strings.TrimSpace(input)
+	case "replace":
+		return strings.TrimSpace(argString(args, "path") + " " + argString(args, "old_text") + " " + argString(args, "new_text"))
 	default:
 		return argString(args, "path")
 	}
+}
+
+func argTodoSummary(args map[string]any) string {
+	todos, err := parseTodoItems(args)
+	if err != nil || len(todos) == 0 {
+		return ""
+	}
+	return todos[0].Content
 }
 
 func completionSummaryForLoop(content string, executed int) string {
@@ -149,25 +172,36 @@ func argBool(args map[string]any, key string) bool {
 	return false
 }
 
-func (l *ToolLoop) budgetToolOutput(call llm.ToolCall, output string) string {
+func (l *ToolLoop) budgetToolOutput(ctx context.Context, call llm.ToolCall, output string) string {
 	if len(output) <= maxModelToolOutputChars || strings.Contains(output, "[...truncated]") {
 		return output
 	}
-	outputPath, err := l.persistToolOutput(call, output)
+	outputPath, err := l.persistToolOutput(ctx, call, output)
 	if err != nil {
 		return output[:maxModelToolOutputChars] + "\n[...truncated]\n"
 	}
 	return renderPersistedToolOutput(call, output, outputPath)
 }
 
-func (l *ToolLoop) persistToolOutput(call llm.ToolCall, output string) (string, error) {
+func (l *ToolLoop) persistToolOutput(ctx context.Context, call llm.ToolCall, output string) (string, error) {
+	if l.agent.outputs != nil {
+		return l.agent.outputs.PersistToolOutput(ctx, call, output)
+	}
+	return workspaceToolOutputSink{root: l.agent.workspace.Root()}.PersistToolOutput(ctx, call, output)
+}
+
+type workspaceToolOutputSink struct {
+	root string
+}
+
+func (s workspaceToolOutputSink) PersistToolOutput(_ context.Context, call llm.ToolCall, output string) (string, error) {
 	relDir := filepath.ToSlash(filepath.Join(".liora", "tool-results"))
-	absDir := filepath.Join(l.agent.workspace.Root(), relDir)
+	absDir := filepath.Join(s.root, relDir)
 	if err := os.MkdirAll(absDir, 0o700); err != nil {
 		return "", err
 	}
 	relPath := filepath.ToSlash(filepath.Join(relDir, safeToolOutputFileStem(call)+"-"+randomHex(8)+".txt"))
-	absPath := filepath.Join(l.agent.workspace.Root(), filepath.FromSlash(relPath))
+	absPath := filepath.Join(s.root, filepath.FromSlash(relPath))
 	if err := os.WriteFile(absPath, []byte(output), 0o600); err != nil {
 		return "", err
 	}

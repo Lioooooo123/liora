@@ -25,7 +25,7 @@ docs/         产品、架构和发布文档
 
 当前 `apps/cli` 负责安装产物 `liora`，TUI 直接由 Go 原生实现（`internal/tui`，基于 charmbracelet Bubble Tea），与 core 同二进制、无 Node 依赖。未来桌面/Web 入口应通过 Core Daemon API 复用 Go core，而不是重写 agent 执行逻辑。
 
-技术选型见 [Liora 技术选型](docs/tech-stack-selection.md)。
+文档入口见 [Liora Docs](docs/README.md)，技术选型见 [Liora 技术选型](docs/tech-stack-selection.md)。
 
 ## 功能
 
@@ -48,7 +48,7 @@ docs/         产品、架构和发布文档
 
 ## MVP 结束基准
 
-当前长期目标按 [Liora MVP Exit Benchmark](docs/mvp-exit-benchmark.md) 验收。v0.1 的结束点是本地能力底座可靠可用：任务、事件流、SQLite 持久化、patch/apply、cancel、sandbox 基线和 smoke 验证达标；精致 Mac App、白板和角色系统进入 v0.2+。
+当前长期目标按 [Liora MVP Exit Benchmark](docs/mvp-exit-benchmark.md) 和 [Liora v0.1 Exit Audit](docs/v0.1-exit-audit.md) 验收。v0.1 的结束点是本地能力底座可靠可用：任务、事件流、SQLite 持久化、patch/apply、cancel、sandbox 基线和 smoke 验证达标；1.0 路线见 [Liora 1.0 计划](docs/liora-1.0-plan.md)。
 
 ## 支持的步骤
 
@@ -249,9 +249,11 @@ liora > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /sessions
 /timeline [limit]
 /transcript [limit]
+/todo
 /history <query>
 /last
 /tail [lines|task_id lines]
+/artifact <artifact://...> [page] [page_size]
 /diff [task_id]
 /approvals
 /resume <task_id>
@@ -271,6 +273,8 @@ liora > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 TUI 会自动继续当前 workspace 最近的 session，因此重启 `liora` 后可以直接 `/timeline` 或继续输入任务。需要手动接回最近 session 时可用 `/resume-latest`；想从干净上下文开始下一轮任务时可用 `/new-session`，也可以用 `/clear`。
 
 `/timeline [limit]` 展示紧凑会话事件线，`/transcript [limit]` 展开 user、assistant、tool、diff、approval 和 status 内容，适合回看长会话；两者都来自 daemon 的 session timeline API。
+
+`/todo` 展示当前 daemon session 的持久计划项，包括 id、content、status、priority、source_task_id 和 updated_at。natural tool-use 任务可通过内置 `todo_write` / `todo_read` 工具创建、更新和读取同一份 session plan，重启后仍可恢复。
 
 `/history <query>` 会在当前 workspace 的会话 timeline 中搜索 user、assistant、tool、diff、approval 和 status 内容，适合重启后找回之前的任务线索。
 
@@ -295,7 +299,7 @@ CLI 侧也新增显式 session 控制：`liora -interactive -session <session_id
 - `Summary`：本轮执行总结。
 - `Diff`：文件变更。
 
-长输出或历史任务可以用 `/tail` 回看最近事件输出，例如 `/tail 80` 查看最近任务的最后 80 行，或 `/tail task_xxx 80` 查看指定任务。
+长输出或历史任务可以用 `/tail` 回看最近事件输出，例如 `/tail 80` 查看最近任务的最后 80 行，或 `/tail task_xxx 80` 查看指定任务。对于 daemon 持久化的完整长输出，`/context` 会展示 `artifact://...` 引用，随后可用 `/artifact <artifact://...> [page] [page_size]` 按页查看完整内容，不会把整份 artifact 重新塞回模型上下文。
 
 patch-first 任务完成后可以先用 `/diff` 预览最近任务的变更，或用 `/diff task_xxx` 查看指定任务；确认后再输入 `/apply` 写入真实 workspace。
 
@@ -506,13 +510,15 @@ GET  /v1/sessions/{id}
 GET  /v1/sessions/{id}/messages
 GET  /v1/sessions/{id}/tasks
 GET  /v1/sessions/{id}/timeline
+GET  /v1/sessions/{id}/todos
+GET  /v1/artifacts/page?uri=<artifact://...>&page=N&page_size=N
 ```
 
 `GET /v1/memories?q=<query>&limit=N` 支持列出或搜索 SQLite 记忆，`POST /v1/memories` 写入手动记忆。daemon-backed TUI 的 `/memory list|add|search` 会走这组 API，因此未来 Mac 客户端可以复用同一条 memory core path。
 
 `GET /v1/tasks`、`GET /v1/sessions`、`GET /v1/workbench` 和 `GET /v1/timeline/search?q=<query>` 支持 `?workspace=<absolute-path>&limit=N` 过滤。`/v1/workbench` 会一次返回 sessions、active tasks、recent tasks 和 pending approvals，TUI 和未来客户端可用它构建多 workspace / 多 session 工作台。
 
-Go client 层提供 `ListMemories`、`SearchMemories`、`AddMemory`、`StreamEvents(ctx, taskID)` 和 `StreamTaskEvents(ctx, taskIDs)`。后者会通过 daemon 原生 `GET /v1/tasks/events/stream?task_id=...` 单连接订阅多个 task，并聚合成带 `TaskID` 的事件流，TUI 和未来 Mac 客户端可以直接复用它构建多 session / 多任务视图。
+Go client 层提供 `ListMemories`、`SearchMemories`、`AddMemory`、`ArtifactPage(ctx, request)`、`StreamEvents(ctx, taskID)` 和 `StreamTaskEvents(ctx, taskIDs)`。后者会通过 daemon 原生 `GET /v1/tasks/events/stream?task_id=...` 单连接订阅多个 task，并聚合成带 `TaskID` 的事件流，TUI 和未来 Mac 客户端可以直接复用它构建多 session / 多任务视图。
 
 ## 测试
 

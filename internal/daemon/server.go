@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +26,20 @@ type Config struct {
 	Repository *taskpkg.Repository
 	Runner     *taskpkg.Runner
 	Store      *store.Store
+	AuthToken  string
+	Background BackgroundLimits
+	Foreground ForegroundLimits
+}
+
+type BackgroundLimits struct {
+	MaxConcurrent int
+	MaxActive     int
+}
+
+type ForegroundLimits struct {
+	MaxConcurrent   int
+	MaxActive       int
+	MaxPerWorkspace int
 }
 
 func NewServer(config Config) http.Handler {
@@ -31,40 +47,118 @@ func NewServer(config Config) http.Handler {
 }
 
 func newServer(config Config) *server {
-	return &server{
-		repo:    config.Repository,
-		runner:  config.Runner,
-		store:   config.Store,
-		running: map[string]context.CancelFunc{},
+	s := &server{
+		repo:       config.Repository,
+		runner:     config.Runner,
+		store:      config.Store,
+		authToken:  strings.TrimSpace(config.AuthToken),
+		running:    map[string]context.CancelFunc{},
+		background: normalizeBackgroundLimits(config.Background),
+		foreground: normalizeForegroundLimits(config.Foreground),
 	}
+	if s.repo != nil {
+		_, _ = s.repo.MarkLostBackgroundTasks(context.Background(), "daemon restarted without a running handle")
+		_, _ = s.repo.ExplainRestartState(context.Background(), "daemon restarted without a running handle")
+	}
+	if s.runner != nil && s.store != nil {
+		s.runner.SetStore(s.store)
+	}
+	return s
 }
 
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
-	mux.HandleFunc("/v1/memories", s.handleMemories)
-	mux.HandleFunc("/v1/workbench", s.handleWorkbench)
-	mux.HandleFunc("/v1/timeline/search", s.handleTimelineSearch)
-	mux.HandleFunc("/v1/sessions", s.handleSessions)
-	mux.HandleFunc("/v1/sessions/", s.handleSession)
-	mux.HandleFunc("/v1/tasks", s.handleTasks)
-	mux.HandleFunc("/v1/tasks/", s.handleTask)
+	mux.HandleFunc("/v1/memories", s.requireCapability(s.handleMemories))
+	mux.HandleFunc("/v1/memories/", s.requireCapability(s.handleMemory))
+	mux.HandleFunc("/v1/workbench", s.requireCapability(s.handleWorkbench))
+	mux.HandleFunc("/v1/artifacts/page", s.requireCapability(s.handleArtifactPage))
+	mux.HandleFunc("/v1/timeline/search", s.requireCapability(s.handleTimelineSearch))
+	mux.HandleFunc("/v1/threads", s.requireCapability(s.handleThreads))
+	mux.HandleFunc("/v1/threads/", s.requireCapability(s.handleThread))
+	mux.HandleFunc("/v1/sessions", s.requireCapability(s.handleSessions))
+	mux.HandleFunc("/v1/sessions/", s.requireCapability(s.handleSession))
+	mux.HandleFunc("/v1/tasks", s.requireCapability(s.handleTasks))
+	mux.HandleFunc("/v1/tasks/", s.requireCapability(s.handleTask))
 	return mux
 }
 
 type server struct {
-	repo      *taskpkg.Repository
-	runner    *taskpkg.Runner
-	store     *store.Store
-	runningMu sync.Mutex
-	running   map[string]context.CancelFunc
+	repo       *taskpkg.Repository
+	runner     *taskpkg.Runner
+	store      *store.Store
+	authToken  string
+	runningMu  sync.Mutex
+	running    map[string]context.CancelFunc
+	background BackgroundLimits
+	foreground ForegroundLimits
 }
 
-const eventStreamFallbackInterval = 5 * time.Second
+const (
+	eventStreamFallbackInterval = 5 * time.Second
+	taskEventStreamBatchLimit   = 16
+)
+
+func normalizeBackgroundLimits(limits BackgroundLimits) BackgroundLimits {
+	if limits.MaxConcurrent <= 0 {
+		limits.MaxConcurrent = 4
+	}
+	if limits.MaxActive <= 0 {
+		limits.MaxActive = 32
+	}
+	if limits.MaxActive < limits.MaxConcurrent {
+		limits.MaxActive = limits.MaxConcurrent
+	}
+	return limits
+}
+
+func normalizeForegroundLimits(limits ForegroundLimits) ForegroundLimits {
+	if limits.MaxConcurrent <= 0 {
+		limits.MaxConcurrent = 4
+	}
+	if limits.MaxActive <= 0 {
+		limits.MaxActive = 64
+	}
+	if limits.MaxActive < limits.MaxConcurrent {
+		limits.MaxActive = limits.MaxConcurrent
+	}
+	if limits.MaxPerWorkspace <= 0 {
+		limits.MaxPerWorkspace = limits.MaxConcurrent
+	}
+	return limits
+}
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *server) requireCapability(next http.HandlerFunc) http.HandlerFunc {
+	if strings.TrimSpace(s.authToken) == "" {
+		return next
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorized(r) {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeError(w, http.StatusUnauthorized, errors.New("daemon capability token is required"))
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *server) authorized(r *http.Request) bool {
+	token := strings.TrimSpace(r.Header.Get("X-Liora-Capability"))
+	if token == "" {
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+			token = strings.TrimSpace(auth[len("bearer "):])
+		}
+	}
+	if token == "" || s.authToken == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(token), []byte(s.authToken)) == 1
 }
 
 func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
@@ -92,30 +186,27 @@ func (s *server) handleMemories(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-		query := r.URL.Query().Get("q")
-		var (
-			memories []store.Memory
-			err      error
-		)
-		if strings.TrimSpace(query) == "" {
-			memories, err = s.store.ListMemories(limit)
-		} else {
-			memories, err = s.store.SearchMemories(query, limit)
-		}
+		includeDisabled := truthyQuery(r.URL.Query().Get("include_disabled"))
+		includeExpired := truthyQuery(r.URL.Query().Get("include_expired"))
+		memories, err := s.store.ListMemoriesWithOptions(store.MemoryListOptions{
+			Query:           r.URL.Query().Get("q"),
+			Workspace:       r.URL.Query().Get("workspace"),
+			Limit:           limit,
+			IncludeDisabled: includeDisabled,
+			IncludeExpired:  includeExpired,
+		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, memories)
 	case http.MethodPost:
-		var request struct {
-			Text string `json:"text"`
-		}
+		var request store.CreateMemoryRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		memory, err := s.store.CreateMemory(request.Text)
+		memory, err := s.store.CreateMemoryWithOptions(request)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
@@ -125,6 +216,306 @@ func (s *server) handleMemories(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "GET, POST")
 		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
 	}
+}
+
+func (s *server) handleMemory(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusInternalServerError, errors.New("store is not configured"))
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/v1/memories/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeError(w, http.StatusNotFound, errors.New("memory id is required"))
+		return
+	}
+	id := parts[0]
+	if len(parts) == 1 {
+		switch r.Method {
+		case http.MethodGet:
+			memory, err := s.store.GetMemory(id)
+			if err != nil {
+				writeStoreError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, memory)
+		case http.MethodPatch:
+			var request store.UpdateMemoryRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			memory, err := s.store.UpdateMemory(id, request)
+			if err != nil {
+				writeStoreError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, memory)
+		case http.MethodDelete:
+			if err := s.store.DeleteMemoryForWorkspace(id, r.URL.Query().Get("workspace")); err != nil {
+				writeStoreError(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.Header().Set("Allow", "GET, PATCH, DELETE")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		}
+		return
+	}
+	if len(parts) == 2 && (parts[1] == "disable" || parts[1] == "enable") {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+			return
+		}
+		memory, err := s.store.SetMemoryEnabled(id, parts[1] == "enable")
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, memory)
+		return
+	}
+	writeError(w, http.StatusNotFound, fmt.Errorf("unknown memory route %q", r.URL.Path))
+}
+
+func truthyQuery(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "all":
+		return true
+	default:
+		return false
+	}
+}
+
+func writeStoreError(w http.ResponseWriter, err error) {
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if errors.Is(err, store.ErrCrossWorkspaceAuthorizationRequired) {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	writeError(w, http.StatusBadRequest, err)
+}
+
+func (s *server) handleThreads(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusInternalServerError, errors.New("store is not configured"))
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		threads, err := s.store.ListConversationThreadsWithOptions(store.ConversationThreadListOptions{
+			Workspace:       r.URL.Query().Get("workspace"),
+			Limit:           limit,
+			IncludeArchived: truthyQuery(r.URL.Query().Get("include_archived")),
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, threads)
+	case http.MethodPost:
+		var request store.CreateConversationThreadRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		thread, err := s.store.CreateConversationThread(request)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, thread)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+	}
+}
+
+func (s *server) handleThread(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusInternalServerError, errors.New("store is not configured"))
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/v1/threads/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeError(w, http.StatusNotFound, fmt.Errorf("unknown thread route %q", r.URL.Path))
+		return
+	}
+	threadID := parts[0]
+	if len(parts) == 1 {
+		switch r.Method {
+		case http.MethodGet:
+			thread, err := s.store.GetConversationThread(threadID)
+			if err != nil {
+				writeStoreError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, thread)
+		case http.MethodPatch:
+			var request store.UpdateConversationThreadRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			thread, err := s.store.UpdateConversationThread(threadID, request)
+			if err != nil {
+				writeStoreError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, thread)
+		default:
+			w.Header().Set("Allow", "GET, PATCH")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		}
+		return
+	}
+	if len(parts) == 2 && parts[1] == "model" {
+		s.handleThreadModel(w, r, threadID)
+		return
+	}
+	if len(parts) != 2 || parts[1] != "messages" {
+		writeError(w, http.StatusNotFound, fmt.Errorf("unknown thread route %q", r.URL.Path))
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		messages, err := s.store.ListCrossThreadMessages(threadID, limit)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, messages)
+	case http.MethodPost:
+		var request store.CreateCrossThreadMessageRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if strings.TrimSpace(request.ToThreadID) != "" && strings.TrimSpace(request.ToThreadID) != threadID {
+			writeError(w, http.StatusBadRequest, errors.New("to_thread_id must match route thread id"))
+			return
+		}
+		request.ToThreadID = threadID
+		message, err := s.store.CreateCrossThreadMessage(request)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		if err := s.recordCrossThreadMessageTranscript(r.Context(), message); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, message)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+	}
+}
+
+func (s *server) handleThreadModel(w http.ResponseWriter, r *http.Request, threadID string) {
+	switch r.Method {
+	case http.MethodGet:
+		config, ok, err := s.store.GetThreadModelConfig(threadID)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusNotFound, sql.ErrNoRows)
+			return
+		}
+		writeJSON(w, http.StatusOK, config)
+	case http.MethodPut, http.MethodPatch:
+		var request store.UpdateThreadModelConfigRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		config, err := s.store.UpdateThreadModelConfig(threadID, request)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, config)
+	case http.MethodDelete:
+		if err := s.store.DeleteThreadModelConfig(threadID); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.Header().Set("Allow", "GET, PUT, PATCH, DELETE")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+	}
+}
+
+func (s *server) recordCrossThreadMessageTranscript(ctx context.Context, message store.CrossThreadMessage) error {
+	if s.repo == nil || s.store == nil {
+		return nil
+	}
+	fromThread, err := s.store.GetConversationThread(message.FromThreadID)
+	if err != nil {
+		return err
+	}
+	toThread, err := s.store.GetConversationThread(message.ToThreadID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.repo.EnsureSession(ctx, fromThread.ID, fromThread.Title, fromThread.Workspace); err != nil {
+		return err
+	}
+	if _, err := s.repo.EnsureSession(ctx, toThread.ID, toThread.Title, toThread.Workspace); err != nil {
+		return err
+	}
+	sentContent := crossThreadTranscriptContent("thread_message.sent", message, message.ToThreadID)
+	if _, err := s.repo.AppendMessage(ctx, message.FromThreadID, "thread_message.sent", sentContent, message.TaskID); err != nil {
+		return err
+	}
+	receivedContent := crossThreadTranscriptContent("thread_message.received", message, message.FromThreadID)
+	if _, err := s.repo.AppendMessage(ctx, message.ToThreadID, "thread_message.received", receivedContent, message.TaskID); err != nil {
+		return err
+	}
+	linkContent := crossThreadTranscriptContent("thread_link.created", message, message.ToThreadID)
+	if _, err := s.repo.AppendMessage(ctx, message.FromThreadID, "thread_link.created", linkContent, message.TaskID); err != nil {
+		return err
+	}
+	linkContent = crossThreadTranscriptContent("thread_link.created", message, message.FromThreadID)
+	if _, err := s.repo.AppendMessage(ctx, message.ToThreadID, "thread_link.created", linkContent, message.TaskID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func crossThreadTranscriptContent(event string, message store.CrossThreadMessage, peerThreadID string) string {
+	parts := []string{
+		event,
+		"message_id=" + message.ID,
+		"peer_thread_id=" + peerThreadID,
+	}
+	if strings.TrimSpace(message.Summary) != "" {
+		parts = append(parts, "summary="+message.Summary)
+	}
+	if strings.TrimSpace(message.TaskID) != "" {
+		parts = append(parts, "task_id="+message.TaskID)
+	}
+	if strings.TrimSpace(message.ExplicitContent) != "" {
+		parts = append(parts, "content="+message.ExplicitContent)
+	}
+	if len(message.ArtifactRefs) > 0 {
+		parts = append(parts, fmt.Sprintf("artifact_refs=%d", len(message.ArtifactRefs)))
+	}
+	if message.CrossWorkspaceAuthorized {
+		parts = append(parts, "cross_workspace_authorized=true")
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (s *server) mcpTools(ctx context.Context) ([]capabilities.MCPToolSpec, error) {
@@ -191,46 +582,130 @@ func (s *server) handleWorkbench(w http.ResponseWriter, r *http.Request) {
 		if isActiveStatus(task.Status) {
 			workbench.ActiveTasks = append(workbench.ActiveTasks, task)
 		}
+		if task.Status == taskpkg.StatusQueued {
+			workbench.QueuedTasks = append(workbench.QueuedTasks, task)
+		}
 		if task.Status == taskpkg.StatusWaitingUser {
-			request, err := s.latestPermissionRequest(r.Context(), task.ID)
+			eventType, request, err := s.latestWaitingRequest(r.Context(), task.ID)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err)
 				return
 			}
-			workbench.PendingApprovals = append(workbench.PendingApprovals, taskpkg.PendingApproval{
-				Task:    task,
-				Request: request,
-			})
+			switch eventType {
+			case taskpkg.EventPermissionRequest:
+				approval := taskpkg.PendingApproval{
+					Task:    task,
+					Request: request,
+				}
+				if item, ok, err := s.repo.ApprovalItemForTask(r.Context(), task.ID); err != nil {
+					writeError(w, http.StatusInternalServerError, err)
+					return
+				} else if ok {
+					approval.Item = item
+				}
+				workbench.PendingApprovals = append(workbench.PendingApprovals, approval)
+			case taskpkg.EventUserInputRequest:
+				workbench.PendingUserInputs = append(workbench.PendingUserInputs, taskpkg.PendingInput{
+					Task:    task,
+					Request: request,
+				})
+			}
 		}
+	}
+	if s.store != nil {
+		threads, err := s.store.ListConversationThreads(workspace, 100)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		workbench.Threads = threadWorkbenches(threads, tasks, workbench.PendingApprovals, workbench.PendingUserInputs)
 	}
 	writeJSON(w, http.StatusOK, workbench)
 }
 
-func (s *server) latestPermissionRequest(ctx context.Context, taskID string) (taskpkg.EventPayload, error) {
-	events, err := s.repo.Events(ctx, taskID, 0)
-	if err != nil {
-		return taskpkg.EventPayload{}, err
-	}
-	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Type != taskpkg.EventPermissionRequest {
-			continue
-		}
-		var payload taskpkg.EventPayload
-		if err := json.Unmarshal([]byte(events[i].Payload), &payload); err != nil {
-			return taskpkg.EventPayload{}, err
-		}
-		return payload, nil
-	}
-	return taskpkg.EventPayload{}, nil
-}
-
 func isActiveStatus(status taskpkg.Status) bool {
 	switch status {
-	case taskpkg.StatusDraft, taskpkg.StatusPlanning, taskpkg.StatusRunning, taskpkg.StatusWaitingUser:
+	case taskpkg.StatusDraft, taskpkg.StatusQueued, taskpkg.StatusPlanning, taskpkg.StatusRunning, taskpkg.StatusWaitingUser, taskpkg.StatusLost, taskpkg.StatusRecovered:
 		return true
 	default:
 		return false
 	}
+}
+
+func threadWorkbenches(threads []store.ConversationThread, tasks []taskpkg.Task, approvals []taskpkg.PendingApproval, inputs []taskpkg.PendingInput) []taskpkg.ThreadWorkbench {
+	summaries := make([]taskpkg.ThreadWorkbench, 0, len(threads))
+	for _, thread := range threads {
+		summary := taskpkg.ThreadWorkbench{
+			ID:                  thread.ID,
+			Title:               thread.Title,
+			Workspace:           thread.Workspace,
+			LastTaskID:          thread.LastTaskID,
+			ModelConfig:         threadWorkbenchModelConfig(thread.ModelConfig),
+			TranscriptSessionID: thread.ID,
+			ContextSessionID:    thread.ID,
+			Lifecycle:           "idle",
+		}
+		for _, task := range tasks {
+			if task.SessionID != thread.ID {
+				continue
+			}
+			summary.RecentTasks = append(summary.RecentTasks, task)
+			if isActiveStatus(task.Status) {
+				summary.ActiveTasks = append(summary.ActiveTasks, task)
+			}
+			if task.Status == taskpkg.StatusQueued {
+				summary.QueuedTasks = append(summary.QueuedTasks, task)
+			}
+		}
+		for _, approval := range approvals {
+			if approval.Task.SessionID == thread.ID {
+				summary.PendingApprovals = append(summary.PendingApprovals, approval)
+			}
+		}
+		for _, input := range inputs {
+			if input.Task.SessionID == thread.ID {
+				summary.PendingUserInputs = append(summary.PendingUserInputs, input)
+			}
+		}
+		summary.Lifecycle = threadLifecycle(summary)
+		summaries = append(summaries, summary)
+	}
+	return summaries
+}
+
+func threadWorkbenchModelConfig(config *store.ThreadModelConfig) *taskpkg.ThreadModelConfig {
+	if config == nil {
+		return nil
+	}
+	return &taskpkg.ThreadModelConfig{
+		ThreadID:              config.ThreadID,
+		Provider:              config.Provider,
+		Model:                 config.Model,
+		BaseURL:               config.BaseURL,
+		Profile:               config.Profile,
+		InheritedFromThreadID: config.InheritedFromThreadID,
+	}
+}
+
+func threadLifecycle(thread taskpkg.ThreadWorkbench) string {
+	if len(thread.PendingApprovals) > 0 || len(thread.PendingUserInputs) > 0 {
+		return string(taskpkg.StatusWaitingUser)
+	}
+	for _, task := range thread.ActiveTasks {
+		if task.Status != taskpkg.StatusQueued {
+			return "active"
+		}
+	}
+	if len(thread.QueuedTasks) > 0 {
+		return string(taskpkg.StatusQueued)
+	}
+	for _, task := range thread.RecentTasks {
+		switch task.Status {
+		case taskpkg.StatusCompleted, taskpkg.StatusCancelled, taskpkg.StatusFailed, taskpkg.StatusStale:
+			return string(task.Status)
+		}
+	}
+	return "idle"
 }
 
 func (s *server) handleTimelineSearch(w http.ResponseWriter, r *http.Request) {
@@ -262,41 +737,7 @@ func (s *server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, tasks)
 	case http.MethodPost:
-		var request taskpkg.CreateRequest
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if request.RunAsync && s.runner == nil {
-			writeError(w, http.StatusBadRequest, errors.New("runner is not configured"))
-			return
-		}
-		task, err := s.repo.Create(r.Context(), request)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		_ = s.repo.AppendEvent(r.Context(), task.ID, taskpkg.EventTaskCreated, taskpkg.EventPayload{Message: task.UserInput})
-		if request.RunAsync {
-			if err := s.startTaskAsync(task.ID); err != nil {
-				writeError(w, http.StatusConflict, err)
-				return
-			}
-			writeJSON(w, http.StatusAccepted, taskpkg.CreateResponse{Task: task})
-			return
-		}
-		if s.runner != nil {
-			if err := s.runner.Run(r.Context(), task.ID); err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-			task, err = s.repo.Get(r.Context(), task.ID)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-		}
-		writeJSON(w, http.StatusCreated, taskpkg.CreateResponse{Task: task})
+		s.handleTaskCreate(w, r)
 	default:
 		w.Header().Set("Allow", "GET, POST")
 		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
@@ -399,7 +840,76 @@ func (s *server) handleSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, timeline)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "todos" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+			return
+		}
+		todos, err := s.repo.TodosBySession(r.Context(), sessionID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, todos)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "context" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+			return
+		}
+		limit, err := optionalPositiveInt(r.URL.Query().Get("limit"), "limit")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		tokenBudget, err := optionalPositiveInt(r.URL.Query().Get("token_budget"), "token_budget")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		envelope, err := s.repo.ContextEnvelope(r.Context(), sessionID, taskpkg.ContextRequest{ItemLimit: limit, TokenBudget: tokenBudget})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, envelope)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "compact" {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+			return
+		}
+		var request taskpkg.CompactRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		result, err := s.repo.CompactSession(r.Context(), sessionID, request)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
 	writeError(w, http.StatusNotFound, fmt.Errorf("unknown session route %q", r.URL.Path))
+}
+
+func optionalPositiveInt(value string, field string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", field)
+	}
+	return parsed, nil
 }
 
 func (s *server) handleTask(w http.ResponseWriter, r *http.Request) {
@@ -449,8 +959,16 @@ func (s *server) handleTask(w http.ResponseWriter, r *http.Request) {
 		s.handleTaskCancel(w, r, taskID)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "recover" {
+		s.handleTaskRecover(w, r, taskID)
+		return
+	}
 	if len(parts) == 2 && parts[1] == "approval" {
 		s.handleTaskApproval(w, r, taskID)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "input" {
+		s.handleTaskInput(w, r, taskID)
 		return
 	}
 	if len(parts) == 3 && parts[1] == "events" && parts[2] == "stream" {
@@ -481,8 +999,9 @@ func (s *server) handleTaskApproval(w http.ResponseWriter, r *http.Request, task
 		return
 	}
 	var request struct {
-		Decision string `json:"decision"`
-		Reason   string `json:"reason"`
+		Decision  string `json:"decision"`
+		Reason    string `json:"reason"`
+		DecidedBy string `json:"decided_by"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -503,7 +1022,11 @@ func (s *server) handleTaskApproval(w http.ResponseWriter, r *http.Request, task
 			writeError(w, http.StatusConflict, fmt.Errorf("task is not waiting for approval: %s", current.Status))
 			return
 		}
-		if err := s.repo.GrantApproval(r.Context(), taskID); err != nil {
+		if !s.latestWaitIsApproval(r.Context(), taskID) {
+			writeError(w, http.StatusConflict, errors.New("task is waiting for user input; use /input instead"))
+			return
+		}
+		if err := s.repo.GrantApproval(r.Context(), taskID, request.DecidedBy); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -513,6 +1036,18 @@ func (s *server) handleTaskApproval(w http.ResponseWriter, r *http.Request, task
 			return
 		}
 		if s.runner != nil {
+			if queued, err := s.queueBackgroundIfLimited(r.Context(), task, "Approved background task queued by the concurrency limit."); err != nil {
+				writeError(w, http.StatusConflict, err)
+				return
+			} else if queued {
+				_ = s.repo.AppendEvent(r.Context(), taskID, taskpkg.EventPermissionApproved, taskpkg.EventPayload{
+					Message: "Approval granted.",
+					Status:  string(taskpkg.StatusQueued),
+				})
+				task, _ = s.repo.Get(r.Context(), taskID)
+				writeJSON(w, http.StatusAccepted, task)
+				return
+			}
 			if err := s.startTaskAsync(taskID); err != nil {
 				writeError(w, http.StatusConflict, err)
 				return
@@ -530,11 +1065,26 @@ func (s *server) handleTaskApproval(w http.ResponseWriter, r *http.Request, task
 		})
 		writeJSON(w, http.StatusOK, task)
 	case "deny", "denied", "no":
-		if err := s.repo.DenyApproval(r.Context(), taskID, request.Reason); err != nil {
+		current, err := s.repo.Get(r.Context(), taskID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		if current.Status != taskpkg.StatusWaitingUser {
+			writeError(w, http.StatusConflict, fmt.Errorf("task is not waiting for approval: %s", current.Status))
+			return
+		}
+		if !s.latestWaitIsApproval(r.Context(), taskID) {
+			writeError(w, http.StatusConflict, errors.New("task is waiting for user input; use /input instead"))
+			return
+		}
+		if err := s.repo.DenyApproval(r.Context(), taskID, request.Reason, request.DecidedBy); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		s.cancelRunning(taskID)
+		s.startNextQueuedAfter(taskID)
+		s.startNextForegroundQueued()
 		task, err := s.repo.Get(r.Context(), taskID)
 		if err != nil {
 			writeError(w, http.StatusNotFound, err)
@@ -563,12 +1113,56 @@ func (s *server) handleTaskCancel(w http.ResponseWriter, r *http.Request, taskID
 		return
 	}
 	s.cancelRunning(taskID)
+	s.startNextQueuedAfter(taskID)
+	s.startNextForegroundQueued()
+	s.startNextBackgroundQueued()
 	task, err := s.repo.Get(r.Context(), taskID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, task)
+}
+
+func (s *server) handleTaskRecover(w http.ResponseWriter, r *http.Request, taskID string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		return
+	}
+	if s.runner == nil {
+		writeError(w, http.StatusBadRequest, errors.New("runner is not configured"))
+		return
+	}
+	var request struct {
+		Reason string `json:"reason"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&request)
+	}
+	if err := s.repo.RecoverLostTask(r.Context(), taskID, request.Reason); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	task, err := s.repo.Get(r.Context(), taskID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if queued, err := s.queueBackgroundIfLimited(r.Context(), task, "Recovered background task queued by the concurrency limit."); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	} else if queued {
+		task, _ = s.repo.Get(r.Context(), taskID)
+		writeJSON(w, http.StatusAccepted, task)
+		return
+	}
+	if err := s.startTaskAsync(taskID); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	task, _ = s.repo.Get(r.Context(), taskID)
+	writeJSON(w, http.StatusAccepted, task)
 }
 
 func (s *server) tryRegisterRunning(taskID string, cancel context.CancelFunc) bool {
@@ -591,7 +1185,21 @@ func (s *server) startTaskAsync(taskID string) error {
 		return errTaskAlreadyRunning
 	}
 	go func() {
-		defer s.unregisterRunning(taskID)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				message := fmt.Sprintf("task runner panic: %v", recovered)
+				_ = s.repo.UpdateStatus(context.Background(), taskID, taskpkg.StatusFailed)
+				_ = s.repo.AppendEvent(context.Background(), taskID, taskpkg.EventError, taskpkg.EventPayload{
+					Message: message,
+					Status:  string(taskpkg.StatusFailed),
+					Reason:  "panic_recovered",
+				})
+			}
+			s.unregisterRunning(taskID)
+			s.startNextQueuedAfter(taskID)
+			s.startNextForegroundQueued()
+			s.startNextBackgroundQueued()
+		}()
 		_ = s.runner.Run(ctx, taskID)
 	}()
 	return nil
@@ -718,6 +1326,7 @@ func (s *server) writeTaskEventStream(w http.ResponseWriter, r *http.Request, ta
 	done := make(map[string]bool, len(taskIDs))
 	for {
 		allDone := true
+		advanced := false
 		for _, taskID := range taskIDs {
 			if done[taskID] {
 				continue
@@ -731,6 +1340,9 @@ func (s *server) writeTaskEventStream(w http.ResponseWriter, r *http.Request, ta
 				}
 				return
 			}
+			if nextSeq != lastSeq[taskID] {
+				advanced = true
+			}
 			lastSeq[taskID] = nextSeq
 			if taskDone {
 				done[taskID] = true
@@ -738,6 +1350,9 @@ func (s *server) writeTaskEventStream(w http.ResponseWriter, r *http.Request, ta
 		}
 		if allDone || len(done) == len(taskIDs) {
 			return
+		}
+		if advanced {
+			continue
 		}
 		var pending []string
 		for _, taskID := range taskIDs {
@@ -774,9 +1389,9 @@ func (s *server) writeAvailableEvents(ctx context.Context, w http.ResponseWriter
 		fmt.Fprintf(w, "id: %s\n", event.ID)
 		fmt.Fprintf(w, "data: %s\n\n", event.Payload)
 		switch event.Type {
-		case taskpkg.EventPermissionApproved:
+		case taskpkg.EventPermissionApproved, taskpkg.EventUserInputReceived:
 			done = false
-		case taskpkg.EventCompleted, taskpkg.EventCancelled, taskpkg.EventError, taskpkg.EventPermissionRequest:
+		case taskpkg.EventCompleted, taskpkg.EventCancelled, taskpkg.EventError, taskpkg.EventPermissionRequest, taskpkg.EventUserInputRequest:
 			done = true
 		}
 	}
@@ -787,7 +1402,7 @@ func (s *server) writeAvailableEvents(ctx context.Context, w http.ResponseWriter
 }
 
 func (s *server) writeAvailableTaskEvents(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, taskID string, afterSeq int64) (bool, int64, error) {
-	events, err := s.repo.EventsAfter(ctx, taskID, afterSeq, 0)
+	events, err := s.repo.EventsAfter(ctx, taskID, afterSeq, taskEventStreamBatchLimit)
 	if err != nil {
 		return false, afterSeq, err
 	}
@@ -865,5 +1480,8 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {
+	if errors.Is(err, sql.ErrNoRows) {
+		err = errors.New("task not found")
+	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }

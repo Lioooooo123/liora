@@ -40,6 +40,10 @@ func parseStepLine(line string) (Step, bool) {
 		if strings.TrimSpace(rest) != "" {
 			step.Args = []string{strings.TrimSpace(rest)}
 		}
+	case "todo_write":
+		if strings.TrimSpace(rest) != "" {
+			step.Args = []string{strings.TrimSpace(rest)}
+		}
 	case "mcp":
 		server, remaining := firstField(rest)
 		toolName, argsJSON := firstField(remaining)

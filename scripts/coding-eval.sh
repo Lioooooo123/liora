@@ -195,14 +195,14 @@ PY
 
 (
   cd "$ROOT"
-  LIORA_HOME="$TMP_DIR/home" LIORA_PATCH_MODE=1 LIORA_PERMISSION=prompt go run ./apps/cli \
-    -workspace "$WORKSPACE" \
-    -daemon \
-    -daemon-addr "$DAEMON_ADDR" \
-    -llm-api-key eval-key \
-    -llm-base-url "http://$LLM_ADDR" \
-    -llm-model eval-model
-) >"$TMP_DIR/daemon.log" 2>&1 &
+  "${GO:-go}" build -o "$TMP_DIR/liora-eval" ./apps/cli
+)
+LIORA_HOME="$TMP_DIR/home" LIORA_PATCH_MODE=1 LIORA_PERMISSION=prompt "$TMP_DIR/liora-eval" \
+  -workspace "$WORKSPACE" \
+  -daemon \
+  -daemon-addr "$DAEMON_ADDR" \
+  -llm-api-key eval-key \
+  -llm-base-url "http://$LLM_ADDR" -llm-model eval-model >"$TMP_DIR/daemon.log" 2>&1 &
 DAEMON_PID="$!"
 
 READY=0

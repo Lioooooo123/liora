@@ -1,11 +1,17 @@
 {
   "version": "2026-06-30.task-events.v1",
+  "contract_version": "2026-06-30.task-events.v1",
   "single_task_stream": [
     {
       "event": "task.created",
       "id": "event-001",
       "data": {
-        "message": "created"
+        "message": "created",
+        "risk": "safe",
+        "origin": "background",
+        "kind": "background",
+        "source": "fixture",
+        "trigger": "manual-smoke"
       }
     },
     {
@@ -13,6 +19,7 @@
       "id": "event-002",
       "data": {
         "tool": "read",
+        "tool_call_id": "fixture-call-1",
         "input": "README.md"
       }
     },
@@ -21,6 +28,8 @@
       "id": "event-003",
       "data": {
         "tool": "read",
+        "tool_call_id": "fixture-call-1",
+        "tool_result_id": "fixture-call-1-result",
         "output": "Liora"
       }
     },
@@ -51,9 +60,30 @@
         "payload": {
           "tool": "run",
           "risk": "dangerous_shell",
-          "reason": "requires approval"
+          "reason": "requires approval",
+          "origin": "schedule",
+          "kind": "schedule",
+          "source": "cron:nightly",
+          "trigger": "0 2 * * *"
         }
       }
     }
-  ]
+  ],
+  "multi_thread_stream": [
+    {
+      "event": "thread_message.received",
+      "id": "event-201",
+      "data": {
+        "thread_id": "thread-002",
+        "task_id": "task-004",
+        "payload": {
+          "message": "handoff received"
+        }
+      }
+    }
+  ],
+  "error_response": {
+    "status": 404,
+    "error": "task not found"
+  }
 }

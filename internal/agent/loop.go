@@ -55,9 +55,10 @@ func NewToolLoop(a *Agent, generator llm.ToolCaller, options LoopOptions) *ToolL
 }
 
 type toolOutcome struct {
-	call    llm.ToolCall
-	output  string
-	isError bool
+	call          llm.ToolCall
+	output        string
+	failureOutput string
+	isError       bool
 }
 
 func (l *ToolLoop) Run(ctx context.Context, prompt string) (Result, error) {
@@ -72,6 +73,7 @@ func (l *ToolLoop) Run(ctx context.Context, prompt string) (Result, error) {
 
 	executed := 0
 	replanAttempts := 0
+	seenFailures := map[toolFailureSignature]bool{}
 	for turn := 0; ; turn++ {
 		select {
 		case <-ctx.Done():
@@ -117,6 +119,7 @@ func (l *ToolLoop) Run(ctx context.Context, prompt string) (Result, error) {
 
 		anyError := false
 		var firstErrReason string
+		var repeatedFailure string
 		for _, outcome := range outcomes {
 			status := trace.StatusOK
 			if outcome.isError {
@@ -124,13 +127,20 @@ func (l *ToolLoop) Run(ctx context.Context, prompt string) (Result, error) {
 				if !anyError {
 					firstErrReason = outcome.call.Name + ": " + firstLine(outcome.output)
 				}
+				signature := newToolFailureSignature(outcome.call, outcome.failureOutput)
+				if seenFailures[signature] && repeatedFailure == "" {
+					repeatedFailure = renderRepeatedFailure(signature)
+				}
+				seenFailures[signature] = true
 				anyError = true
 			}
 			l.agent.record(trace.Event{
-				Tool:   outcome.call.Name,
-				Input:  toolInput(outcome.call),
-				Output: outcome.output,
-				Status: status,
+				Tool:         outcome.call.Name,
+				Input:        toolInput(outcome.call),
+				Output:       outcome.output,
+				Status:       status,
+				ToolCallID:   outcome.call.ID,
+				ToolResultID: toolResultID(outcome.call),
 			})
 			messages = append(messages, llm.Message{
 				Role:       "tool",
@@ -138,6 +148,14 @@ func (l *ToolLoop) Run(ctx context.Context, prompt string) (Result, error) {
 				ToolCallID: outcome.call.ID,
 				ToolError:  outcome.isError,
 			})
+		}
+
+		if repeatedFailure != "" {
+			return Result{
+				Status:  StatusFailed,
+				Summary: repeatedFailure,
+				Diff:    l.currentDiff(),
+			}, fmt.Errorf("%s", repeatedFailure)
 		}
 
 		if anyError && l.onReplan != nil {
@@ -214,7 +232,8 @@ func (l *ToolLoop) dispatchParallel(ctx context.Context, calls []llm.ToolCall, o
 func (l *ToolLoop) dispatchOne(ctx context.Context, call llm.ToolCall) toolOutcome {
 	args, err := parseToolArgs(call.Arguments)
 	if err != nil {
-		return toolOutcome{call: call, output: fmt.Sprintf("invalid arguments JSON: %v", err), isError: true}
+		message := fmt.Sprintf("invalid arguments JSON: %v", err)
+		return toolOutcome{call: call, output: message, failureOutput: message, isError: true}
 	}
 	output, err := l.executeToolCall(ctx, call.Name, args)
 	if err != nil {
@@ -222,33 +241,14 @@ func (l *ToolLoop) dispatchOne(ctx context.Context, call llm.ToolCall) toolOutco
 		if output != "" {
 			message += "\n" + output
 		}
-		return toolOutcome{call: call, output: l.budgetToolOutput(call, message), isError: true}
+		return toolOutcome{call: call, output: l.budgetToolOutput(ctx, call, message), failureOutput: message, isError: true}
 	}
-	return toolOutcome{call: call, output: l.budgetToolOutput(call, output)}
+	return toolOutcome{call: call, output: l.budgetToolOutput(ctx, call, output)}
 }
 
-func firstLine(text string) string {
-	text = strings.TrimSpace(text)
-	if index := strings.IndexByte(text, '\n'); index >= 0 {
-		return text[:index]
+func toolResultID(call llm.ToolCall) string {
+	if strings.TrimSpace(call.ID) == "" {
+		return "tool-result"
 	}
-	return text
-}
-
-func loopSystemPrompt() string {
-	return `You are Liora, a local-first coding agent working inside a single workspace.
-
-Use the provided tools to inspect and modify the workspace, then reply with a short summary when the task is done.
-
-Rules:
-- Use relative paths only.
-- Observe before acting: prefer list, tree, glob, search and read to understand the workspace before editing.
-- Use document for .pdf and .docx files; use read for plain text and source code.
-- Use skill to read installed Liora skills only when the listed skill metadata is relevant to the task.
-- Prefer edit for precise replacements; use write only for new files or full-file rewrites.
-- Prefer built-in file tools over shell commands when possible.
-- Use mcp only when the request explicitly needs a configured MCP server.
-- When a tool fails, read the error, adjust, and try a corrected tool call instead of repeating the same failing call.
-- When no further tool calls are needed, stop calling tools and reply with a concise natural-language summary of what you did.
-- For greetings or questions that need no tools, reply directly without calling any tool.`
+	return call.ID + "-result"
 }

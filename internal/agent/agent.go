@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Lioooooo123/liora/internal/llm"
 	"github.com/Lioooooo123/liora/internal/permission"
 	"github.com/Lioooooo123/liora/internal/tools"
 	"github.com/Lioooooo123/liora/internal/trace"
@@ -33,6 +34,9 @@ type Agent struct {
 	skills    SkillReader
 	shell     ShellExecutor
 	checker   permission.Checker
+	outputs   ToolOutputSink
+	todos     TodoExecutor
+	traceSeq  int
 }
 
 type MCPExecutor interface {
@@ -45,6 +49,24 @@ type ShellExecutor interface {
 
 type SkillReader interface {
 	ReadSkill(workspaceRoot string, name string, startLine int, lineCount int) (string, error)
+}
+
+type ToolOutputSink interface {
+	PersistToolOutput(ctx context.Context, call llm.ToolCall, output string) (string, error)
+}
+
+type Todo struct {
+	ID           string `json:"id,omitempty"`
+	SourceTaskID string `json:"source_task_id,omitempty"`
+	Content      string `json:"content"`
+	Status       string `json:"status,omitempty"`
+	Priority     string `json:"priority,omitempty"`
+	UpdatedAt    string `json:"updated_at,omitempty"`
+}
+
+type TodoExecutor interface {
+	WriteTodos(ctx context.Context, todos []Todo) ([]Todo, error)
+	ReadTodos(ctx context.Context) ([]Todo, error)
 }
 
 func New(workspace *tools.Workspace, recorder trace.Recorder) *Agent {
@@ -65,6 +87,14 @@ func (a *Agent) SetShellExecutor(executor ShellExecutor) {
 
 func (a *Agent) SetPermissionChecker(checker permission.Checker) {
 	a.checker = checker
+}
+
+func (a *Agent) SetToolOutputSink(sink ToolOutputSink) {
+	a.outputs = sink
+}
+
+func (a *Agent) SetTodoExecutor(executor TodoExecutor) {
+	a.todos = executor
 }
 
 func (a *Agent) Run(ctx context.Context, prompt string) (Result, error) {
@@ -96,11 +126,14 @@ func (a *Agent) Run(ctx context.Context, prompt string) (Result, error) {
 			status = trace.StatusError
 			output = err.Error() + "\n" + output
 		}
+		toolCallID, toolResultID := a.nextFallbackToolIDs()
 		a.record(trace.Event{
-			Tool:   step.Tool,
-			Input:  strings.Join(step.Args, " "),
-			Output: output,
-			Status: status,
+			Tool:         step.Tool,
+			Input:        strings.Join(step.Args, " "),
+			Output:       output,
+			Status:       status,
+			ToolCallID:   toolCallID,
+			ToolResultID: toolResultID,
 		})
 		if err != nil {
 			return Result{
@@ -346,9 +379,30 @@ func (a *Agent) execute(ctx context.Context, step Step) (output string, diff str
 		}
 		output, err := a.mcp.Call(ctx, step.Args[0], step.Args[1], args)
 		return output, "", err
+	case "todo_write":
+		args := map[string]any{}
+		if len(step.Args) > 0 {
+			if err := json.Unmarshal([]byte(strings.Join(step.Args, " ")), &args); err != nil {
+				return "", "", fmt.Errorf("invalid todo_write JSON: %w", err)
+			}
+		}
+		output, err := a.executeTodoWrite(ctx, args)
+		return output, "", err
+	case "todo_read":
+		if len(step.Args) > 0 {
+			return "", "", fmt.Errorf("todo_read expects no arguments")
+		}
+		output, err := a.executeTodoRead(ctx)
+		return output, "", err
 	default:
 		return "", "", fmt.Errorf("unknown tool %q", step.Tool)
 	}
+}
+
+func (a *Agent) nextFallbackToolIDs() (string, string) {
+	a.traceSeq++
+	callID := fmt.Sprintf("fallback-step-%d", a.traceSeq)
+	return callID, callID + "-result"
 }
 
 func (a *Agent) runShell(ctx context.Context, command string) (tools.ShellResult, error) {

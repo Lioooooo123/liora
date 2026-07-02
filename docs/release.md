@@ -13,6 +13,9 @@ LIORA_VERSION=v0.1.0 ./scripts/package-release.sh
 ```text
 dist/liora_v0.1.0_darwin_arm64.tar.gz
 dist/liora_v0.1.0_darwin_arm64.tar.gz.sha256
+dist/liora_v0.1.0_darwin_arm64.tar.gz.provenance.json
+dist/liora_v0.1.0_darwin_arm64.tar.gz.sbom.json
+dist/liora_v0.1.0_darwin_arm64.tar.gz.manifest-review.json
 ```
 
 可以用环境变量覆盖目标平台：
@@ -27,7 +30,15 @@ LIORA_VERSION=v0.1.0 GOOS=darwin GOARCH=arm64 ./scripts/package-release.sh
 ./scripts/release-smoke.sh dist/liora_v0.1.0_darwin_arm64.tar.gz
 ```
 
-这个 smoke 会解包到临时目录，运行包内 `install.sh`，再执行安装后的 `liora -version`。
+这个 smoke 会先运行 supply-chain audit，验证 checksum、provenance、依赖清单和 MCP/hook manifest 审查报告，再解包到临时目录，运行包内 `install.sh`，最后执行安装后的 `liora -version`。
+
+也可以单独运行 supply-chain audit：
+
+```sh
+./scripts/release-supply-chain-audit.sh dist/liora_v0.1.0_darwin_arm64.tar.gz
+```
+
+审计要求 tarball 旁边存在同名 `.sha256`、`.provenance.json`、`.sbom.json` 和 `.manifest-review.json`。这些文件必须引用相同的 package name、version 和 git commit；依赖清单不能为空；manifest 审查不能包含未批准的联网 MCP server 或 `/tmp`、`/var/tmp`、`/private/tmp` 下的绝对路径 hook 命令。
 
 验证 daemon-backed TUI 主链路：
 
@@ -37,7 +48,7 @@ LIORA_TUI_SMOKE_LLM_ADDR=127.0.0.1:19091 \
 ./scripts/tui-smoke.sh "$PWD"
 ```
 
-这个 smoke 会启动临时 fake LLM、fake MCP server、Core Daemon 和 `-tui-daemon` 交互入口，覆盖 `/tools` 的 MCP 工具展示、streaming 输出、`/tail` 历史回看、`/timeline` 和运行中 `/cancel`；`/diff` 预览、`/approvals` 审批队列、session auto-resume、`/new-session`、`/transcript` 展开回看、daemon `/v1/workbench` snapshot、daemon `/v1/timeline/search`、daemon multi-task SSE、TUI `/history`、`/workbench` workspace 状态视图、TUI `/spawn` 后台任务、TUI `/watch` 多任务观察和 daemonclient multi-task event stream 由 Go 测试覆盖。
+这个 smoke 会启动临时 fake LLM、fake MCP server、Core Daemon 和 `-tui-daemon` 交互入口，覆盖 `/tools` 的 MCP 工具展示、streaming 输出、`/tail` 历史回看、`/timeline` 和运行中 `/cancel`；`/diff` 预览、`/approvals` 审批队列、session auto-resume、`/new-session`、`/transcript` 展开回看、`/todo` session plan 展示、`todo_write/read` 工具、`/artifact` 长输出分页、daemon `/v1/workbench` snapshot、daemon `/v1/timeline/search`、daemon multi-task SSE、TUI `/history`、`/workbench` workspace 状态视图、TUI `/spawn` 后台任务、TUI `/watch` 多任务观察和 daemonclient multi-task event stream 由 Go 测试覆盖。
 
 验证 coding task 能力基线：
 
@@ -90,7 +101,13 @@ liora -daemon -daemon-addr 127.0.0.1:18080
 bin/liora
 install.sh
 README.md
+docs/README.md
+docs/liora-1.0-plan.md
+docs/coding-agent-architecture-plan.md
+docs/tech-stack-selection.md
+docs/release.md
 docs/mvp-exit-benchmark.md
+docs/v0.1-exit-audit.md
 ```
 
 `install.sh` 不会写入 API key。LLM 配置仍由用户自己放到 `~/.config/liora/.env`，或通过环境变量设置。

@@ -13,16 +13,39 @@ func TestBuiltinToolsExposePlannerAndHumanViews(t *testing.T) {
 		t.Fatal("unexpected unsupported tool")
 	}
 	planner := PlannerToolList()
-	for _, want := range []string{"read <path>", "document <path>", "skill <name>", "run <shell command>", "mcp <server> <tool> <json arguments>"} {
+	for _, want := range []string{"read <path>", "document <path>", "skill <name>", "run <shell command>", "todo_write <json todos>", "todo_read", "mcp <server> <tool> <json arguments>"} {
 		if !strings.Contains(planner, want) {
 			t.Fatalf("expected planner list to contain %q, got:\n%s", want, planner)
 		}
 	}
 	human := HumanToolList()
-	for _, want := range []string{"read_only", "write", "shell", "external", "PDF/DOCX", "精确文本替换"} {
+	for _, want := range []string{"read_only", "write", "shell", "external", "PDF/DOCX", "精确文本替换", "编译、测试", "明确需要已配置 MCP server"} {
 		if !strings.Contains(human, want) {
 			t.Fatalf("expected human list to contain %q, got:\n%s", want, human)
 		}
+	}
+}
+
+func TestCapabilityTodoToolsExposeNativeSchemas(t *testing.T) {
+	byName := map[string]ToolSpec{}
+	for _, spec := range ToolSchemas() {
+		byName[spec.Name] = spec
+	}
+	read := byName["todo_read"]
+	if read.Name == "" || read.Kind != ToolReadOnly {
+		t.Fatalf("expected read-only todo_read schema, got %#v", read)
+	}
+	write := byName["todo_write"]
+	if write.Name == "" || write.Kind != ToolWrite {
+		t.Fatalf("expected write todo_write schema, got %#v", write)
+	}
+	required, ok := write.InputSchema["required"].([]string)
+	if !ok || strings.Join(required, ",") != "todos" {
+		t.Fatalf("expected todo_write to require todos, got %#v", write.InputSchema["required"])
+	}
+	properties, ok := write.InputSchema["properties"].(map[string]any)
+	if !ok || properties["todos"] == nil {
+		t.Fatalf("expected todo_write todos property, got %#v", write.InputSchema["properties"])
 	}
 }
 

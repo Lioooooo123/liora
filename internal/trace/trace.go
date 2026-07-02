@@ -13,11 +13,13 @@ const (
 )
 
 type Event struct {
-	Time   time.Time `json:"time"`
-	Tool   string    `json:"tool"`
-	Input  string    `json:"input"`
-	Output string    `json:"output"`
-	Status Status    `json:"status"`
+	Time         time.Time `json:"time"`
+	Tool         string    `json:"tool"`
+	Input        string    `json:"input"`
+	Output       string    `json:"output"`
+	Status       Status    `json:"status"`
+	ToolCallID   string    `json:"tool_call_id,omitempty"`
+	ToolResultID string    `json:"tool_result_id,omitempty"`
 }
 
 type Recorder interface {

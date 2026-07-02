@@ -4,10 +4,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKSPACE="${1:-$ROOT}"
 ADDR="${LIORA_DAEMON_ADDR:-127.0.0.1:18080}"
+TMP_DIR="$(mktemp -d)"
 
-LIORA_PATCH_MODE=1 go run ./apps/cli -daemon -daemon-addr "$ADDR" &
+GOTOOLCHAIN="${GOTOOLCHAIN:-local}" go build -o "$TMP_DIR/liora-smoke" ./apps/cli
+LIORA_PATCH_MODE=1 "$TMP_DIR/liora-smoke" -daemon -daemon-addr "$ADDR" &
 PID="$!"
-trap 'kill "$PID" >/dev/null 2>&1 || true' EXIT
+cleanup() {
+  kill "$PID" >/dev/null 2>&1 || true
+  wait "$PID" >/dev/null 2>&1 || true
+  rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
 
 READY=0
 for _ in $(seq 1 100); do
@@ -22,7 +29,8 @@ if [[ "$READY" != "1" ]]; then
   exit 1
 fi
 
-PATCH_WORKSPACE="$(mktemp -d)"
+PATCH_WORKSPACE="$TMP_DIR/patch-workspace"
+mkdir -p "$PATCH_WORKSPACE"
 TASK_JSON="$(
   curl -fsS "http://$ADDR/v1/tasks" \
     -H 'Content-Type: application/json' \
@@ -51,7 +59,8 @@ curl -fsS "http://$ADDR/v1/tasks/$TASK_ID/apply" \
   -d "$(printf '{"patch":%s}' "$PATCH_VALUE")" >/dev/null
 grep -q '^hello$' "$PATCH_WORKSPACE/proposed.txt"
 
-APPLY_WORKSPACE="$(mktemp -d)"
+APPLY_WORKSPACE="$TMP_DIR/apply-workspace"
+mkdir -p "$APPLY_WORKSPACE"
 APPLY_TASK_JSON="$(
   curl -fsS "http://$ADDR/v1/tasks" \
     -H 'Content-Type: application/json' \

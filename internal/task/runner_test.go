@@ -2,6 +2,10 @@ package task
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,6 +113,317 @@ func TestRunnerExecutesTaskAndPersistsEvents(t *testing.T) {
 	}
 	if !strings.Contains(combinedPayload.String(), "notes.txt") || !strings.Contains(combinedPayload.String(), "completed 2 steps") {
 		t.Fatalf("unexpected event payloads:\n%s", combinedPayload.String())
+	}
+}
+
+func TestRunnerPersistsPairedToolCallAndResultIDsForFailures(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	task, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "read missing file",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner := NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "read missing.txt"}))
+	if err := runner.Run(t.Context(), task.ID); err == nil {
+		t.Fatal("expected missing file task to fail")
+	}
+
+	events, err := repo.Events(t.Context(), task.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var call, result EventPayload
+	for _, event := range events {
+		switch event.Type {
+		case EventToolCall:
+			if err := json.Unmarshal([]byte(event.Payload), &call); err != nil {
+				t.Fatal(err)
+			}
+		case EventToolResult:
+			if err := json.Unmarshal([]byte(event.Payload), &result); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if call.ToolCallID == "" || result.ToolCallID == "" || call.ToolCallID != result.ToolCallID {
+		t.Fatalf("expected paired tool call/result ids, call=%#v result=%#v", call, result)
+	}
+	if result.ToolResultID != call.ToolCallID+"-result" {
+		t.Fatalf("expected deterministic tool result id, call=%#v result=%#v", call, result)
+	}
+	if result.Status != "error" {
+		t.Fatalf("expected failed result status to be structured as error, got %#v", result)
+	}
+	if !strings.Contains(result.Output, "missing.txt") {
+		t.Fatalf("expected failed result output to mention missing file, got %#v", result)
+	}
+}
+
+func TestDaemonToolOutputSinkPersistsSessionArtifactAndEvent(t *testing.T) {
+	workspace := t.TempDir()
+	storeRoot := t.TempDir()
+	db, err := store.New(storeRoot).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	task, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "large output",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := daemonToolOutputSink{
+		root:      storeRoot,
+		repo:      repo,
+		taskID:    task.ID,
+		sessionID: task.SessionID,
+	}
+
+	outputPath, err := sink.PersistToolOutput(t.Context(), llm.ToolCall{ID: "call/1", Name: "mcp"}, "large output body")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(outputPath, "artifact://artifacts/sessions/"+task.SessionID+"/tasks/"+task.ID+"/tool-results/") {
+		t.Fatalf("expected session artifact URI, got %q", outputPath)
+	}
+	if _, err := os.Stat(filepath.Join(storeRoot, strings.TrimPrefix(outputPath, "artifact://"))); err != nil {
+		t.Fatalf("expected artifact file under store root: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".liora", "tool-results")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("daemon artifact sink should not create workspace tool-results, err=%v", err)
+	}
+	events, err := repo.Events(t.Context(), task.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload EventPayload
+	for _, event := range events {
+		if event.Type == EventArtifactReference {
+			if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if payload.Path != outputPath || payload.Tool != "mcp" || payload.ToolCallID != "call/1" {
+		t.Fatalf("expected artifact reference event to point at sink output, got %#v", payload)
+	}
+}
+
+func TestRunnerRoutesNaturalTaskThroughThreadModelRegistry(t *testing.T) {
+	workspace := t.TempDir()
+	llmRequests := make(chan string, 1)
+	threadLLM := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("unexpected LLM path %s", r.URL.Path)
+		}
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		llmRequests <- body.Model
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ANSWER: routed through thread model"}}]}`))
+	}))
+	defer threadLLM.Close()
+
+	persistentStore := store.New(t.TempDir())
+	thread, err := persistentStore.CreateConversationThread(store.CreateConversationThreadRequest{Workspace: workspace, Title: "model thread"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := persistentStore.UpdateThreadModelConfig(thread.ID, store.UpdateThreadModelConfigRequest{
+		Provider: llm.ProviderOpenAIChat,
+		Model:    "thread-model",
+		BaseURL:  threadLLM.URL,
+		Profile:  "strong",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	if _, err := repo.EnsureSession(t.Context(), thread.ID, thread.Title, workspace); err != nil {
+		t.Fatal(err)
+	}
+	task, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		SessionID: thread.ID,
+		Prompt:    "which model handles this?",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := llm.NewRegistry(llm.Config{
+		Provider: llm.ProviderOpenAIChat,
+		BaseURL:  "http://default.invalid",
+		APIKey:   "test-key",
+		Model:    "default-model",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "ANSWER: default planner should not be used"}))
+	runner.SetStore(persistentStore)
+	runner.SetLLMRegistry(registry)
+	if err := runner.Run(t.Context(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-llmRequests:
+		if got != "thread-model" {
+			t.Fatalf("expected thread model request, got %q", got)
+		}
+	default:
+		t.Fatal("thread LLM endpoint was not called")
+	}
+	events, err := repo.Events(t.Context(), task.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payloads strings.Builder
+	for _, event := range events {
+		payloads.WriteString(event.Payload)
+		payloads.WriteByte('\n')
+	}
+	if !strings.Contains(payloads.String(), `"provider":"openai-chat"`) || !strings.Contains(payloads.String(), `"model":"thread-model"`) || !strings.Contains(payloads.String(), `"profile":"strong"`) {
+		t.Fatalf("expected event metadata to include resolved thread model, got:\n%s", payloads.String())
+	}
+	if !strings.Contains(payloads.String(), "routed through thread model") {
+		t.Fatalf("expected thread LLM response in task events, got:\n%s", payloads.String())
+	}
+}
+
+func TestRunnerResolvesModelBindingHierarchyIntoTaskMetadata(t *testing.T) {
+	workspace := t.TempDir()
+	otherWorkspace := t.TempDir()
+	persistentStore := store.New(t.TempDir())
+	if _, err := persistentStore.UpdateWorkspaceModelConfig(workspace, store.UpdateWorkspaceModelConfigRequest{
+		Provider: llm.ProviderOpenAIChat,
+		Model:    "workspace-model",
+		Profile:  "workspace-profile",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := persistentStore.CreateConversationThread(store.CreateConversationThreadRequest{Workspace: workspace, Title: "thread"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := persistentStore.UpdateThreadModelConfig(thread.ID, store.UpdateThreadModelConfigRequest{
+		Provider: llm.ProviderOpenAIChat,
+		Model:    "thread-model",
+		Profile:  "thread-profile",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	if _, err := repo.EnsureSession(t.Context(), thread.ID, thread.Title, workspace); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := llm.NewRegistry(llm.Config{
+		Provider: llm.ProviderOpenAIChat,
+		APIKey:   "key",
+		Model:    "global-model",
+		Profile:  "global-profile",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: ""}))
+	runner.SetStore(persistentStore)
+	runner.SetLLMRegistry(registry)
+
+	cases := []struct {
+		name       string
+		request    CreateRequest
+		wantModel  string
+		wantSource string
+	}{
+		{
+			name:       "global",
+			request:    CreateRequest{Workspace: otherWorkspace, Prompt: "write global.txt ok", Natural: false},
+			wantModel:  "global-model",
+			wantSource: "global_default",
+		},
+		{
+			name:       "workspace",
+			request:    CreateRequest{Workspace: workspace, Prompt: "write workspace.txt ok", Natural: false},
+			wantModel:  "workspace-model",
+			wantSource: "workspace_default",
+		},
+		{
+			name:       "thread",
+			request:    CreateRequest{Workspace: workspace, SessionID: thread.ID, Prompt: "write thread.txt ok", Natural: false},
+			wantModel:  "thread-model",
+			wantSource: "thread_override",
+		},
+		{
+			name: "task",
+			request: CreateRequest{
+				Workspace: workspace,
+				SessionID: thread.ID,
+				Prompt:    "write task.txt ok",
+				Natural:   false,
+				ModelConfig: &ModelConfig{
+					Provider: llm.ProviderOpenAIChat,
+					Model:    "task-model",
+					Profile:  "task-profile",
+				},
+			},
+			wantModel:  "task-model",
+			wantSource: "task_override",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			task, err := repo.Create(t.Context(), tc.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runner.Run(t.Context(), task.ID); err != nil {
+				t.Fatal(err)
+			}
+			got, err := repo.Get(t.Context(), task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.ModelConfig == nil || got.ModelConfig.Model != tc.wantModel || got.ModelConfig.Source != tc.wantSource {
+				t.Fatalf("unexpected resolved task model %#v", got.ModelConfig)
+			}
+			events, err := repo.Events(t.Context(), task.ID, 20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payloads := strings.Join(eventPayloads(events), "\n")
+			if !strings.Contains(payloads, `"model":"`+tc.wantModel+`"`) {
+				t.Fatalf("expected event payloads to include resolved model %q, got:\n%s", tc.wantModel, payloads)
+			}
+		})
 	}
 }
 
@@ -383,7 +698,7 @@ func TestRunnerReplansNaturalTaskAfterToolFailure(t *testing.T) {
 		payloads.WriteString(event.Payload)
 		payloads.WriteByte('\n')
 	}
-	if !strings.Contains(payloads.String(), "missing.txt") || !strings.Contains(payloads.String(), "app.txt") || !strings.Contains(payloads.String(), "completed 2 steps") {
+	if !strings.Contains(payloads.String(), "missing.txt") || !strings.Contains(payloads.String(), "app.txt") || !strings.Contains(payloads.String(), "completed 2 steps") || !strings.Contains(payloads.String(), `"replan_reason"`) {
 		t.Fatalf("unexpected event payloads:\n%s", payloads.String())
 	}
 	timeline, err := repo.Timeline(t.Context(), task.SessionID, 100)
@@ -482,6 +797,93 @@ func TestRunnerWaitsForPermissionBeforeDangerousShell(t *testing.T) {
 	}
 }
 
+func TestRunnerWaitsForPermissionBeforeNetworkShell(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	task, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "run curl https://example.com/data.json",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: ""}))
+	runner.SetPermissionPolicy(permission.Policy{Mode: permission.ModePrompt})
+	if err := runner.Run(t.Context(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(t.Context(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusWaitingUser {
+		t.Fatalf("expected waiting user status, got %#v", got)
+	}
+	events, err := repo.Events(t.Context(), task.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payloads strings.Builder
+	for _, event := range events {
+		payloads.WriteString(event.Payload)
+	}
+	if !containsEventType(eventTypes(events), EventPermissionRequest) || !strings.Contains(payloads.String(), `"risk":"network"`) {
+		t.Fatalf("expected network permission request event, got %#v payloads=%s", eventTypes(events), payloads.String())
+	}
+}
+
+func TestRunnerDefaultDeniesAutomationNetworkShell(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	task, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "run curl https://evil.example.net/data.json",
+		Natural:   false,
+		Origin:    OriginBackground,
+		Automation: AutomationMetadata{
+			Kind: AutomationKindBackground,
+			Risk: AutomationRiskSafe,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: ""}))
+	runner.SetPermissionPolicy(permission.Policy{
+		Mode:               permission.ModeAuto,
+		NetworkDefaultDeny: true,
+		NetworkAllowlist:   []string{"example.com"},
+	})
+	if err := runner.Run(t.Context(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(t.Context(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusWaitingUser {
+		t.Fatalf("expected automation network command to wait for approval, got %#v", got)
+	}
+	events, err := repo.Events(t.Context(), task.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsEventType(eventTypes(events), EventPermissionRequest) {
+		t.Fatalf("expected permission request event, got %#v", eventTypes(events))
+	}
+}
+
 func TestRunnerContinuesAfterApproval(t *testing.T) {
 	workspace := t.TempDir()
 	db, err := store.New(t.TempDir()).OpenDB()
@@ -515,6 +917,61 @@ func TestRunnerContinuesAfterApproval(t *testing.T) {
 	}
 }
 
+func TestRunnerWaitsForUserInputAndContinuesWithAnswer(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	task, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "update the selected file",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generator := &fakeGenerator{responses: []string{
+		"ASK_USER: Which file should I edit?",
+		"ANSWER: I will edit notes.txt.",
+	}}
+	runner := NewRunner(repo, llm.NewPlanner(generator))
+
+	if err := runner.Run(t.Context(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	waiting, err := repo.Get(t.Context(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waiting.Status != StatusWaitingUser {
+		t.Fatalf("expected waiting for user input, got %#v", waiting)
+	}
+	if err := repo.ReceiveUserInput(t.Context(), task.ID, "notes.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(t.Context(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(t.Context(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusCompleted {
+		t.Fatalf("expected completed after user input, got %#v", got)
+	}
+	events, err := repo.Events(t.Context(), task.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	types := eventTypes(events)
+	if !containsEventType(types, EventUserInputRequest) || !containsEventType(types, EventUserInputReceived) {
+		t.Fatalf("expected user input events, got %#v", types)
+	}
+}
+
 func containsEventType(events []EventType, want EventType) bool {
 	for _, event := range events {
 		if event == want {
@@ -530,6 +987,14 @@ func eventTypes(events []Event) []EventType {
 		types = append(types, event.Type)
 	}
 	return types
+}
+
+func eventPayloads(events []Event) []string {
+	payloads := make([]string, 0, len(events))
+	for _, event := range events {
+		payloads = append(payloads, event.Payload)
+	}
+	return payloads
 }
 
 func countEventType(events []EventType, want EventType) int {

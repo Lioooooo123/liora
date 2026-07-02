@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -185,6 +186,132 @@ func TestRenderStreamUpdateHidesInternalProgress(t *testing.T) {
 			t.Fatalf("expected progress output to hide %q, got:\n%s", avoid, rendered)
 		}
 	}
+}
+
+func TestDaemonEventFormattersShareSemantics(t *testing.T) {
+	update := streamUpdate("todo.updated", eventPayload{ID: "todo-1", Action: "complete", Message: "write tests", Status: "done", Priority: "high", SourceTaskID: "task-1"})
+
+	section := FormatDaemonEventUpdate(update)
+	replay := FormatDaemonEventReplay(update.Type, update.PayloadJSON)
+	tail := strings.Join(FormatDaemonEventTail(update.Type, update.PayloadJSON), "\n")
+	watch := FormatDaemonEventWatch("task-001", update.Type, update.PayloadJSON)
+
+	for name, got := range map[string]string{
+		"bubble": section.Body,
+		"replay": replay,
+		"tail":   tail,
+		"watch":  watch,
+	} {
+		if !strings.Contains(got, "write tests") || !strings.Contains(got, "priority=high") || !strings.Contains(got, "source_task_id=task-1") {
+			t.Fatalf("%s formatter did not preserve shared event semantics: %q", name, got)
+		}
+	}
+	if !section.Visible || section.Title != "Todo" {
+		t.Fatalf("unexpected bubble section %#v", section)
+	}
+}
+
+func TestDaemonEventFormattersHandleMalformedAndUnknownEvents(t *testing.T) {
+	malformed := StreamUpdate{Type: "custom.event", PayloadJSON: "{"}
+
+	section := FormatDaemonEventUpdate(malformed)
+	if !section.Visible || !strings.Contains(section.Body, "custom.event") || !strings.Contains(section.Body, "malformed payload") {
+		t.Fatalf("unexpected malformed section %#v", section)
+	}
+	for name, got := range map[string]string{
+		"replay": FormatDaemonEventReplay(malformed.Type, malformed.PayloadJSON),
+		"tail":   strings.Join(FormatDaemonEventTail(malformed.Type, malformed.PayloadJSON), "\n"),
+		"watch":  FormatDaemonEventWatch("task-001", malformed.Type, malformed.PayloadJSON),
+	} {
+		if !strings.Contains(got, "custom.event") || !strings.Contains(got, "malformed payload") {
+			t.Fatalf("%s formatter did not preserve malformed event identity: %q", name, got)
+		}
+	}
+
+	unknown := streamUpdate("custom.event", eventPayload{Message: "hello from future"})
+	if got := FormatDaemonEventUpdate(unknown); !got.Visible || !strings.Contains(got.Body, "custom.event: hello from future") {
+		t.Fatalf("unexpected unknown event section %#v", got)
+	}
+}
+
+func TestDaemonEventFormattersCoverCatalogFixture(t *testing.T) {
+	fixture := readDaemonEventCatalogFixture(t)
+	expected := make([]string, 0, len(fixture.Events))
+	covered := make([]string, 0, len(fixture.Events))
+
+	for _, frame := range fixture.Events {
+		payload, err := json.Marshal(frame.Data)
+		if err != nil {
+			t.Fatalf("marshal catalog payload for %s: %v", frame.Event, err)
+		}
+		replay := FormatDaemonEventReplay(frame.Event, string(payload))
+		tail := strings.Join(FormatDaemonEventTail(frame.Event, string(payload)), "\n")
+		watch := FormatDaemonEventWatch("task-catalog", frame.Event, string(payload))
+		if strings.Contains(replay, "malformed payload") || strings.Contains(tail, "malformed payload") || strings.Contains(watch, "malformed payload") {
+			t.Fatalf("catalog event %s formatted as malformed: replay=%q tail=%q watch=%q", frame.Event, replay, tail, watch)
+		}
+		if !strings.Contains(replay, frame.Event) || !strings.Contains(tail, frame.Event) || !strings.Contains(watch, frame.Event) {
+			t.Fatalf("catalog event %s lost identity: replay=%q tail=%q watch=%q", frame.Event, replay, tail, watch)
+		}
+		expected = append(expected, frame.Event)
+		covered = append(covered, frame.Event)
+	}
+
+	if missing := missingDaemonEventCoverage(expected, covered); len(missing) != 0 {
+		t.Fatalf("missing daemon event formatter coverage: %#v", missing)
+	}
+}
+
+func TestDaemonEventFormatterCoverageDetectsMissingCatalogEvent(t *testing.T) {
+	fixture := readDaemonEventCatalogFixture(t)
+	if len(fixture.Events) == 0 {
+		t.Fatal("expected catalog events")
+	}
+	expected := make([]string, 0, len(fixture.Events))
+	for _, frame := range fixture.Events {
+		expected = append(expected, frame.Event)
+	}
+
+	missing := missingDaemonEventCoverage(expected, expected[1:])
+
+	if len(missing) != 1 || missing[0] != expected[0] {
+		t.Fatalf("expected missing first catalog event, got %#v", missing)
+	}
+}
+
+type daemonEventCatalogFixture struct {
+	Events []struct {
+		Event string       `json:"event"`
+		Data  eventPayload `json:"data"`
+	} `json:"events"`
+}
+
+func readDaemonEventCatalogFixture(t *testing.T) daemonEventCatalogFixture {
+	t.Helper()
+
+	payload, err := os.ReadFile("../protocol/testdata/daemon-event-catalog.json")
+	if err != nil {
+		t.Fatalf("read daemon event catalog fixture: %v", err)
+	}
+	var fixture daemonEventCatalogFixture
+	if err := json.Unmarshal(payload, &fixture); err != nil {
+		t.Fatalf("decode daemon event catalog fixture: %v", err)
+	}
+	return fixture
+}
+
+func missingDaemonEventCoverage(expected []string, covered []string) []string {
+	coveredSet := make(map[string]bool, len(covered))
+	for _, event := range covered {
+		coveredSet[event] = true
+	}
+	var missing []string
+	for _, event := range expected {
+		if !coveredSet[event] {
+			missing = append(missing, event)
+		}
+	}
+	return missing
 }
 
 type blockingStreamingSubmitter struct {

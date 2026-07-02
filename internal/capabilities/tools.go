@@ -103,13 +103,25 @@ var builtinTools = []ToolSpec{
 		InputSchema: objectSchema(props{
 			"path": stringProp("要删除的文件或目录相对路径。"),
 		}, []string{"path"})},
-	{Name: "run", Usage: "run <shell command>", Description: "在 workspace/sandbox 中执行 shell 命令。", Kind: ToolShell,
+	{Name: "run", Usage: "run <shell command>", Description: "在 workspace/sandbox 中执行 shell 命令；仅用于编译、测试或内建文件工具无法覆盖的检查。", Kind: ToolShell,
 		InputSchema: objectSchema(props{
 			"command": stringProp("要执行的 shell 命令。"),
 		}, []string{"command"})},
 	{Name: "diff", Usage: "diff", Description: "输出当前 workspace 变更。", Kind: ToolReadOnly,
 		InputSchema: objectSchema(props{}, nil)},
-	{Name: "mcp", Usage: "mcp <server> <tool> <json arguments>", Description: "调用已配置 MCP server 暴露的工具。", Kind: ToolExternal,
+	{Name: "todo_read", Usage: "todo_read", Description: "读取当前 daemon session 的持久 todo/plan 状态。", Kind: ToolReadOnly,
+		InputSchema: objectSchema(props{}, nil)},
+	{Name: "todo_write", Usage: "todo_write <json todos>", Description: "创建或更新当前 daemon session 的持久 todo/plan 状态。", Kind: ToolWrite,
+		InputSchema: objectSchema(props{
+			"todos": arrayProp("Todo 数组。每项包含 content，status 可为 pending/in_progress/done/cancelled，priority 可为 low/normal/high/critical。", objectSchema(props{
+				"id":             stringProp("可选 todo id；省略时创建新 todo。"),
+				"content":        stringProp("Todo 内容。"),
+				"status":         stringProp("Todo 状态：pending、in_progress、done 或 cancelled。"),
+				"priority":       stringProp("Todo 优先级：low、normal、high 或 critical。"),
+				"source_task_id": stringProp("可选来源 task id；必须匹配当前 task。"),
+			}, []string{"content"})),
+		}, []string{"todos"})},
+	{Name: "mcp", Usage: "mcp <server> <tool> <json arguments>", Description: "仅当用户明确需要已配置 MCP server 时调用外部工具。", Kind: ToolExternal,
 		InputSchema: objectSchema(props{
 			"server":    stringProp("已配置的 MCP server 名称。"),
 			"tool":      stringProp("要调用的 MCP 工具名称。"),
@@ -206,4 +218,8 @@ func booleanProp(description string) map[string]any {
 
 func objectProp(description string) map[string]any {
 	return map[string]any{"type": "object", "description": description}
+}
+
+func arrayProp(description string, items map[string]any) map[string]any {
+	return map[string]any{"type": "array", "description": description, "items": items}
 }

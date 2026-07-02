@@ -3,7 +3,6 @@ package tui
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strconv"
@@ -373,46 +372,9 @@ func RenderStreamUpdate(output io.Writer, update StreamUpdate) {
 }
 
 func RenderStreamUpdateWithWidth(output io.Writer, update StreamUpdate, width int) {
-	payload := decodeEventPayload(update.PayloadJSON)
-	switch update.Type {
-	case "task.planning", "sandbox.run", "sandbox.workspace", "task.plan_ready", "task.replanning", "tool.call":
-		return
-	case "tool.result":
-		if payload.Status != "" && payload.Status != string(trace.StatusOK) {
-			renderSectionWithWidth(output, "Error", formatToolEvent(payload), width)
-		}
-	case "task.summary":
-		if strings.TrimSpace(payload.Message) != "" {
-			renderSectionWithWidth(output, "Assistant", payload.Message, width)
-		}
-	case "task.diff":
-		if strings.TrimSpace(payload.Diff) != "" {
-			renderSectionWithWidth(output, "Assistant", PatchReadyReply(payload.Diff), width)
-		}
-	case "permission.requested":
-		body := strings.TrimSpace(payload.Tool + " " + payload.Input)
-		if payload.Risk != "" {
-			body += "\nRisk: " + payload.Risk
-		}
-		if payload.Reason != "" {
-			body += "\nReason: " + payload.Reason
-		}
-		body += "\nCommands: /approve to continue, /deny to cancel."
-		renderSectionWithWidth(output, "Approval", body, width)
-	case "permission.approved":
-		renderSectionWithWidth(output, "Approval", "approved", width)
-	case "permission.denied":
-		renderSectionWithWidth(output, "Approval", "denied", width)
-	case "task.completed", "task.cancelled":
-		if update.Type == "task.cancelled" {
-			status := valueOr(payload.Status, "cancelled")
-			if payload.Message != "" {
-				status += ": " + payload.Message
-			}
-			renderSectionWithWidth(output, "System", status, width)
-		}
-	case "task.error":
-		renderSectionWithWidth(output, "Error", strings.TrimSpace(payload.Message+"\n"+payload.Output), width)
+	section := FormatDaemonEventUpdate(update)
+	if section.Visible {
+		renderSectionWithWidth(output, section.Title, section.Body, width)
 	}
 }
 
@@ -430,24 +392,6 @@ func RenderTurn(output io.Writer, view TurnView) {
 	if strings.TrimSpace(result.AgentResult.Diff) != "" {
 		renderSection(output, "Assistant", PatchReadyReply(result.AgentResult.Diff))
 	}
-}
-
-type eventPayload struct {
-	Message string `json:"message,omitempty"`
-	Tool    string `json:"tool,omitempty"`
-	Input   string `json:"input,omitempty"`
-	Output  string `json:"output,omitempty"`
-	Status  string `json:"status,omitempty"`
-	Steps   string `json:"steps,omitempty"`
-	Diff    string `json:"diff,omitempty"`
-	Risk    string `json:"risk,omitempty"`
-	Reason  string `json:"reason,omitempty"`
-}
-
-func decodeEventPayload(payloadJSON string) eventPayload {
-	var payload eventPayload
-	_ = json.Unmarshal([]byte(payloadJSON), &payload)
-	return payload
 }
 
 func formatPlan(steps string) string {
@@ -518,7 +462,7 @@ func keyValue(key string, value string) string {
 func helpText() string {
 	groups := []string{
 		commandStyle.Render("work") + "      /tools  /workbench  /spawn <request>  /watch [active|task_id...]",
-		commandStyle.Render("history") + "   /tasks  /sessions  /timeline [limit]  /transcript [limit]  /history <query>  /tail",
+		commandStyle.Render("history") + "   /tasks  /sessions  /timeline [limit]  /transcript [limit]  /todo  /history <query>  /tail  /artifact <uri>",
 		commandStyle.Render("changes") + "   /diff [task_id]  /apply  /cancel [task_id]",
 		commandStyle.Render("approval") + "  /approvals  /approve [task_id]  /deny [task_id]",
 		commandStyle.Render("context") + "   /memory  /goal  /skills  /skill <name>  /mcp",

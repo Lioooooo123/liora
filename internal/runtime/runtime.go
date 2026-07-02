@@ -27,6 +27,8 @@ type Runtime struct {
 	store     *store.Store
 	sandbox   sandbox.Executor
 	checker   permission.Checker
+	outputs   agent.ToolOutputSink
+	todos     agent.TodoExecutor
 }
 
 type SubmitOptions struct {
@@ -59,6 +61,14 @@ func (r *Runtime) SetPermissionChecker(checker permission.Checker) {
 	r.checker = checker
 }
 
+func (r *Runtime) SetToolOutputSink(sink agent.ToolOutputSink) {
+	r.outputs = sink
+}
+
+func (r *Runtime) SetTodoExecutor(executor agent.TodoExecutor) {
+	r.todos = executor
+}
+
 func (r *Runtime) Submit(ctx context.Context, input string) (tui.TurnResult, error) {
 	return r.SubmitWithOptions(ctx, input, SubmitOptions{Recorder: trace.NewMemoryRecorder()})
 }
@@ -85,10 +95,16 @@ func (r *Runtime) SubmitWithOptions(ctx context.Context, input string, options S
 	if strings.TrimSpace(turn.Answer) != "" {
 		return tui.TurnResult{Answer: turn.Answer}, nil
 	}
+	if strings.TrimSpace(turn.Question) != "" {
+		return tui.TurnResult{
+			AgentResult: agent.Result{Status: agent.StatusWaitingUser, Summary: turn.Question},
+		}, nil
+	}
 	if options.OnPlan != nil {
 		options.OnPlan(turn.Steps)
 	}
-	result, err := r.runPlannedSteps(ctx, turn.Steps, recorder)
+	runner := r.newAgent(recorder)
+	result, err := runner.Run(ctx, turn.Steps)
 	plannedSteps := turn.Steps
 	if err != nil && r.shouldReplan(ctx, err) {
 		if options.OnReplan != nil {
@@ -110,11 +126,18 @@ func (r *Runtime) SubmitWithOptions(ctx context.Context, input string, options S
 		if strings.TrimSpace(replan.Answer) != "" {
 			return tui.TurnResult{Answer: replan.Answer, PlannedSteps: plannedSteps, AgentResult: result, Events: recordedEvents(recorder)}, nil
 		}
+		if strings.TrimSpace(replan.Question) != "" {
+			return tui.TurnResult{
+				PlannedSteps: plannedSteps,
+				AgentResult:  agent.Result{Status: agent.StatusWaitingUser, Summary: replan.Question, Diff: result.Diff},
+				Events:       recordedEvents(recorder),
+			}, nil
+		}
 		if options.OnPlan != nil {
 			options.OnPlan(replan.Steps)
 		}
 		plannedSteps = strings.TrimSpace(plannedSteps + "\n\n# Replan 1\n" + replan.Steps)
-		result, err = r.runPlannedSteps(ctx, replan.Steps, recorder)
+		result, err = runner.Run(ctx, replan.Steps)
 	}
 	return tui.TurnResult{
 		PlannedSteps: plannedSteps,
@@ -144,17 +167,7 @@ func (r *Runtime) toolLoopCaller() (llm.ToolCaller, bool) {
 }
 
 func (r *Runtime) runToolLoop(ctx context.Context, input string, caller llm.ToolCaller, recorder trace.Recorder, options SubmitOptions) (tui.TurnResult, error) {
-	runner := agent.New(r.workspace, recorder)
-	if r.sandbox != nil {
-		runner.SetShellExecutor(r.sandbox)
-	}
-	if r.checker != nil {
-		runner.SetPermissionChecker(r.checker)
-	}
-	runner.SetSkillReader(r.store)
-	if manager, err := r.mcpManager(); err == nil && manager != nil {
-		runner.SetMCP(manager)
-	}
+	runner := r.newAgent(recorder)
 	var plannedSteps string
 	loop := agent.NewToolLoop(runner, caller, agent.LoopOptions{
 		OnPlan: func(steps string) {
@@ -173,8 +186,14 @@ func (r *Runtime) runToolLoop(ctx context.Context, input string, caller llm.Tool
 	}, err
 }
 
-func (r *Runtime) runPlannedSteps(ctx context.Context, steps string, recorder trace.Recorder) (agent.Result, error) {
+func (r *Runtime) newAgent(recorder trace.Recorder) *agent.Agent {
 	runner := agent.New(r.workspace, recorder)
+	if r.outputs != nil {
+		runner.SetToolOutputSink(r.outputs)
+	}
+	if r.todos != nil {
+		runner.SetTodoExecutor(r.todos)
+	}
 	if r.sandbox != nil {
 		runner.SetShellExecutor(r.sandbox)
 	}
@@ -182,10 +201,10 @@ func (r *Runtime) runPlannedSteps(ctx context.Context, steps string, recorder tr
 		runner.SetPermissionChecker(r.checker)
 	}
 	runner.SetSkillReader(r.store)
-	if manager, err := r.mcpManager(); err == nil {
+	if manager, err := r.mcpManager(); err == nil && manager != nil {
 		runner.SetMCP(manager)
 	}
-	return runner.Run(ctx, steps)
+	return runner
 }
 
 func (r *Runtime) shouldReplan(ctx context.Context, err error) bool {

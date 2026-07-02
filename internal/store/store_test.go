@@ -9,6 +9,22 @@ import (
 	"time"
 )
 
+func TestStoreOpenDBConfiguresSQLiteBusyTimeout(t *testing.T) {
+	db, err := New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	var timeout int
+	if err := db.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		t.Fatal(err)
+	}
+	if timeout != 10000 {
+		t.Fatalf("expected busy_timeout=10000, got %d", timeout)
+	}
+}
+
 func TestStorePersistsGoal(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
@@ -39,11 +55,16 @@ func TestStorePersistsAndSearchesMemories(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	created, err := s.CreateMemory("remember MCP config format")
+	created, err := s.CreateMemoryWithOptions(CreateMemoryRequest{
+		Text:       "remember MCP config format",
+		Kind:       "preference",
+		Source:     "test",
+		Importance: 5,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.ID == "" || created.Text != "remember MCP config format" || created.Source != "manual" {
+	if created.ID == "" || created.Text != "remember MCP config format" || created.Kind != "preference" || created.Source != "test" || created.Importance != 5 || !created.Enabled {
 		t.Fatalf("unexpected created memory %#v", created)
 	}
 	if err := s.AddMemory("prefer concise TUI output"); err != nil {
@@ -60,10 +81,20 @@ func TestStorePersistsAndSearchesMemories(t *testing.T) {
 	if len(memories) != 2 || memories[0].ID == "" || memories[0].Text != "remember MCP config format" {
 		t.Fatalf("unexpected memories %#v", memories)
 	}
-	if memories[0].Kind != "note" || memories[0].Importance != 3 {
+	if memories[1].Kind != "note" || memories[1].Importance != 3 || !memories[1].Enabled {
 		t.Fatalf("unexpected memory defaults %#v", memories[0])
 	}
 
+	updated, err := s.UpdateMemory(created.ID, UpdateMemoryRequest{Text: stringPtr("prefer MCP config blocks"), Importance: intPtr(4)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Text != "prefer MCP config blocks" || updated.Kind != "preference" || updated.Importance != 4 || !updated.Enabled {
+		t.Fatalf("unexpected updated memory %#v", updated)
+	}
+	if _, err := s.SetMemoryEnabled(created.ID, false); err != nil {
+		t.Fatal(err)
+	}
 	matches, err := s.SearchMemories("tui", 10)
 	if err != nil {
 		t.Fatal(err)
@@ -71,6 +102,44 @@ func TestStorePersistsAndSearchesMemories(t *testing.T) {
 	if len(matches) != 1 || !strings.Contains(strings.ToLower(matches[0].Text), "tui") {
 		t.Fatalf("unexpected search result %#v", matches)
 	}
+	matches, err = s.SearchMemories("mcp", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected disabled memory hidden by default, got %#v", matches)
+	}
+	all, err := s.SearchMemoriesWithOptions("mcp", 10, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 || all[0].ID != created.ID || all[0].Enabled {
+		t.Fatalf("expected disabled memory with include disabled, got %#v", all)
+	}
+	if _, err := s.SetMemoryEnabled(created.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err := s.GetMemory(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !enabled.Enabled {
+		t.Fatalf("expected memory re-enabled, got %#v", enabled)
+	}
+	if _, err := s.CreateMemoryWithOptions(CreateMemoryRequest{Text: "bad", Kind: "unknown", Importance: 3}); err == nil {
+		t.Fatal("expected unknown kind to fail")
+	}
+	if _, err := s.CreateMemoryWithOptions(CreateMemoryRequest{Text: "bad", Kind: "note", Importance: 9}); err == nil {
+		t.Fatal("expected invalid importance to fail")
+	}
+}
+
+func stringPtr(value string) *string {
+	return &value
+}
+
+func intPtr(value int) *int {
+	return &value
 }
 
 func TestStoreMigratesLegacyJSONLMemoryToSQLite(t *testing.T) {

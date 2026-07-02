@@ -73,6 +73,31 @@ func TestPlannerSupportsDirectAnswer(t *testing.T) {
 	}
 }
 
+func TestPlannerSupportsUserQuestion(t *testing.T) {
+	generator := &fakeGenerator{response: "ASK_USER: Which file should I edit?"}
+	planner := NewPlanner(generator)
+
+	turn, err := planner.PlanTurn(t.Context(), PlanRequest{UserPrompt: "change it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turn.Question != "Which file should I edit?" {
+		t.Fatalf("unexpected question %q", turn.Question)
+	}
+	if turn.Steps != "" || turn.Answer != "" {
+		t.Fatalf("expected only question, got %#v", turn)
+	}
+}
+
+func TestPlannerPromptDocumentsUserQuestionOutput(t *testing.T) {
+	prompt := plannerSystemPrompt()
+	for _, want := range []string{"ASK_USER:", "one precise question", "cannot proceed safely"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected planner prompt to contain %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestPlannerExtractsStepsFromMarkdownOutput(t *testing.T) {
 	generator := &fakeGenerator{response: `可以，我会先看文件：
 

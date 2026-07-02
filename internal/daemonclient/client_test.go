@@ -3,11 +3,15 @@ package daemonclient
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Lioooooo123/liora/internal/apply"
 	"github.com/Lioooooo123/liora/internal/daemon"
 	"github.com/Lioooooo123/liora/internal/llm"
 	"github.com/Lioooooo123/liora/internal/permission"
@@ -121,6 +125,59 @@ func TestClientCapabilitiesAndTaskLifecycle(t *testing.T) {
 	}
 }
 
+func TestClientCreateTaskHonorsChildScopeBoundary(t *testing.T) {
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	parent, err := client.CreateTask(t.Context(), task.CreateRequest{
+		Workspace: "/repo",
+		Prompt:    "parent scope",
+		Scope: task.TaskScope{
+			Paths:           []string{"/repo"},
+			NetworkHosts:    []string{"api.internal"},
+			MCPServers:      []string{"filesystem"},
+			MCPTools:        []string{"filesystem.read"},
+			ApprovalActions: []string{"apply_patch"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := client.CreateTask(t.Context(), task.CreateRequest{
+		Workspace:    "/repo",
+		Prompt:       "child scope",
+		ParentTaskID: parent.Task.ID,
+		Scope: task.TaskScope{
+			Paths:        []string{"/repo/src"},
+			NetworkHosts: []string{"api.internal"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.Task.ParentTaskID != parent.Task.ID || !child.Task.InheritedScopeFromParent {
+		t.Fatalf("unexpected child task %#v", child.Task)
+	}
+	if len(child.Task.ApprovalGrants) != 0 {
+		t.Fatalf("child must not carry approval grants: %#v", child.Task.ApprovalGrants)
+	}
+
+	_, err = client.CreateTask(t.Context(), task.CreateRequest{
+		Workspace:    "/repo",
+		Prompt:       "escalate",
+		ParentTaskID: parent.Task.ID,
+		Scope: task.TaskScope{
+			MCPServers: []string{"dangerous-server"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "outside parent scope") {
+		t.Fatalf("expected scope escalation error, got %v", err)
+	}
+}
+
 func TestClientMemoryLifecycle(t *testing.T) {
 	persistentStore := store.New(t.TempDir())
 	db, err := persistentStore.OpenDB()
@@ -132,26 +189,303 @@ func TestClientMemoryLifecycle(t *testing.T) {
 	defer server.Close()
 	client := newTestClient(t, server.URL)
 
-	created, err := client.AddMemory(t.Context(), "remember workspace mood")
+	created, err := client.CreateMemory(t.Context(), store.CreateMemoryRequest{
+		Text:       "remember workspace mood",
+		Kind:       "preference",
+		Source:     "client-test",
+		Importance: 5,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.ID == "" || created.Text != "remember workspace mood" {
+	if created.ID == "" || created.Text != "remember workspace mood" || created.Kind != "preference" || created.Source != "client-test" || created.Importance != 5 || !created.Enabled {
 		t.Fatalf("unexpected created memory %#v", created)
+	}
+	updated, err := client.UpdateMemory(t.Context(), created.ID, store.UpdateMemoryRequest{Text: stringPtr("remember daemon workspace mood"), Importance: intPtr(4)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Text != "remember daemon workspace mood" || updated.Importance != 4 {
+		t.Fatalf("unexpected updated memory %#v", updated)
+	}
+	got, err := client.GetMemory(t.Context(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != created.ID || got.Text != updated.Text {
+		t.Fatalf("unexpected fetched memory %#v", got)
+	}
+	if err := client.DisableMemory(t.Context(), created.ID); err != nil {
+		t.Fatal(err)
 	}
 	memories, err := client.ListMemories(t.Context(), 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(memories) != 1 || memories[0].Text != created.Text {
+	if len(memories) != 0 {
 		t.Fatalf("unexpected memories %#v", memories)
 	}
-	matches, err := client.SearchMemories(t.Context(), "mood", 10)
+	matches, err := client.SearchMemoriesWithOptions(t.Context(), "mood", 10, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(matches) != 1 || matches[0].ID != created.ID {
+	if len(matches) != 1 || matches[0].ID != created.ID || matches[0].Enabled {
 		t.Fatalf("unexpected search matches %#v", matches)
+	}
+	if err := client.EnableMemory(t.Context(), created.ID); err != nil {
+		t.Fatal(err)
+	}
+	memories, err = client.ListMemories(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(memories) != 1 || memories[0].Text != updated.Text || !memories[0].Enabled {
+		t.Fatalf("unexpected enabled memories %#v", memories)
+	}
+}
+
+func TestClientUsesCapabilityTokenForSensitiveAPIs(t *testing.T) {
+	workspace := t.TempDir()
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := task.NewRepository(db)
+	patchTask, err := repo.Create(t.Context(), task.CreateRequest{
+		Workspace: workspace,
+		Prompt:    "patch notes",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvalTask, err := repo.Create(t.Context(), task.CreateRequest{
+		Workspace: workspace,
+		Prompt:    "needs approval",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), approvalTask.ID, task.StatusWaitingUser); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), approvalTask.ID, task.EventPermissionRequest, task.EventPayload{Message: "approval needed"}); err != nil {
+		t.Fatal(err)
+	}
+	patch, err := apply.CreatePatch(workspace, []apply.FileChange{{Path: "notes.txt", Before: "", After: "hello\n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{
+		Repository: repo,
+		Store:      persistentStore,
+		AuthToken:  "secret-token",
+	}))
+	defer server.Close()
+
+	unauthorized := newTestClient(t, server.URL)
+	if _, err := unauthorized.ListMemories(t.Context(), 0); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("expected unauthorized memory list, got %v", err)
+	}
+	if _, err := unauthorized.Apply(t.Context(), patchTask.ID, patch); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("expected unauthorized apply, got %v", err)
+	}
+	if _, err := unauthorized.Approve(t.Context(), approvalTask.ID); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("expected unauthorized approval, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "notes.txt")); !os.IsNotExist(err) {
+		t.Fatalf("unauthorized apply changed workspace, stat err=%v", err)
+	}
+
+	client, err := New(server.URL, WithCapabilityToken("secret-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := client.CreateMemory(t.Context(), store.CreateMemoryRequest{Text: "token-protected memory", Kind: "note"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := client.ListMemories(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Text != "token-protected memory" || len(listed) != 1 || listed[0].Text != created.Text {
+		t.Fatalf("unexpected authorized memory results created=%#v listed=%#v", created, listed)
+	}
+	applied, err := client.Apply(t.Context(), patchTask.ID, patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applied.Files) != 1 || applied.Files[0] != "notes.txt" {
+		t.Fatalf("unexpected apply result %#v", applied)
+	}
+	approved, err := client.Approve(t.Context(), approvalTask.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !approved.ApprovalGranted {
+		t.Fatalf("expected approved task, got %#v", approved)
+	}
+}
+
+func TestClientTypedMethodsConstructCanonicalPaths(t *testing.T) {
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.RequestURI())
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.RequestURI() {
+		case "GET /v1/capabilities":
+			_, _ = w.Write([]byte(`{"tools":[{"name":"read","usage":"read <path>","kind":"builtin"}],"mcp_tools":[]}`))
+		case "GET /v1/workbench?limit=5&workspace=%2Frepo":
+			_, _ = w.Write([]byte(`{"workspace":"/repo","sessions":[],"active_tasks":[],"queued_tasks":[],"recent_tasks":[],"pending_approvals":[],"pending_user_inputs":[]}`))
+		case "GET /v1/sessions/session-001/context?limit=5&token_budget=512":
+			_, _ = w.Write([]byte(`{"session":{"id":"session-001","title":"Research","workspace":"/repo","created_at":"2026-07-01T00:00:00Z","updated_at":"2026-07-01T00:00:00Z"},"budget":{"max_tokens":512,"estimated_tokens":128,"item_limit":5,"truncated":false,"buckets":[{"name":"system","estimated_tokens":0,"items":0},{"name":"user","estimated_tokens":16,"items":1},{"name":"transcript","estimated_tokens":32,"items":1},{"name":"memory","estimated_tokens":0,"items":0},{"name":"tool_result","estimated_tokens":40,"items":1},{"name":"artifact_preview","estimated_tokens":40,"items":1}]},"transcript":[],"summaries":[],"artifact_refs":[],"compact_boundaries":[],"generated_at":"2026-07-01T00:00:00Z"}`))
+		case "POST /v1/sessions/session-001/compact":
+			_, _ = w.Write([]byte(`{"session":{"id":"session-001","title":"Research","workspace":"/repo","created_at":"2026-07-01T00:00:00Z","updated_at":"2026-07-01T00:00:00Z"},"mode":"auto","compacted":true,"reason":"threshold","token_budget":512,"before_estimated_tokens":2048,"after_estimated_tokens":128,"transcript_items":8,"boundary":{"task_id":"task-001","summary":"Auto compact: summarized 8 context items","token_estimate":2048,"created_at":"2026-07-01T00:00:00Z"},"generated_at":"2026-07-01T00:00:00Z"}`))
+		case "GET /v1/memories?include_disabled=true&include_expired=true&limit=10&workspace=%2Frepo":
+			_, _ = w.Write([]byte(`[]`))
+		case "PATCH /v1/memories/mem-001":
+			_, _ = w.Write([]byte(`{"id":"mem-001","text":"prefer explicit output","kind":"note","importance":3,"enabled":true,"created_at":"2026-07-01T00:00:00Z","updated_at":"2026-07-01T00:00:00Z"}`))
+		case "DELETE /v1/memories/mem-001?workspace=%2Frepo":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.RequestURI(), http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	if _, err := client.Capabilities(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Workbench(t.Context(), "/repo", 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.SessionContext(t.Context(), "session-001", task.ContextRequest{ItemLimit: 5, TokenBudget: 512}); err != nil {
+		t.Fatal(err)
+	}
+	compact, err := client.CompactSession(t.Context(), "session-001", task.CompactRequest{Mode: task.CompactModeAuto, ItemLimit: 5, TokenBudget: 512, Reason: "threshold"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compact.Compacted || compact.Boundary == nil || !strings.Contains(compact.Boundary.Summary, "Auto compact") {
+		t.Fatalf("unexpected compact result %#v", compact)
+	}
+	if _, err := client.ListMemoriesWithOptions(t.Context(), store.MemoryListOptions{Workspace: "/repo", Limit: 10, IncludeDisabled: true, IncludeExpired: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UpdateMemory(t.Context(), "mem-001", store.UpdateMemoryRequest{Text: stringPtr("prefer explicit output")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.DeleteMemoryForWorkspace(t.Context(), "mem-001", "/repo"); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		"GET /v1/capabilities",
+		"GET /v1/workbench?limit=5&workspace=%2Frepo",
+		"GET /v1/sessions/session-001/context?limit=5&token_budget=512",
+		"POST /v1/sessions/session-001/compact",
+		"GET /v1/memories?include_disabled=true&include_expired=true&limit=10&workspace=%2Frepo",
+		"PATCH /v1/memories/mem-001",
+		"DELETE /v1/memories/mem-001?workspace=%2Frepo",
+	}
+	if strings.Join(calls, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("unexpected typed client calls\nwant:\n%s\ngot:\n%s", strings.Join(want, "\n"), strings.Join(calls, "\n"))
+	}
+}
+
+func TestClientRejectsMalformedTypedRequestParameters(t *testing.T) {
+	client := newTestClient(t, "http://127.0.0.1:1")
+	cases := []struct {
+		name string
+		run  func() error
+		want string
+	}{
+		{
+			name: "blank task id",
+			run: func() error {
+				_, err := client.GetTask(t.Context(), " ")
+				return err
+			},
+			want: "task id is required",
+		},
+		{
+			name: "blank session id",
+			run: func() error {
+				_, err := client.SessionMessages(t.Context(), "", 10)
+				return err
+			},
+			want: "session id is required",
+		},
+		{
+			name: "negative list limit",
+			run: func() error {
+				_, err := client.ListTasks(t.Context(), -1)
+				return err
+			},
+			want: "limit cannot be negative",
+		},
+		{
+			name: "negative context budget",
+			run: func() error {
+				_, err := client.SessionContext(t.Context(), "session-001", task.ContextRequest{TokenBudget: -1})
+				return err
+			},
+			want: "token budget",
+		},
+		{
+			name: "blank search query",
+			run: func() error {
+				_, err := client.SearchTimeline(t.Context(), "/repo", " ", 10)
+				return err
+			},
+			want: "query is required",
+		},
+		{
+			name: "blank memory text",
+			run: func() error {
+				_, err := client.CreateMemory(t.Context(), store.CreateMemoryRequest{Text: " "})
+				return err
+			},
+			want: "memory text is required",
+		},
+		{
+			name: "invalid memory kind",
+			run: func() error {
+				kind := "shadow"
+				_, err := client.UpdateMemory(t.Context(), "mem-001", store.UpdateMemoryRequest{Kind: &kind})
+				return err
+			},
+			want: "unknown memory kind",
+		},
+		{
+			name: "invalid memory importance",
+			run: func() error {
+				_, err := client.UpdateMemory(t.Context(), "mem-001", store.UpdateMemoryRequest{Importance: intPtr(9)})
+				return err
+			},
+			want: "memory importance",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+
+	stream, errs := client.StreamEvents(t.Context(), " ")
+	for range stream {
+		t.Fatal("expected no events for blank task id")
+	}
+	if err := <-errs; err == nil || !strings.Contains(err.Error(), "task id is required") {
+		t.Fatalf("unexpected stream error %v", err)
 	}
 }
 
@@ -235,6 +569,12 @@ func TestClientSessionLifecycle(t *testing.T) {
 	if err := repo.AppendEvent(t.Context(), created.Task.ID, task.EventSummary, task.EventPayload{Message: "assignment read"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := repo.AppendEvent(t.Context(), created.Task.ID, task.EventArtifactReference, task.EventPayload{Tool: "shell", Path: ".liora/tool-results/assignment.txt", Message: "assignment artifact"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), created.Task.ID, task.EventCompactBoundary, task.EventPayload{Message: "assignment compact boundary"}); err != nil {
+		t.Fatal(err)
+	}
 	timeline, err := client.SessionTimeline(t.Context(), sessionResponse.Session.ID, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -247,6 +587,19 @@ func TestClientSessionLifecycle(t *testing.T) {
 	}
 	if !strings.Contains(combined.String(), "read assignment") || !strings.Contains(combined.String(), "assignment read") {
 		t.Fatalf("unexpected timeline %#v", timeline)
+	}
+	contextEnvelope, err := client.SessionContext(t.Context(), sessionResponse.Session.ID, task.ContextRequest{ItemLimit: 5, TokenBudget: 512})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contextEnvelope.Session.ID != sessionResponse.Session.ID || contextEnvelope.Budget.ItemLimit != 5 {
+		t.Fatalf("unexpected session context %#v", contextEnvelope)
+	}
+	if len(contextEnvelope.Budget.Buckets) == 0 || contextBudgetBucketTokenSum(contextEnvelope.Budget.Buckets) != contextEnvelope.Budget.EstimatedTokens {
+		t.Fatalf("expected budget buckets to total estimated tokens, got %#v", contextEnvelope.Budget)
+	}
+	if len(contextEnvelope.ArtifactRefs) == 0 || len(contextEnvelope.CompactBoundaries) == 0 {
+		t.Fatalf("expected context refs and boundaries, got %#v", contextEnvelope)
 	}
 	matches, err := client.SearchTimeline(t.Context(), workspace, "assignment", 10)
 	if err != nil {
@@ -288,6 +641,17 @@ func TestClientSessionLifecycle(t *testing.T) {
 	if len(workbench.PendingApprovals) != 1 || workbench.PendingApprovals[0].Task.ID != created.Task.ID {
 		t.Fatalf("unexpected workbench pending approvals %#v", workbench.PendingApprovals)
 	}
+	if item := workbench.PendingApprovals[0].Item; item.TaskID != created.Task.ID || item.ToolName != "run" || item.CommandPreview != "rm -rf build" || item.Risk != "dangerous_shell" {
+		t.Fatalf("unexpected workbench approval item %#v", item)
+	}
+}
+
+func stringPtr(value string) *string {
+	return &value
+}
+
+func intPtr(value int) *int {
+	return &value
 }
 
 func TestClientCancelRunningTask(t *testing.T) {
@@ -470,6 +834,80 @@ func TestClientStreamsMultipleTasks(t *testing.T) {
 	}
 }
 
+func TestClientServesCrossThreadHandoffAPI(t *testing.T) {
+	st := store.New(t.TempDir())
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Store: st}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	source, err := client.CreateConversationThread(t.Context(), store.CreateConversationThreadRequest{Workspace: "/repo-a", Title: "Source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := client.CreateConversationThread(t.Context(), store.CreateConversationThreadRequest{Workspace: "/repo-a", Title: "Target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threads, err := client.ListConversationThreads(t.Context(), "/repo-a", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 2 {
+		t.Fatalf("expected two threads, got %#v", threads)
+	}
+	config, err := client.UpdateThreadModelConfig(t.Context(), source.ID, store.UpdateThreadModelConfigRequest{
+		Provider: "openai-chat",
+		Model:    "gpt-5",
+		BaseURL:  "https://llm.example.test/v1",
+		Profile:  "strong",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ThreadID != source.ID || config.BaseURL == "" || config.Profile != "strong" {
+		t.Fatalf("unexpected thread model config %#v", config)
+	}
+	fetchedConfig, err := client.GetThreadModelConfig(t.Context(), source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetchedConfig.Model != "gpt-5" {
+		t.Fatalf("unexpected fetched thread model config %#v", fetchedConfig)
+	}
+	threads, err = client.ListConversationThreads(t.Context(), "/repo-a", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if threads[0].ModelConfig == nil && threads[1].ModelConfig == nil {
+		t.Fatalf("expected listed threads to include model config, got %#v", threads)
+	}
+	if err := client.DeleteThreadModelConfig(t.Context(), source.ID); err != nil {
+		t.Fatal(err)
+	}
+	message, err := client.CreateCrossThreadMessage(t.Context(), target.ID, store.CreateCrossThreadMessageRequest{
+		FromThreadID:    source.ID,
+		Summary:         "handoff summary",
+		ExplicitContent: "explicit note",
+		ArtifactRefs:    []store.CrossThreadArtifactRef{{Path: ".liora/artifacts/handoff.txt", Summary: "handoff artifact"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.Content != "explicit note" || message.Summary != "handoff summary" || len(message.ArtifactRefs) != 1 {
+		t.Fatalf("unexpected handoff message %#v", message)
+	}
+	messages, err := client.ListCrossThreadMessages(t.Context(), target.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].ID != message.ID {
+		t.Fatalf("unexpected handoff inbox %#v", messages)
+	}
+	if _, err := client.CreateCrossThreadMessage(t.Context(), " ", store.CreateCrossThreadMessageRequest{FromThreadID: source.ID, Summary: "bad"}); err == nil {
+		t.Fatal("expected blank thread id to fail")
+	}
+}
+
 func TestClientStreamTaskEventsRequiresIDs(t *testing.T) {
 	client := newTestClient(t, "http://127.0.0.1:1")
 	stream, errs := client.StreamTaskEvents(t.Context(), []string{" ", ""})
@@ -566,6 +1004,14 @@ func containsEventType(events []task.EventType, want task.EventType) bool {
 		}
 	}
 	return false
+}
+
+func contextBudgetBucketTokenSum(buckets []task.ContextBudgetBucket) int {
+	total := 0
+	for _, bucket := range buckets {
+		total += bucket.EstimatedTokens
+	}
+	return total
 }
 
 func containsTask(tasks []task.Task, want string) bool {

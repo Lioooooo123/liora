@@ -42,10 +42,12 @@ func main() {
 	natural := flag.Bool("natural", false, "treat prompt/stdin as natural language and ask an LLM to plan tool steps")
 	daemonMode := flag.Bool("daemon", false, "start the local Liora core daemon")
 	daemonAddr := flag.String("daemon-addr", "127.0.0.1:18080", "daemon listen address")
+	daemonToken := flag.String("daemon-token", os.Getenv("LIORA_DAEMON_TOKEN"), "local daemon capability token for persistent HTTP mode")
 	tuiDaemon := flag.Bool("tui-daemon", false, "run interactive TUI through the local daemon event stream")
 	sessionID := flag.String("session", "", "attach interactive TUI requests to an existing daemon session id")
 	forceNewSession := flag.Bool("new-session", false, "start a fresh interactive session instead of auto-resume")
 	doctor := flag.Bool("doctor", false, "print resolved LLM provider configuration and exit without calling the API")
+	diagnosticsOut := flag.String("diagnostics-out", "", "write a redacted diagnostics JSON bundle and exit without calling the API")
 	llmProvider := flag.String("llm-provider", getenvAny("LIORA_LLM_PROVIDER", "OPENAI_PROVIDER", ""), "LLM provider: openai-chat, openai-responses, deepseek, anthropic, gemini")
 	llmBaseURL := flag.String("llm-base-url", defaultLLMBaseURL(), "LLM API base URL")
 	llmAPIKey := flag.String("llm-api-key", getenvAny("LIORA_LLM_API_KEY", "OPENAI_API_KEY", ""), "LLM API key")
@@ -74,8 +76,19 @@ func main() {
 		APIKey:   *llmAPIKey,
 		Model:    *llmModel,
 	}
+	persistentStore := store.New("")
+	sandboxExecutor := sandbox.FromEnv()
+	patchMode := boolEnvDefault("LIORA_PATCH_MODE", true)
+	runtimeStatus := doctorRuntimeStatusFrom(patchMode, sandboxExecutor, permissionPolicy(patchMode), daemonAuthStatus(*daemonToken))
 	if *doctor {
-		if err := printDoctor(llmConfig); err != nil {
+		if err := printDoctor(llmConfig, doctorReportContext{Store: persistentStore, Runtime: runtimeStatus}); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		return
+	}
+	if strings.TrimSpace(*diagnosticsOut) != "" {
+		if err := writeDiagnostics(*diagnosticsOut, llmConfig, doctorReportContext{Workspace: *workspacePath, Store: persistentStore, Runtime: runtimeStatus}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
@@ -86,10 +99,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
+	llmRegistry, err := llm.NewRegistry(llmConfig)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 	planner := llm.NewPlanner(llmClient)
-	persistentStore := store.New("")
-	sandboxExecutor := sandbox.FromEnv()
-	patchMode := boolEnvDefault("LIORA_PATCH_MODE", true)
 
 	if *daemonMode {
 		db, err := persistentStore.OpenDB()
@@ -101,10 +116,11 @@ func main() {
 		repo := taskpkg.NewRepository(db)
 		server := daemon.NewServer(daemon.Config{
 			Repository: repo,
-			Runner:     newTaskRunner(repo, planner, persistentStore, sandboxExecutor, patchMode),
+			Runner:     newTaskRunner(repo, planner, llmRegistry, persistentStore, sandboxExecutor, patchMode),
 			Store:      persistentStore,
+			AuthToken:  *daemonToken,
 		})
-		fmt.Printf("Liora daemon listening on %s (sandbox=%s patch_mode=%t)\n", *daemonAddr, sandbox.Label(sandboxExecutor), patchMode)
+		fmt.Printf("Liora daemon listening on %s (sandbox=%s patch_mode=%t auth=%s)\n", *daemonAddr, sandbox.Label(sandboxExecutor), patchMode, daemonAuthStatus(*daemonToken))
 		if err := http.ListenAndServe(*daemonAddr, server); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -125,8 +141,9 @@ func main() {
 		baseURL := daemonBaseURL(*daemonAddr)
 		var embedded *embeddedDaemon
 		coreLabel := "external daemon"
+		daemonAuth := daemonAuthStatus(*daemonToken)
 		if !*tuiDaemon {
-			embedded, err = startEmbeddedDaemon(persistentStore, planner, sandboxExecutor, patchMode)
+			embedded, err = startEmbeddedDaemon(persistentStore, planner, llmRegistry, sandboxExecutor, patchMode)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
@@ -134,8 +151,13 @@ func main() {
 			defer embedded.close()
 			baseURL = embedded.baseURL
 			coreLabel = "embedded daemon"
+			daemonAuth = daemonAuthStatus("")
 		}
-		client, err := daemonclient.New(baseURL)
+		clientOptions := []daemonclient.Option{}
+		if *tuiDaemon && strings.TrimSpace(*daemonToken) != "" {
+			clientOptions = append(clientOptions, daemonclient.WithCapabilityToken(*daemonToken))
+		}
+		client, err := daemonclient.New(baseURL, clientOptions...)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
@@ -158,6 +180,9 @@ func main() {
 						Workspace: workspace.Root(),
 						Core:      coreLabel,
 						Safety:    safetyLabel(patchMode),
+						Schema:    loadSchemaReport(persistentStore),
+						Store:     persistentStore,
+						Runtime:   doctorRuntimeStatusFrom(patchMode, sandboxExecutor, permissionPolicy(patchMode), daemonAuth),
 					},
 				},
 				daemonSession,
@@ -247,7 +272,7 @@ type embeddedDaemon struct {
 	baseURL string
 }
 
-func startEmbeddedDaemon(persistentStore *store.Store, planner *llm.Planner, executor sandbox.Executor, patchMode bool) (*embeddedDaemon, error) {
+func startEmbeddedDaemon(persistentStore *store.Store, planner *llm.Planner, registry *llm.Registry, executor sandbox.Executor, patchMode bool) (*embeddedDaemon, error) {
 	db, err := persistentStore.OpenDB()
 	if err != nil {
 		return nil, err
@@ -260,7 +285,7 @@ func startEmbeddedDaemon(persistentStore *store.Store, planner *llm.Planner, exe
 	repo := taskpkg.NewRepository(db)
 	server := &http.Server{Handler: daemon.NewServer(daemon.Config{
 		Repository: repo,
-		Runner:     newTaskRunner(repo, planner, persistentStore, executor, patchMode),
+		Runner:     newTaskRunner(repo, planner, registry, persistentStore, executor, patchMode),
 		Store:      persistentStore,
 	})}
 	embedded := &embeddedDaemon{
@@ -313,8 +338,9 @@ func toBool(v string) bool {
 	return s == "1" || s == "true" || s == "yes" || s == "on"
 }
 
-func newTaskRunner(repo *taskpkg.Repository, planner *llm.Planner, persistentStore *store.Store, executor sandbox.Executor, patchMode bool) *taskpkg.Runner {
+func newTaskRunner(repo *taskpkg.Repository, planner *llm.Planner, registry *llm.Registry, persistentStore *store.Store, executor sandbox.Executor, patchMode bool) *taskpkg.Runner {
 	runner := taskpkg.NewRunner(repo, planner)
+	runner.SetLLMRegistry(registry)
 	runner.SetStore(persistentStore)
 	runner.SetSandbox(executor)
 	runner.SetPatchMode(patchMode)
@@ -327,7 +353,41 @@ func permissionPolicy(patchMode bool) permission.Policy {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("LIORA_PERMISSION")), string(permission.ModePrompt)) {
 		mode = permission.ModePrompt
 	}
-	return permission.Policy{Mode: mode, AllowWritesInPatchMode: patchMode}
+	return permission.Policy{
+		Mode:                   mode,
+		AllowWritesInPatchMode: patchMode,
+		NetworkDefaultDeny:     true,
+		NetworkAllowlist:       splitCSVEnv("LIORA_NETWORK_ALLOWLIST"),
+	}
+}
+
+func daemonAuthStatus(token string) string {
+	if strings.TrimSpace(token) == "" {
+		return "disabled"
+	}
+	return "capability-token"
+}
+
+func doctorRuntimeStatusFrom(patchMode bool, executor sandbox.Executor, policy permission.Policy, daemonAuth string) *doctorRuntimeStatus {
+	return &doctorRuntimeStatus{
+		DaemonAuth:         daemonAuth,
+		Sandbox:            sandbox.Label(executor),
+		PatchMode:          patchMode,
+		PermissionMode:     string(policy.Mode),
+		NetworkDefaultDeny: policy.NetworkDefaultDeny,
+		NetworkAllowlist:   policy.NetworkAllowlist,
+	}
+}
+
+func splitCSVEnv(name string) []string {
+	var values []string
+	for _, value := range strings.Split(os.Getenv(name), ",") {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 func boolEnvDefault(name string, fallback bool) bool {

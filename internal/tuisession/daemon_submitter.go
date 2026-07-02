@@ -15,6 +15,8 @@ import (
 	"github.com/Lioooooo123/liora/internal/tui"
 )
 
+const defaultArtifactCommandPageSize = 40
+
 type DaemonSubmitter struct {
 	client          *daemonclient.Client
 	workspace       string
@@ -23,6 +25,7 @@ type DaemonSubmitter struct {
 	sessionID       string
 	explicitSession bool
 	currentTaskID   string
+	awaitingInputID string
 	lastTaskID      string
 	lastDiff        string
 	newSession      bool
@@ -52,6 +55,13 @@ func (s *DaemonSubmitter) SubmitStream(ctx context.Context, input string, onEven
 	if s.client == nil {
 		return tui.TurnResult{}, fmt.Errorf("daemon client is required")
 	}
+	if taskID := s.awaitingInputTask(); taskID != "" {
+		if _, err := s.client.SendInput(ctx, taskID, input); err != nil {
+			return tui.TurnResult{}, err
+		}
+		s.clearAwaitingInput(taskID)
+		return s.streamTaskAfterInput(ctx, taskID, onEvent)
+	}
 	created, err := s.createTask(ctx, input)
 	if err != nil {
 		return tui.TurnResult{}, err
@@ -60,6 +70,10 @@ func (s *DaemonSubmitter) SubmitStream(ctx context.Context, input string, onEven
 }
 
 func (s *DaemonSubmitter) createTask(ctx context.Context, input string) (taskpkg.CreateResponse, error) {
+	return s.createTaskWithQueue(ctx, input, true)
+}
+
+func (s *DaemonSubmitter) createTaskWithQueue(ctx context.Context, input string, queue bool) (taskpkg.CreateResponse, error) {
 	sessionID := s.currentSessionID()
 	if sessionID == "" {
 		resumed, ok, err := s.resumeLatestWorkspaceSession(ctx)
@@ -70,13 +84,18 @@ func (s *DaemonSubmitter) createTask(ctx context.Context, input string) (taskpkg
 			sessionID = resumed.ID
 		}
 	}
-	created, err := s.client.CreateTask(ctx, taskpkg.CreateRequest{
+	request := taskpkg.CreateRequest{
 		Workspace: s.workspace,
 		Prompt:    input,
 		SessionID: sessionID,
 		Natural:   s.natural,
 		RunAsync:  true,
-	})
+		Queue:     queue,
+	}
+	if threadID := s.currentConversationThreadID(ctx, sessionID); threadID != "" {
+		request.ThreadID = &threadID
+	}
+	created, err := s.client.CreateTask(ctx, request)
 	if err != nil {
 		return taskpkg.CreateResponse{}, err
 	}
@@ -85,7 +104,27 @@ func (s *DaemonSubmitter) createTask(ctx context.Context, input string) (taskpkg
 	return created, nil
 }
 
+func (s *DaemonSubmitter) currentConversationThreadID(ctx context.Context, sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || s.client == nil {
+		return ""
+	}
+	thread, err := s.client.GetConversationThread(ctx, sessionID)
+	if err != nil || thread.Workspace != s.workspace || thread.ArchivedAt != nil {
+		return ""
+	}
+	return thread.ID
+}
+
 func (s *DaemonSubmitter) streamTask(ctx context.Context, taskID string, onEvent func(tui.StreamUpdate)) (tui.TurnResult, error) {
+	return s.streamTaskUpdates(ctx, taskID, onEvent, false)
+}
+
+func (s *DaemonSubmitter) streamTaskAfterInput(ctx context.Context, taskID string, onEvent func(tui.StreamUpdate)) (tui.TurnResult, error) {
+	return s.streamTaskUpdates(ctx, taskID, onEvent, true)
+}
+
+func (s *DaemonSubmitter) streamTaskUpdates(ctx context.Context, taskID string, onEvent func(tui.StreamUpdate), skipAnsweredInputRequest bool) (tui.TurnResult, error) {
 	s.setCurrentTask(taskID)
 	defer s.clearCurrentTask(taskID)
 	streamCtx, cancelStream := context.WithCancel(ctx)
@@ -106,8 +145,20 @@ func (s *DaemonSubmitter) streamTask(ctx context.Context, taskID string, onEvent
 				s.rememberDiff(taskID, payload.Diff)
 			}
 		}
+		if update.Type == taskpkg.EventUserInputRequest {
+			if skipAnsweredInputRequest {
+				continue
+			}
+			s.setAwaitingInput(taskID)
+		}
+		if update.Type == taskpkg.EventUserInputReceived {
+			skipAnsweredInputRequest = false
+		}
 		mergeStreamEvent(&result, update)
-		if update.Type == taskpkg.EventCompleted || update.Type == taskpkg.EventCancelled || update.Type == taskpkg.EventError || update.Type == taskpkg.EventPermissionRequest {
+		if update.Type == taskpkg.EventCompleted || update.Type == taskpkg.EventCancelled || update.Type == taskpkg.EventError {
+			s.clearAwaitingInput(taskID)
+		}
+		if update.Type == taskpkg.EventCompleted || update.Type == taskpkg.EventCancelled || update.Type == taskpkg.EventError || update.Type == taskpkg.EventPermissionRequest || update.Type == taskpkg.EventUserInputRequest {
 			terminalError = update.Type == taskpkg.EventError
 			cancelStream()
 			break
@@ -167,6 +218,11 @@ func mergeStreamEvent(result *tui.TurnResult, update daemonclient.StreamEvent) {
 		if strings.TrimSpace(result.AgentResult.Summary) == "" {
 			result.AgentResult.Summary = "waiting for approval"
 		}
+	case taskpkg.EventUserInputRequest:
+		result.AgentResult.Status = agent.StatusWaitingUser
+		if strings.TrimSpace(result.AgentResult.Summary) == "" {
+			result.AgentResult.Summary = payload.Message
+		}
 	case taskpkg.EventCompleted:
 		result.AgentResult.Status = agent.StatusCompleted
 	}
@@ -195,6 +251,16 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		return s.listTasks(ctx)
 	case "/sessions":
 		return s.listSessions(ctx)
+	case "/threads":
+		return s.listThreads(ctx, false)
+	case "/model":
+		return s.showCurrentModel(ctx)
+	case "/thread-new":
+		return "Usage: /thread-new <title>", true, nil
+	case "/thread-send":
+		return "Usage: /thread-send <thread_id> <message>", true, nil
+	case "/thread-inbox":
+		return s.threadInbox(ctx, "")
 	case "/workbench", "/status":
 		return s.showWorkbench(ctx)
 	case "/watch":
@@ -211,6 +277,16 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		return s.showTimeline(ctx, "")
 	case "/transcript":
 		return s.showTranscript(ctx, "")
+	case "/context":
+		return s.showContext(ctx, "")
+	case "/prompt-context":
+		return s.showPromptContext(ctx, "")
+	case "/compact":
+		return s.compactSession(ctx, "")
+	case "/todo":
+		return s.showTodos(ctx)
+	case "/artifact":
+		return "Usage: /artifact <artifact://...> [page] [page_size]", true, nil
 	case "/history", "/search-history":
 		return "Usage: /history <query>", true, nil
 	case "/memory":
@@ -240,6 +316,25 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		if strings.HasPrefix(line, "/transcript ") {
 			return s.showTranscript(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/transcript ")))
 		}
+		if strings.HasPrefix(line, "/context ") {
+			args := strings.TrimSpace(strings.TrimPrefix(line, "/context "))
+			if args == "sources" || strings.HasPrefix(args, "sources ") {
+				return s.showPromptContext(ctx, strings.TrimSpace(strings.TrimPrefix(args, "sources")))
+			}
+			return s.showContext(ctx, args)
+		}
+		if strings.HasPrefix(line, "/prompt-context ") {
+			return s.showPromptContext(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/prompt-context ")))
+		}
+		if strings.HasPrefix(line, "/compact ") {
+			return s.compactSession(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/compact ")))
+		}
+		if strings.HasPrefix(line, "/todo ") {
+			return "Usage: /todo", true, nil
+		}
+		if strings.HasPrefix(line, "/artifact ") {
+			return s.showArtifact(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/artifact ")))
+		}
 		if strings.HasPrefix(line, "/history ") {
 			return s.searchHistory(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/history ")))
 		}
@@ -249,6 +344,9 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		if strings.HasPrefix(line, "/memory ") {
 			return s.handleMemory(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/memory ")))
 		}
+		if strings.HasPrefix(line, "/model ") {
+			return s.handleModel(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/model ")))
+		}
 		if strings.HasPrefix(line, "/watch ") {
 			return s.watchTasks(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/watch ")))
 		}
@@ -257,6 +355,30 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		}
 		if strings.HasPrefix(line, "/resume-session ") {
 			return s.resumeSession(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/resume-session ")))
+		}
+		if strings.HasPrefix(line, "/thread-new ") {
+			return s.createThread(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/thread-new ")))
+		}
+		if strings.HasPrefix(line, "/thread-rename ") {
+			return s.renameThread(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/thread-rename ")))
+		}
+		if strings.HasPrefix(line, "/thread-archive ") {
+			return s.archiveThread(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/thread-archive ")), true)
+		}
+		if strings.HasPrefix(line, "/thread-unarchive ") {
+			return s.archiveThread(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/thread-unarchive ")), false)
+		}
+		if strings.HasPrefix(line, "/thread-send ") {
+			return s.threadSend(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/thread-send ")))
+		}
+		if strings.HasPrefix(line, "/thread-inbox ") {
+			return s.threadInbox(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/thread-inbox ")))
+		}
+		if strings.HasPrefix(line, "/thread ") {
+			return s.switchThread(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/thread ")))
+		}
+		if line == "/thread" {
+			return "Usage: /thread <thread_id>", true, nil
 		}
 		if line == "/resume-session" {
 			return "Usage: /resume-session <session_id>", true, nil
@@ -271,29 +393,148 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 	}
 }
 
+func (s *DaemonSubmitter) showCurrentModel(ctx context.Context) (string, bool, error) {
+	thread, ok, err := s.currentThread(ctx)
+	if err != nil {
+		return "", true, err
+	}
+	if !ok {
+		return "No current thread. Use /thread <thread_id> first.", true, nil
+	}
+	lines := []string{
+		"Thread model " + thread.ID + ":",
+		"Title: " + thread.Title,
+	}
+	if thread.ModelConfig == nil {
+		lines = append(lines, "Model: default", "Next: use /model set <provider> <model> [profile] to set this thread.")
+		return strings.Join(lines, "\n"), true, nil
+	}
+	lines = append(lines, formatThreadModelDetails(thread.ModelConfig)...)
+	lines = append(lines, "Next: use /model set <profile> to change profile, or /model set <provider> <model> [profile].")
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) handleModel(ctx context.Context, args string) (string, bool, error) {
+	command, rest, _ := strings.Cut(strings.TrimSpace(args), " ")
+	switch strings.TrimSpace(command) {
+	case "set":
+		return s.setCurrentModel(ctx, rest)
+	default:
+		return "Usage: /model | /model set <profile> | /model set <provider> <model> [profile]", true, nil
+	}
+}
+
+func (s *DaemonSubmitter) setCurrentModel(ctx context.Context, args string) (string, bool, error) {
+	thread, ok, err := s.currentThread(ctx)
+	if err != nil {
+		return "", true, err
+	}
+	if !ok {
+		return "No current thread. Use /thread <thread_id> first.", true, nil
+	}
+	fields := strings.Fields(strings.TrimSpace(args))
+	if len(fields) == 0 || len(fields) > 3 {
+		return "Usage: /model set <profile> | /model set <provider> <model> [profile]", true, nil
+	}
+	request := store.UpdateThreadModelConfigRequest{}
+	if len(fields) == 1 {
+		if thread.ModelConfig == nil || strings.TrimSpace(thread.ModelConfig.Provider) == "" || strings.TrimSpace(thread.ModelConfig.Model) == "" {
+			return "No thread model is configured. Use /model set <provider> <model> [profile] first.", true, nil
+		}
+		request.Provider = thread.ModelConfig.Provider
+		request.Model = thread.ModelConfig.Model
+		request.BaseURL = thread.ModelConfig.BaseURL
+		request.InheritedFromThreadID = thread.ModelConfig.InheritedFromThreadID
+		request.Profile = fields[0]
+	} else {
+		request.Provider = fields[0]
+		request.Model = fields[1]
+		if len(fields) == 3 {
+			request.Profile = fields[2]
+		}
+	}
+	updated, err := s.client.UpdateThreadModelConfig(ctx, thread.ID, request)
+	if err != nil {
+		return "", true, err
+	}
+	lines := []string{"Updated thread model " + thread.ID + ":"}
+	lines = append(lines, formatThreadModelDetails(&updated)...)
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) currentThread(ctx context.Context) (store.ConversationThread, bool, error) {
+	threadID := s.currentSessionID()
+	if threadID == "" {
+		return store.ConversationThread{}, false, nil
+	}
+	thread, err := s.client.GetConversationThread(ctx, threadID)
+	if err != nil {
+		return store.ConversationThread{}, false, err
+	}
+	if thread.Workspace != s.workspace || thread.ArchivedAt != nil {
+		return store.ConversationThread{}, false, nil
+	}
+	return thread, true, nil
+}
+
 func (s *DaemonSubmitter) handleMemory(ctx context.Context, args string) (string, bool, error) {
 	command, rest, _ := strings.Cut(strings.TrimSpace(args), " ")
 	switch strings.TrimSpace(command) {
 	case "", "list":
-		memories, err := s.client.ListMemories(ctx, 10)
+		memories, err := s.client.ListMemoriesWithOptions(ctx, store.MemoryListOptions{Limit: 10, IncludeDisabled: strings.TrimSpace(rest) == "all"})
 		if err != nil {
 			return "", true, err
 		}
 		return formatMemories(memories), true, nil
 	case "add":
-		memory, err := s.client.AddMemory(ctx, rest)
+		request := memoryCreateRequest(rest)
+		memory, err := s.client.CreateMemory(ctx, request)
 		if err != nil {
 			return "", true, err
 		}
-		return "Memory saved: " + memory.Text, true, nil
+		return "Memory saved: " + formatMemory(memory), true, nil
 	case "search":
-		memories, err := s.client.SearchMemories(ctx, rest, 10)
+		memories, err := s.client.ListMemoriesWithOptions(ctx, store.MemoryListOptions{Query: rest, Limit: 10, IncludeDisabled: false})
 		if err != nil {
 			return "", true, err
 		}
 		return formatMemories(memories), true, nil
+	case "edit":
+		id, text, ok := strings.Cut(strings.TrimSpace(rest), " ")
+		if !ok || strings.TrimSpace(id) == "" || strings.TrimSpace(text) == "" {
+			return "Usage: /memory edit <id> <text>", true, nil
+		}
+		memory, err := s.client.UpdateMemory(ctx, id, store.UpdateMemoryRequest{Text: &text})
+		if err != nil {
+			return "", true, err
+		}
+		return "Memory updated: " + formatMemory(memory), true, nil
+	case "disable", "enable":
+		id := strings.TrimSpace(rest)
+		if id == "" {
+			return "Usage: /memory " + command + " <id>", true, nil
+		}
+		memory, err := s.client.SetMemoryEnabled(ctx, id, command == "enable")
+		if err != nil {
+			return "", true, err
+		}
+		return "Memory " + command + "d: " + formatMemory(memory), true, nil
 	default:
-		return "Usage: /memory list | /memory add <text> | /memory search <query>", true, nil
+		return "Usage: /memory list [all] | /memory add [note|preference|rule|automation] <text> | /memory search <query> | /memory edit <id> <text> | /memory disable <id> | /memory enable <id>", true, nil
+	}
+}
+
+func memoryCreateRequest(input string) store.CreateMemoryRequest {
+	input = strings.TrimSpace(input)
+	kind, text, ok := strings.Cut(input, " ")
+	if !ok {
+		return store.CreateMemoryRequest{Text: input}
+	}
+	switch kind {
+	case "note", "preference", "rule", "automation":
+		return store.CreateMemoryRequest{Kind: kind, Text: text, Source: "manual"}
+	default:
+		return store.CreateMemoryRequest{Text: input}
 	}
 }
 
@@ -303,9 +544,21 @@ func formatMemories(memories []store.Memory) string {
 	}
 	lines := make([]string, 0, len(memories))
 	for _, memory := range memories {
-		lines = append(lines, "- "+memory.Text)
+		lines = append(lines, "- "+formatMemory(memory))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func formatMemory(memory store.Memory) string {
+	status := "disabled"
+	if memory.Enabled {
+		status = "enabled"
+	}
+	source := memory.Source
+	if source == "" {
+		source = "unknown"
+	}
+	return fmt.Sprintf("%s [%s source=%s %s] %s", memory.ID, memory.Kind, source, status, memory.Text)
 }
 
 func (s *DaemonSubmitter) tailTask(ctx context.Context, args string) (string, bool, error) {
@@ -340,8 +593,7 @@ func (s *DaemonSubmitter) tailTask(ctx context.Context, args string) (string, bo
 	}
 	var transcript []string
 	for _, event := range events {
-		payload, _ := eventPayload(event)
-		transcript = append(transcript, formatTailEvent(event.Type, payload)...)
+		transcript = append(transcript, tui.FormatDaemonEventTail(string(event.Type), event.Payload)...)
 	}
 	if len(transcript) == 0 {
 		return "No event output for task " + taskID + ".", true, nil
@@ -451,6 +703,203 @@ func (s *DaemonSubmitter) showTranscript(ctx context.Context, args string) (stri
 	return strings.Join(lines, "\n"), true, nil
 }
 
+func (s *DaemonSubmitter) showContext(ctx context.Context, args string) (string, bool, error) {
+	sessionID, ok, err := s.currentOrLatestSessionID(ctx)
+	if err != nil {
+		return "", true, err
+	}
+	if !ok {
+		return "No current daemon session.", true, nil
+	}
+	request := parseContextRequest(args)
+	envelope, err := s.client.SessionContext(ctx, sessionID, request)
+	if err != nil {
+		return "", true, err
+	}
+	lines := []string{
+		fmt.Sprintf("Context %s", envelope.Session.ID),
+		fmt.Sprintf("Budget: %d/%d estimated tokens, %d item limit, truncated=%t", envelope.Budget.EstimatedTokens, envelope.Budget.MaxTokens, envelope.Budget.ItemLimit, envelope.Budget.Truncated),
+		fmt.Sprintf("Transcript items: %d", len(envelope.Transcript)),
+		fmt.Sprintf("Summaries: %d", len(envelope.Summaries)),
+		fmt.Sprintf("Artifacts: %d", len(envelope.ArtifactRefs)),
+		fmt.Sprintf("Compact boundaries: %d", len(envelope.CompactBoundaries)),
+	}
+	if len(envelope.CompactBoundaries) > 0 {
+		lines = append(lines, "Latest compact boundary: "+firstLine(envelope.CompactBoundaries[len(envelope.CompactBoundaries)-1].Summary))
+	}
+	if len(envelope.ArtifactRefs) > 0 {
+		lines = append(lines, "Artifact refs:")
+		for _, ref := range envelope.ArtifactRefs {
+			label := strings.TrimSpace(ref.Path)
+			if label == "" {
+				label = ref.Tool
+			}
+			lines = append(lines, "- "+strings.TrimSpace(label+" "+firstLine(ref.Summary)))
+		}
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) showPromptContext(ctx context.Context, args string) (string, bool, error) {
+	sessionID, ok, err := s.currentOrLatestSessionID(ctx)
+	if err != nil {
+		return "", true, err
+	}
+	if !ok {
+		return "No current daemon session.", true, nil
+	}
+	request := parseContextRequest(args)
+	envelope, err := s.client.SessionContext(ctx, sessionID, request)
+	if err != nil {
+		return "", true, err
+	}
+	return formatPromptContextSummary(envelope), true, nil
+}
+
+func formatPromptContextSummary(envelope taskpkg.ContextEnvelope) string {
+	lines := []string{
+		fmt.Sprintf("Prompt context %s", envelope.Session.ID),
+		fmt.Sprintf("Budget: %d/%d estimated tokens, %d item limit, truncated=%t", envelope.Budget.EstimatedTokens, envelope.Budget.MaxTokens, envelope.Budget.ItemLimit, envelope.Budget.Truncated),
+	}
+	if len(envelope.Pack.Sources) == 0 {
+		lines = append(lines, "Sources: none")
+	} else {
+		lines = append(lines, "Sources:")
+		for _, source := range envelope.Pack.Sources {
+			lines = append(lines, "- "+formatPromptContextSource(source))
+		}
+	}
+	if len(envelope.Diagnostics) == 0 {
+		lines = append(lines, "Diagnostics: none")
+	} else {
+		lines = append(lines, "Diagnostics:")
+		for _, diagnostic := range envelope.Diagnostics {
+			lines = append(lines, "- "+formatPromptContextDiagnostic(diagnostic))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatPromptContextSource(source taskpkg.ContextPackSource) string {
+	name := strings.TrimSpace(source.Name)
+	if name == "" {
+		name = "unknown"
+	}
+	return fmt.Sprintf("%s: selected=%d/%d tokens=%d truncated=%t", name, source.Selected, source.Available, source.EstimatedTokens, source.Truncated)
+}
+
+func formatPromptContextDiagnostic(diagnostic taskpkg.ContextDiagnostic) string {
+	parts := []string{strings.TrimSpace(diagnostic.Source)}
+	if parts[0] == "" {
+		parts[0] = "unknown"
+	}
+	if strings.TrimSpace(diagnostic.ItemID) != "" {
+		parts = append(parts, "id="+diagnostic.ItemID)
+	}
+	if strings.TrimSpace(diagnostic.ItemKind) != "" {
+		parts = append(parts, "kind="+diagnostic.ItemKind)
+	}
+	parts = append(parts, fmt.Sprintf("tokens=%d", diagnostic.EstimatedTokens))
+	if strings.TrimSpace(diagnostic.Reason) != "" {
+		parts = append(parts, "reason="+firstLine(diagnostic.Reason))
+	}
+	return strings.Join(parts, " ")
+}
+
+func (s *DaemonSubmitter) compactSession(ctx context.Context, args string) (string, bool, error) {
+	sessionID, ok, err := s.currentOrLatestSessionID(ctx)
+	if err != nil {
+		return "", true, err
+	}
+	if !ok {
+		return "No current daemon session.", true, nil
+	}
+	request := parseCompactRequest(args)
+	result, err := s.client.CompactSession(ctx, sessionID, request)
+	if err != nil {
+		return "", true, err
+	}
+	lines := []string{
+		fmt.Sprintf("Compact %s", result.Session.ID),
+		fmt.Sprintf("Mode: %s", result.Mode),
+		fmt.Sprintf("Compacted: %t", result.Compacted),
+		fmt.Sprintf("Budget: %d/%d estimated tokens before, %d after", result.BeforeEstimatedTokens, result.TokenBudget, result.AfterEstimatedTokens),
+		fmt.Sprintf("Transcript items: %d", result.TranscriptItems),
+	}
+	if result.SkippedReason != "" {
+		lines = append(lines, "Skipped: "+result.SkippedReason)
+	}
+	if result.Boundary != nil {
+		lines = append(lines, "Boundary: "+firstLine(result.Boundary.Summary))
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) showTodos(ctx context.Context) (string, bool, error) {
+	sessionID, ok, err := s.currentOrLatestSessionID(ctx)
+	if err != nil {
+		return "", true, err
+	}
+	if !ok {
+		return "No current daemon session.", true, nil
+	}
+	todos, err := s.client.SessionTodos(ctx, sessionID)
+	if err != nil {
+		return "", true, err
+	}
+	if len(todos) == 0 {
+		return "No todos found for session " + sessionID + ".", true, nil
+	}
+	lines := []string{fmt.Sprintf("Todos %s", sessionID)}
+	for _, todo := range todos {
+		lines = append(lines, fmt.Sprintf("- id=%s status=%s priority=%s source_task_id=%s updated_at=%s content=%s", todo.ID, todo.Status, todo.Priority, todo.SourceTaskID, todo.UpdatedAt.Format(time.RFC3339Nano), firstLine(todo.Content)))
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) showArtifact(ctx context.Context, args string) (string, bool, error) {
+	request, err := parseArtifactPageRequest(args)
+	if err != nil {
+		return "", true, err
+	}
+	artifact, err := s.client.ArtifactPage(ctx, request)
+	if err != nil {
+		return "", true, err
+	}
+	lines := []string{
+		fmt.Sprintf("Artifact %s", artifact.URI),
+		fmt.Sprintf("Page %d/%d, lines %d, page_size=%d, has_prev=%t, has_next=%t", artifact.Page, artifact.TotalPages, artifact.TotalLines, artifact.PageSize, artifact.HasPrev, artifact.HasNext),
+	}
+	lines = append(lines, artifact.Lines...)
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func parseArtifactPageRequest(args string) (taskpkg.ArtifactPageRequest, error) {
+	fields := strings.Fields(args)
+	if len(fields) == 0 {
+		return taskpkg.ArtifactPageRequest{}, fmt.Errorf("usage: /artifact <artifact://...> [page] [page_size]")
+	}
+	request := taskpkg.ArtifactPageRequest{URI: fields[0], Page: 1, PageSize: defaultArtifactCommandPageSize}
+	if len(fields) > 1 {
+		parsed, ok := parsePositiveInt(fields[1])
+		if !ok {
+			return taskpkg.ArtifactPageRequest{}, fmt.Errorf("page must be a positive integer")
+		}
+		request.Page = parsed
+	}
+	if len(fields) > 2 {
+		parsed, ok := parsePositiveInt(fields[2])
+		if !ok {
+			return taskpkg.ArtifactPageRequest{}, fmt.Errorf("page_size must be a positive integer")
+		}
+		request.PageSize = parsed
+	}
+	if len(fields) > 3 {
+		return taskpkg.ArtifactPageRequest{}, fmt.Errorf("usage: /artifact <artifact://...> [page] [page_size]")
+	}
+	return request, nil
+}
+
 func (s *DaemonSubmitter) searchHistory(ctx context.Context, query string) (string, bool, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -494,21 +943,22 @@ func (s *DaemonSubmitter) currentOrLatestSessionID(ctx context.Context) (string,
 }
 
 func formatTimelineItem(item taskpkg.TimelineItem) string {
+	modelSuffix := timelineModelSuffix(item)
 	switch item.Kind {
 	case "message":
 		role := item.Role
 		if role == "" {
 			role = "message"
 		}
-		return role + ": " + firstLine(item.Content)
+		return role + modelSuffix + ": " + firstLine(item.Content)
 	case "tool_call":
-		return strings.TrimSpace("tool.call: " + item.Tool + " " + item.Input)
+		return strings.TrimSpace("tool.call" + modelSuffix + ": " + item.Tool + " " + item.Input)
 	case "tool_result":
 		status := item.Status
 		if status == "" {
 			status = "ok"
 		}
-		return strings.TrimSpace("tool.result[" + status + "]: " + item.Tool + " " + item.Input + " " + firstLine(item.Output))
+		return strings.TrimSpace("tool.result[" + status + "]" + modelSuffix + ": " + item.Tool + " " + item.Input + " " + firstLine(item.Output))
 	case "diff":
 		return "diff: " + firstLine(item.Diff)
 	case "approval":
@@ -518,9 +968,9 @@ func formatTimelineItem(item taskpkg.TimelineItem) string {
 		if status == "" {
 			status = item.Type
 		}
-		return "status: " + strings.TrimSpace(status+" "+firstLine(item.Content))
+		return "status" + modelSuffix + ": " + strings.TrimSpace(status+" "+firstLine(item.Content))
 	default:
-		return strings.TrimSpace(item.Kind + ": " + firstLine(item.Content))
+		return strings.TrimSpace(item.Kind + modelSuffix + ": " + firstLine(item.Content))
 	}
 }
 
@@ -529,22 +979,23 @@ func formatTranscriptItem(item taskpkg.TimelineItem) []string {
 	if item.TaskID != "" {
 		taskSuffix = " (" + item.TaskID + ")"
 	}
+	modelSuffix := timelineModelSuffix(item)
 	switch item.Kind {
 	case "message":
 		role := item.Role
 		if role == "" {
 			role = "message"
 		}
-		title := titleWord(role) + taskSuffix
+		title := titleWord(role) + modelSuffix + taskSuffix
 		return append([]string{title}, indentLines(item.Content)...)
 	case "tool_call":
-		return []string{strings.TrimSpace("Tool call" + taskSuffix + ": " + item.Tool + " " + item.Input)}
+		return []string{strings.TrimSpace("Tool call" + modelSuffix + taskSuffix + ": " + item.Tool + " " + item.Input)}
 	case "tool_result":
 		status := item.Status
 		if status == "" {
 			status = "ok"
 		}
-		lines := []string{strings.TrimSpace("Tool result [" + status + "]" + taskSuffix + ": " + item.Tool + " " + item.Input)}
+		lines := []string{strings.TrimSpace("Tool result [" + status + "]" + modelSuffix + taskSuffix + ": " + item.Tool + " " + item.Input)}
 		return append(lines, indentLines(item.Output)...)
 	case "diff":
 		lines := []string{"Diff" + taskSuffix}
@@ -553,11 +1004,25 @@ func formatTranscriptItem(item taskpkg.TimelineItem) []string {
 		header := strings.TrimSpace("Approval" + taskSuffix + ": " + item.Tool + " " + item.Input + " " + item.Status + " " + item.Risk + " " + item.Reason)
 		return appendPrefixedLines(header, item.Content)
 	case "status":
-		header := strings.TrimSpace("Status" + taskSuffix + ": " + item.Status)
+		header := strings.TrimSpace("Status" + modelSuffix + taskSuffix + ": " + item.Status)
 		return appendPrefixedLines(header, strings.TrimSpace(item.Content+" "+item.Reason))
 	default:
-		return appendPrefixedLines(strings.TrimSpace(item.Kind+taskSuffix), item.Content)
+		return appendPrefixedLines(strings.TrimSpace(item.Kind+modelSuffix+taskSuffix), item.Content)
 	}
+}
+
+func timelineModelSuffix(item taskpkg.TimelineItem) string {
+	parts := []string{}
+	if strings.TrimSpace(item.Provider) != "" || strings.TrimSpace(item.Model) != "" {
+		parts = append(parts, "model="+strings.Trim(strings.TrimSpace(item.Provider)+"/"+strings.TrimSpace(item.Model), "/"))
+	}
+	if strings.TrimSpace(item.Profile) != "" {
+		parts = append(parts, "profile="+item.Profile)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " [" + strings.Join(parts, " ") + "]"
 }
 
 func titleWord(value string) string {
@@ -585,6 +1050,38 @@ func timelineLimit(args string, defaultLimit int, maxLimit int) int {
 	return parsed
 }
 
+func parseContextRequest(args string) taskpkg.ContextRequest {
+	fields := strings.Fields(args)
+	request := taskpkg.ContextRequest{}
+	if len(fields) > 0 {
+		if parsed, ok := parsePositiveInt(fields[0]); ok {
+			request.ItemLimit = parsed
+		}
+	}
+	if len(fields) > 1 {
+		if parsed, ok := parsePositiveInt(fields[1]); ok {
+			request.TokenBudget = parsed
+		}
+	}
+	return request
+}
+
+func parseCompactRequest(args string) taskpkg.CompactRequest {
+	fields := strings.Fields(args)
+	request := taskpkg.CompactRequest{Mode: taskpkg.CompactModeManual}
+	if len(fields) > 0 {
+		switch fields[0] {
+		case string(taskpkg.CompactModeManual), string(taskpkg.CompactModeAuto):
+			request.Mode = taskpkg.CompactMode(fields[0])
+			fields = fields[1:]
+		}
+	}
+	contextRequest := parseContextRequest(strings.Join(fields, " "))
+	request.ItemLimit = contextRequest.ItemLimit
+	request.TokenBudget = contextRequest.TokenBudget
+	return request
+}
+
 func (s *DaemonSubmitter) listApprovals(ctx context.Context) (string, bool, error) {
 	if s.client == nil {
 		return "No pending approvals.", true, nil
@@ -603,13 +1100,33 @@ func (s *DaemonSubmitter) listApprovals(ctx context.Context) (string, bool, erro
 			s.rememberTask(approval.Task.ID)
 		}
 		lines = append(lines, fmt.Sprintf("- %s [%s] %s", approval.Task.ID, approval.Task.Status, approval.Task.Title))
-		if strings.TrimSpace(approval.Request.Tool+approval.Request.Input) != "" {
-			lines = append(lines, "  request: "+strings.TrimSpace(approval.Request.Tool+" "+approval.Request.Input))
+		if strings.TrimSpace(approval.Item.ID) != "" {
+			lines = append(lines, "  item: "+approval.Item.ID)
 		}
-		if strings.TrimSpace(approval.Request.Risk) != "" {
+		if strings.TrimSpace(approval.Item.ToolCallID) != "" {
+			lines = append(lines, "  tool_call_id: "+approval.Item.ToolCallID)
+		}
+		request := strings.TrimSpace(firstNonEmptyString(approval.Item.ToolName, approval.Request.Tool) + " " + firstNonEmptyString(approval.Item.ArgsPreview, approval.Request.Input))
+		if request != "" {
+			lines = append(lines, "  request: "+request)
+		}
+		if strings.TrimSpace(approval.Item.Risk) != "" {
+			lines = append(lines, "  risk: "+approval.Item.Risk)
+		} else if strings.TrimSpace(approval.Request.Risk) != "" {
 			lines = append(lines, "  risk: "+approval.Request.Risk)
 		}
-		if strings.TrimSpace(approval.Request.Reason) != "" {
+		if strings.TrimSpace(approval.Item.CommandPreview) != "" {
+			lines = append(lines, "  command: "+approval.Item.CommandPreview)
+		}
+		if strings.TrimSpace(approval.Item.DiffPreview) != "" {
+			lines = append(lines, "  diff: "+approval.Item.DiffPreview)
+		}
+		if strings.TrimSpace(approval.Item.Decision) != "" {
+			lines = append(lines, "  decision: "+approval.Item.Decision)
+		}
+		if strings.TrimSpace(approval.Item.Reason) != "" {
+			lines = append(lines, "  reason: "+approval.Item.Reason)
+		} else if strings.TrimSpace(approval.Request.Reason) != "" {
 			lines = append(lines, "  reason: "+approval.Request.Reason)
 		}
 		lines = append(lines, "  commands: /approve "+approval.Task.ID+"  /deny "+approval.Task.ID)
@@ -677,6 +1194,265 @@ func (s *DaemonSubmitter) listSessions(ctx context.Context) (string, bool, error
 	return strings.Join(lines, "\n"), true, nil
 }
 
+func (s *DaemonSubmitter) listThreads(ctx context.Context, includeArchived bool) (string, bool, error) {
+	threads, err := s.client.ListConversationThreadsWithOptions(ctx, store.ConversationThreadListOptions{
+		Workspace:       s.workspace,
+		Limit:           20,
+		IncludeArchived: includeArchived,
+	})
+	if err != nil {
+		return "", true, err
+	}
+	if len(threads) == 0 {
+		return "No conversation threads found.", true, nil
+	}
+	current := s.currentSessionID()
+	lines := []string{"Threads:"}
+	for _, thread := range threads {
+		marker := " "
+		if thread.ID == current {
+			marker = "*"
+		}
+		status := "active"
+		if thread.ArchivedAt != nil {
+			status = "archived"
+		}
+		lines = append(lines, fmt.Sprintf("- %s %s [%s] %s last=%s%s (%s)", marker, thread.ID, status, thread.Title, emptyDash(thread.LastTaskID), threadModelSuffix(thread.ModelConfig), formatTaskTime(thread.UpdatedAt)))
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) createThread(ctx context.Context, title string) (string, bool, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "Usage: /thread-new <title>", true, nil
+	}
+	thread, err := s.client.CreateConversationThread(ctx, store.CreateConversationThreadRequest{
+		Workspace: s.workspace,
+		Title:     title,
+	})
+	if err != nil {
+		return "", true, err
+	}
+	s.rememberSession(thread.ID)
+	lines := []string{
+		"Created thread " + thread.ID + ".",
+		"Title: " + thread.Title,
+		"Next: type a request, /spawn a background turn, or use /threads to switch.",
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func threadModelSuffix(config *store.ThreadModelConfig) string {
+	if config == nil {
+		return ""
+	}
+	return formatThreadModelSuffix(config.Provider, config.Model, config.BaseURL, config.Profile, config.InheritedFromThreadID)
+}
+
+func taskThreadModelSuffix(config *taskpkg.ThreadModelConfig) string {
+	if config == nil {
+		return ""
+	}
+	return formatThreadModelSuffix(config.Provider, config.Model, config.BaseURL, config.Profile, config.InheritedFromThreadID)
+}
+
+func formatThreadModelDetails(config *store.ThreadModelConfig) []string {
+	if config == nil {
+		return []string{"Model: default"}
+	}
+	lines := []string{
+		"Provider: " + emptyDash(config.Provider),
+		"Model: " + emptyDash(config.Model),
+	}
+	if strings.TrimSpace(config.Profile) != "" {
+		lines = append(lines, "Profile: "+config.Profile)
+	}
+	if strings.TrimSpace(config.BaseURL) != "" {
+		lines = append(lines, "Base URL: "+config.BaseURL)
+	}
+	if strings.TrimSpace(config.InheritedFromThreadID) != "" {
+		lines = append(lines, "Inherits: "+config.InheritedFromThreadID)
+	}
+	return lines
+}
+
+func formatThreadModelSuffix(provider string, model string, baseURL string, profile string, inheritedFromThreadID string) string {
+	parts := []string{}
+	if strings.TrimSpace(inheritedFromThreadID) != "" {
+		parts = append(parts, "inherits="+inheritedFromThreadID)
+	}
+	if strings.TrimSpace(provider) != "" || strings.TrimSpace(model) != "" {
+		parts = append(parts, "model="+strings.Trim(strings.TrimSpace(provider)+"/"+strings.TrimSpace(model), "/"))
+	}
+	if strings.TrimSpace(profile) != "" {
+		parts = append(parts, "profile="+profile)
+	}
+	if strings.TrimSpace(baseURL) != "" {
+		parts = append(parts, "base_url="+baseURL)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " " + strings.Join(parts, " ")
+}
+
+func (s *DaemonSubmitter) switchThread(ctx context.Context, threadID string) (string, bool, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return "Usage: /thread <thread_id>", true, nil
+	}
+	thread, err := s.client.GetConversationThread(ctx, threadID)
+	if err != nil {
+		return "", true, err
+	}
+	if thread.Workspace != s.workspace {
+		return fmt.Sprintf("Thread %s belongs to workspace %s.", thread.ID, thread.Workspace), true, nil
+	}
+	if thread.ArchivedAt != nil {
+		return fmt.Sprintf("Thread %s is archived. Use /thread-unarchive %s before switching.", thread.ID, thread.ID), true, nil
+	}
+	s.rememberSession(thread.ID)
+	if thread.LastTaskID != "" {
+		s.rememberTask(thread.LastTaskID)
+	}
+	lines := []string{
+		"Switched thread " + thread.ID + ".",
+		"Title: " + thread.Title,
+	}
+	if suffix := strings.TrimSpace(threadModelSuffix(thread.ModelConfig)); suffix != "" {
+		lines = append(lines, suffix)
+	}
+	lines = append(lines, "Next: type a request, or use /timeline to inspect this thread.")
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) threadSend(ctx context.Context, args string) (string, bool, error) {
+	targetID, message, ok := strings.Cut(strings.TrimSpace(args), " ")
+	targetID = strings.TrimSpace(targetID)
+	message = strings.TrimSpace(message)
+	if !ok || targetID == "" || message == "" {
+		return "Usage: /thread-send <thread_id> <message>", true, nil
+	}
+	fromID := s.currentSessionID()
+	if fromID == "" {
+		return "No current thread. Use /thread <thread_id> first.", true, nil
+	}
+	fromThread, err := s.client.GetConversationThread(ctx, fromID)
+	if err != nil {
+		return "", true, err
+	}
+	if fromThread.Workspace != s.workspace {
+		return fmt.Sprintf("Current thread %s belongs to workspace %s.", fromThread.ID, fromThread.Workspace), true, nil
+	}
+	targetThread, err := s.client.GetConversationThread(ctx, targetID)
+	if err != nil {
+		return "", true, err
+	}
+	if targetThread.Workspace != s.workspace {
+		return fmt.Sprintf("Thread %s belongs to workspace %s; /thread-send only sends within the current workspace.", targetThread.ID, targetThread.Workspace), true, nil
+	}
+	summary := summarizeThreadMessage(message)
+	request := store.CreateCrossThreadMessageRequest{
+		FromThreadID:    fromThread.ID,
+		ToThreadID:      targetThread.ID,
+		TaskID:          s.lastTask(),
+		Summary:         summary,
+		ExplicitContent: message,
+	}
+	created, err := s.client.CreateCrossThreadMessage(ctx, targetThread.ID, request)
+	if err != nil {
+		return "", true, err
+	}
+	return strings.Join([]string{
+		"Sent thread message " + created.ID + ".",
+		"From: " + created.FromThreadID,
+		"To: " + created.ToThreadID,
+		"Summary: " + created.Summary,
+		"Next: use /thread-inbox " + created.ToThreadID + " to inspect the handoff.",
+	}, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) threadInbox(ctx context.Context, threadID string) (string, bool, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		threadID = s.currentSessionID()
+	}
+	if threadID == "" {
+		return "Usage: /thread-inbox [thread_id]", true, nil
+	}
+	thread, err := s.client.GetConversationThread(ctx, threadID)
+	if err != nil {
+		return "", true, err
+	}
+	if thread.Workspace != s.workspace {
+		return fmt.Sprintf("Thread %s belongs to workspace %s.", thread.ID, thread.Workspace), true, nil
+	}
+	messages, err := s.client.ListCrossThreadMessages(ctx, thread.ID, 20)
+	if err != nil {
+		return "", true, err
+	}
+	if len(messages) == 0 {
+		return "Thread inbox " + thread.ID + ": empty.", true, nil
+	}
+	lines := []string{"Thread inbox " + thread.ID + ":"}
+	for _, message := range messages {
+		summary := strings.TrimSpace(message.Summary)
+		if summary == "" {
+			summary = summarizeThreadMessage(message.Content)
+		}
+		lines = append(lines, fmt.Sprintf("- %s from=%s task=%s %s (%s)", message.ID, message.FromThreadID, emptyDash(message.TaskID), summary, formatTaskTime(message.CreatedAt)))
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func summarizeThreadMessage(message string) string {
+	words := strings.Fields(strings.TrimSpace(message))
+	summary := strings.Join(words, " ")
+	if summary == "" {
+		return ""
+	}
+	runes := []rune(summary)
+	if len(runes) > 96 {
+		return string(runes[:93]) + "..."
+	}
+	return summary
+}
+
+func (s *DaemonSubmitter) renameThread(ctx context.Context, args string) (string, bool, error) {
+	threadID, title, ok := strings.Cut(strings.TrimSpace(args), " ")
+	if !ok || strings.TrimSpace(threadID) == "" || strings.TrimSpace(title) == "" {
+		return "Usage: /thread-rename <thread_id> <title>", true, nil
+	}
+	thread, err := s.client.UpdateConversationThread(ctx, threadID, store.UpdateConversationThreadRequest{Title: &title})
+	if err != nil {
+		return "", true, err
+	}
+	return "Renamed thread " + thread.ID + ": " + thread.Title, true, nil
+}
+
+func (s *DaemonSubmitter) archiveThread(ctx context.Context, threadID string, archived bool) (string, bool, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		if archived {
+			return "Usage: /thread-archive <thread_id>", true, nil
+		}
+		return "Usage: /thread-unarchive <thread_id>", true, nil
+	}
+	thread, err := s.client.UpdateConversationThread(ctx, threadID, store.UpdateConversationThreadRequest{Archived: &archived})
+	if err != nil {
+		return "", true, err
+	}
+	if archived && s.currentSessionID() == thread.ID {
+		s.startNewSession()
+	}
+	action := "Unarchived"
+	if archived {
+		action = "Archived"
+	}
+	return fmt.Sprintf("%s thread %s: %s", action, thread.ID, thread.Title), true, nil
+}
+
 func (s *DaemonSubmitter) showWorkbench(ctx context.Context) (string, bool, error) {
 	if s.client == nil {
 		return "No daemon client.", true, nil
@@ -687,6 +1463,18 @@ func (s *DaemonSubmitter) showWorkbench(ctx context.Context) (string, bool, erro
 	}
 	current := s.currentSessionID()
 	lines := []string{"Workbench " + s.workspace}
+	lines = append(lines, "Threads:")
+	if len(workbench.Threads) == 0 {
+		lines = append(lines, "- none")
+	} else {
+		for _, thread := range workbench.Threads {
+			marker := " "
+			if thread.ID == current {
+				marker = "*"
+			}
+			lines = append(lines, fmt.Sprintf("- %s %s [%s] %s last=%s%s", marker, thread.ID, thread.Lifecycle, thread.Title, emptyDash(thread.LastTaskID), taskThreadModelSuffix(thread.ModelConfig)))
+		}
+	}
 	lines = append(lines, "Sessions:")
 	if len(workbench.Sessions) == 0 {
 		lines = append(lines, "- none")
@@ -712,11 +1500,31 @@ func (s *DaemonSubmitter) showWorkbench(ctx context.Context) (string, bool, erro
 		lines = append(lines, "- none")
 	} else {
 		for _, approval := range workbench.PendingApprovals {
-			request := strings.TrimSpace(approval.Request.Tool + " " + approval.Request.Input)
+			request := strings.TrimSpace(firstNonEmptyString(approval.Item.ToolName, approval.Request.Tool) + " " + firstNonEmptyString(approval.Item.ArgsPreview, approval.Request.Input))
 			if request == "" {
 				request = approval.Task.Title
 			}
 			lines = append(lines, fmt.Sprintf("- %s %s", approval.Task.ID, request))
+		}
+	}
+	lines = append(lines, "Pending user input:")
+	if len(workbench.PendingUserInputs) == 0 {
+		lines = append(lines, "- none")
+	} else {
+		for _, input := range workbench.PendingUserInputs {
+			request := strings.TrimSpace(input.Request.Message)
+			if request == "" {
+				request = input.Task.Title
+			}
+			lines = append(lines, fmt.Sprintf("- %s %s", input.Task.ID, request))
+		}
+	}
+	lines = append(lines, "Queued tasks:")
+	if len(workbench.QueuedTasks) == 0 {
+		lines = append(lines, "- none")
+	} else {
+		for _, task := range workbench.QueuedTasks {
+			lines = append(lines, fmt.Sprintf("- %s %s session=%s", task.ID, task.Title, emptyDash(task.SessionID)))
 		}
 	}
 	lines = append(lines, "Recent tasks:")
@@ -759,7 +1567,7 @@ func (s *DaemonSubmitter) watchTasks(ctx context.Context, args string) (string, 
 		}
 		s.rememberTask(update.TaskID)
 		if eventCount < maxWatchEvents {
-			lines = append(lines, formatWatchEvent(update.TaskID, update.Type, payload))
+			lines = append(lines, tui.FormatDaemonEventWatch(update.TaskID, string(update.Type), update.Event.Payload))
 		}
 		eventCount++
 	}
@@ -803,7 +1611,7 @@ func (s *DaemonSubmitter) spawnTask(ctx context.Context, input string) (string, 
 	if s.client == nil {
 		return "No daemon client.", true, nil
 	}
-	created, err := s.createTask(ctx, input)
+	created, err := s.createTaskWithQueue(ctx, input, false)
 	if err != nil {
 		return "", true, err
 	}
@@ -839,11 +1647,11 @@ func (s *DaemonSubmitter) resumeLatest(ctx context.Context) (string, bool, error
 	if !ok {
 		return "No previous daemon session for this workspace.", true, nil
 	}
-	return strings.Join([]string{
-		"Resumed session " + session.ID + ".",
-		"Title: " + session.Title,
-		"Next: use /timeline or continue typing a task.",
-	}, "\n"), true, nil
+	output, err := s.sessionResumeOutput(ctx, session, "Resumed session "+session.ID+".")
+	if err != nil {
+		return "", true, err
+	}
+	return output, true, nil
 }
 
 func (s *DaemonSubmitter) newSessionCommand() (string, bool, error) {
@@ -863,28 +1671,40 @@ func (s *DaemonSubmitter) resumeSession(ctx context.Context, sessionID string) (
 	if err != nil {
 		return "", true, err
 	}
-	messages, err := s.client.SessionMessages(ctx, sessionID, 20)
+	output, err := s.sessionResumeOutput(ctx, session, fmt.Sprintf("Session %s", session.ID))
 	if err != nil {
 		return "", true, err
 	}
-	tasks, err := s.client.SessionTasks(ctx, sessionID, 10)
+	return output, true, nil
+}
+
+func (s *DaemonSubmitter) sessionResumeOutput(ctx context.Context, session taskpkg.Session, heading string) (string, error) {
+	envelope, err := s.client.SessionContext(ctx, session.ID, taskpkg.ContextRequest{ItemLimit: 20, TokenBudget: 4096})
 	if err != nil {
-		return "", true, err
+		return "", err
+	}
+	tasks, err := s.client.SessionTasks(ctx, session.ID, 10)
+	if err != nil {
+		return "", err
 	}
 	s.rememberSession(session.ID)
 	if session.LastTaskID != "" {
 		s.rememberTask(session.LastTaskID)
 	}
 	var lines []string
-	lines = append(lines, fmt.Sprintf("Session %s", session.ID))
+	lines = append(lines, heading)
 	lines = append(lines, "Title: "+session.Title)
 	lines = append(lines, "Workspace: "+session.Workspace)
-	if len(messages) == 0 {
-		lines = append(lines, "Messages: none")
+	lines = append(lines, fmt.Sprintf("Context: transcript_items=%d artifacts=%d compact_boundaries=%d truncated=%t", len(envelope.Transcript), len(envelope.ArtifactRefs), len(envelope.CompactBoundaries), envelope.Budget.Truncated))
+	if len(envelope.Transcript) == 0 {
+		lines = append(lines, "Transcript: none")
 	} else {
-		lines = append(lines, "Messages:")
-		for _, message := range messages {
-			lines = append(lines, fmt.Sprintf("- %s: %s", message.Role, firstLine(message.Content)))
+		lines = append(lines, "Transcript:")
+		for _, item := range envelope.Transcript {
+			formatted := formatTranscriptItem(item)
+			for _, line := range formatted {
+				lines = append(lines, "- "+line)
+			}
 		}
 	}
 	if len(tasks) == 0 {
@@ -895,7 +1715,8 @@ func (s *DaemonSubmitter) resumeSession(ctx context.Context, sessionID string) (
 			lines = append(lines, fmt.Sprintf("- %s [%s] %s", task.ID, task.Status, task.Title))
 		}
 	}
-	return strings.Join(lines, "\n"), true, nil
+	lines = append(lines, "Next: use /transcript or continue typing a task.")
+	return strings.Join(lines, "\n"), nil
 }
 
 func (s *DaemonSubmitter) cancelTask(ctx context.Context, taskID string) (string, bool, error) {
@@ -1034,7 +1855,7 @@ func (s *DaemonSubmitter) replayTask(ctx context.Context, taskID string) (string
 	var latestDiff string
 	for _, event := range events {
 		payload, _ := eventPayload(event)
-		lines = append(lines, "- "+formatReplayEvent(event.Type, payload))
+		lines = append(lines, "- "+tui.FormatDaemonEventReplay(string(event.Type), event.Payload))
 		if event.Type == taskpkg.EventDiff {
 			latestDiff = payload.Diff
 		}
@@ -1077,6 +1898,7 @@ func (s *DaemonSubmitter) startNewSession() {
 	s.sessionID = ""
 	s.lastTaskID = ""
 	s.lastDiff = ""
+	s.awaitingInputID = ""
 	s.newSession = true
 }
 
@@ -1115,6 +1937,26 @@ func (s *DaemonSubmitter) clearCurrentTask(taskID string) {
 	defer s.mu.Unlock()
 	if s.currentTaskID == taskID {
 		s.currentTaskID = ""
+	}
+}
+
+func (s *DaemonSubmitter) setAwaitingInput(taskID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.awaitingInputID = taskID
+}
+
+func (s *DaemonSubmitter) awaitingInputTask() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.awaitingInputID
+}
+
+func (s *DaemonSubmitter) clearAwaitingInput(taskID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.awaitingInputID == taskID {
+		s.awaitingInputID = ""
 	}
 }
 
@@ -1160,86 +2002,6 @@ func (s *DaemonSubmitter) rememberDiff(taskID string, diff string) {
 	defer s.mu.Unlock()
 	if s.lastTaskID == taskID {
 		s.lastDiff = diff
-	}
-}
-
-func formatReplayEvent(eventType taskpkg.EventType, payload taskpkg.EventPayload) string {
-	switch eventType {
-	case taskpkg.EventPlanReady:
-		return string(eventType) + ": " + firstLine(payload.Steps)
-	case taskpkg.EventToolCall, taskpkg.EventToolResult:
-		status := payload.Status
-		if status != "" {
-			status = "[" + status + "] "
-		}
-		return strings.TrimSpace(string(eventType) + ": " + status + payload.Tool + " " + payload.Input + " " + firstLine(payload.Output))
-	case taskpkg.EventSummary:
-		return string(eventType) + ": " + payload.Message
-	case taskpkg.EventDiff:
-		return string(eventType) + ": " + firstLine(payload.Diff)
-	case taskpkg.EventCompleted, taskpkg.EventCancelled, taskpkg.EventError:
-		return strings.TrimSpace(string(eventType) + ": " + payload.Status + " " + firstLine(payload.Message))
-	case taskpkg.EventPermissionRequest:
-		return strings.TrimSpace(string(eventType) + ": " + payload.Tool + " " + payload.Input + " " + payload.Risk + " " + payload.Reason)
-	case taskpkg.EventPermissionApproved, taskpkg.EventPermissionDenied:
-		return string(eventType) + ": " + payload.Message
-	}
-	if payload.Message != "" {
-		return string(eventType) + ": " + payload.Message
-	}
-	return string(eventType)
-}
-
-func formatTailEvent(eventType taskpkg.EventType, payload taskpkg.EventPayload) []string {
-	header := strings.TrimSpace(string(eventType))
-	switch eventType {
-	case taskpkg.EventPlanReady:
-		return appendPrefixedLines(header, payload.Steps)
-	case taskpkg.EventToolCall:
-		return []string{strings.TrimSpace(header + ": " + payload.Tool + " " + payload.Input)}
-	case taskpkg.EventToolResult:
-		status := payload.Status
-		if status == "" {
-			status = string(trace.StatusOK)
-		}
-		lines := []string{strings.TrimSpace(header + " [" + status + "]: " + payload.Tool + " " + payload.Input)}
-		return append(lines, indentLines(payload.Output)...)
-	case taskpkg.EventSummary:
-		return appendPrefixedLines(header, payload.Message)
-	case taskpkg.EventDiff:
-		return appendPrefixedLines(header, payload.Diff)
-	case taskpkg.EventPermissionRequest:
-		return []string{strings.TrimSpace(header + ": " + payload.Tool + " " + payload.Input + " " + payload.Risk + " " + payload.Reason)}
-	case taskpkg.EventCompleted, taskpkg.EventCancelled, taskpkg.EventError, taskpkg.EventReplanning:
-		return appendPrefixedLines(strings.TrimSpace(header+" "+payload.Status), payload.Message)
-	default:
-		return appendPrefixedLines(header, payload.Message)
-	}
-}
-
-func formatWatchEvent(taskID string, eventType taskpkg.EventType, payload taskpkg.EventPayload) string {
-	prefix := taskID + " " + string(eventType)
-	switch eventType {
-	case taskpkg.EventPlanReady:
-		return prefix + ": " + firstLine(payload.Steps)
-	case taskpkg.EventToolCall:
-		return strings.TrimSpace(prefix + ": " + payload.Tool + " " + payload.Input)
-	case taskpkg.EventToolResult:
-		status := payload.Status
-		if status == "" {
-			status = string(trace.StatusOK)
-		}
-		return strings.TrimSpace(prefix + "[" + status + "]: " + payload.Tool + " " + payload.Input + " " + firstLine(payload.Output))
-	case taskpkg.EventSummary:
-		return prefix + ": " + firstLine(payload.Message)
-	case taskpkg.EventDiff:
-		return prefix + ": " + firstLine(payload.Diff)
-	case taskpkg.EventPermissionRequest:
-		return strings.TrimSpace(prefix + ": " + payload.Tool + " " + payload.Input + " " + payload.Risk + " " + payload.Reason)
-	case taskpkg.EventCompleted, taskpkg.EventCancelled, taskpkg.EventError, taskpkg.EventReplanning:
-		return strings.TrimSpace(prefix + ": " + payload.Status + " " + firstLine(payload.Message))
-	default:
-		return strings.TrimSpace(prefix + ": " + firstLine(payload.Message))
 	}
 }
 
@@ -1302,7 +2064,7 @@ func filterActiveTasks(tasks []taskpkg.Task) []taskpkg.Task {
 	var active []taskpkg.Task
 	for _, task := range tasks {
 		switch task.Status {
-		case taskpkg.StatusDraft, taskpkg.StatusPlanning, taskpkg.StatusRunning, taskpkg.StatusWaitingUser:
+		case taskpkg.StatusDraft, taskpkg.StatusQueued, taskpkg.StatusPlanning, taskpkg.StatusRunning, taskpkg.StatusWaitingUser:
 			active = append(active, task)
 		}
 	}
@@ -1332,6 +2094,15 @@ func emptyDash(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func firstLine(value string) string {

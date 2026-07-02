@@ -153,6 +153,10 @@ func (l *ToolLoop) executeToolCall(ctx context.Context, name string, args map[st
 		return output, nil
 	case "diff":
 		return workspace.GitDiff()
+	case "todo_write":
+		return l.agent.executeTodoWrite(ctx, args)
+	case "todo_read":
+		return l.agent.executeTodoRead(ctx)
 	case "mcp":
 		if l.agent.mcp == nil {
 			return "", fmt.Errorf("no MCP servers configured")

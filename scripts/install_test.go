@@ -19,6 +19,28 @@ func TestInstallScriptBuildsLioraBinary(t *testing.T) {
 	}
 }
 
+func TestLocalInstallSmokeScriptRunsDoctorAndWorkspaceSmoke(t *testing.T) {
+	data, err := os.ReadFile("local-install-smoke.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		`install-local.sh`,
+		`HOME="$HOME_DIR"`,
+		`LIORA_INSTALL_DIR="$INSTALL_DIR"`,
+		`"$INSTALL_DIR/liora" -doctor`,
+		`arbitrary-workspace`,
+		`workspace-smoke.txt`,
+		`-prompt 'list .'`,
+		`local install smoke ok`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected local install smoke script to contain %q, got:\n%s", want, content)
+		}
+	}
+}
+
 func TestPackageReleaseScriptBuildsInstallableArchive(t *testing.T) {
 	data, err := os.ReadFile("package-release.sh")
 	if err != nil {
@@ -32,10 +54,11 @@ func TestPackageReleaseScriptBuildsInstallableArchive(t *testing.T) {
 		`bin/liora`,
 		`install.sh`,
 		`README.md`,
-		`docs/release.md`,
-		`docs/mvp-exit-benchmark.md`,
-		`docs/v0.1-exit-audit.md`,
+		`docs/*.md`,
 		`shasum -a 256`,
+		`provenance.json`,
+		`sbom.json`,
+		`manifest-review.json`,
 		`.tar.gz`,
 	} {
 		if !strings.Contains(content, want) {
@@ -50,9 +73,32 @@ func TestReleaseSmokeScriptInstallsArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
-	for _, want := range []string{`tar -xzf`, `install.sh`, `README.md`, `docs/release.md`, `LIORA_INSTALL_DIR`, `-version`} {
+	for _, want := range []string{`release-supply-chain-audit.sh`, `tar -xzf`, `install.sh`, `README.md`, `docs/README.md`, `docs/release.md`, `LIORA_INSTALL_DIR`, `-version`, `-doctor`, `arbitrary-workspace`, `workspace-smoke.txt`, `-prompt 'list .'`} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected release smoke script to contain %q, got:\n%s", want, content)
+		}
+	}
+}
+
+func TestNPMLazySmokeScriptExercisesGitHubPackageLazyBuild(t *testing.T) {
+	data, err := os.ReadFile("npm-lazy-smoke.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		`scripts/npm/liora.cjs`,
+		`scripts/npm`,
+		`rm -rf "$PACKAGE_DIR/bin"`,
+		`node "$PACKAGE_DIR/scripts/npm/liora.cjs" -doctor`,
+		`"$PACKAGE_DIR/bin/liora"`,
+		`arbitrary-workspace`,
+		`workspace-smoke.txt`,
+		`-prompt 'list .'`,
+		`npm lazy smoke ok`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected npm lazy smoke script to contain %q, got:\n%s", want, content)
 		}
 	}
 }

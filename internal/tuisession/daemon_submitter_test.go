@@ -2,6 +2,7 @@ package tuisession
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -21,10 +22,16 @@ import (
 )
 
 type fakeGenerator struct {
-	response string
+	response  string
+	responses []string
 }
 
 func (f *fakeGenerator) Generate(_ context.Context, _ []llm.Message) (string, error) {
+	if len(f.responses) > 0 {
+		response := f.responses[0]
+		f.responses = f.responses[1:]
+		return response, nil
+	}
 	return f.response, nil
 }
 
@@ -69,6 +76,56 @@ func TestDaemonSubmitterStreamsFromDaemon(t *testing.T) {
 		if !containsStreamType(streamed, want) {
 			t.Fatalf("expected streamed event %s in %#v", want, streamed)
 		}
+	}
+}
+
+func TestDaemonSubmitterSendsNextTurnAsUserInputWhenTaskWaits(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{responses: []string{
+		"ASK_USER: Which file should I edit?",
+		"ANSWER: Resumed.",
+	}}))
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Runner: runner}))
+	defer server.Close()
+	client, err := daemonclient.New(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submitter := NewDaemonSubmitter(client, root, true, "", false)
+
+	first, err := submitter.Submit(t.Context(), "edit it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.AgentResult.Status != agent.StatusWaitingUser || !strings.Contains(first.AgentResult.Summary, "Which file") {
+		t.Fatalf("expected waiting user result, got %#v", first.AgentResult)
+	}
+	second, err := submitter.Submit(t.Context(), "notes.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.AgentResult.Status != agent.StatusCompleted {
+		t.Fatalf("expected completed after input, got %#v", second.AgentResult)
+	}
+	tasks, err := repo.List(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected input to resume same task, got %#v", tasks)
+	}
+	events, err := repo.Events(t.Context(), tasks[0].ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsEventType(eventTypes(events), taskpkg.EventUserInputReceived) {
+		t.Fatalf("expected user input received event, got %#v", eventTypes(events))
 	}
 }
 
@@ -125,26 +182,55 @@ func TestDaemonSubmitterHandlesMemoryThroughDaemon(t *testing.T) {
 	defer server.Close()
 	submitter := newTestSubmitter(t, server.URL, root, true)
 
-	out, handled, err := submitter.HandleCommand(t.Context(), "/memory add prefer compact memory panel")
+	out, handled, err := submitter.HandleCommand(t.Context(), "/memory add preference prefer compact memory panel")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !handled || !strings.Contains(out, "Memory saved") {
+	if !handled || !strings.Contains(out, "Memory saved") || !strings.Contains(out, "[preference source=manual enabled]") {
 		t.Fatalf("unexpected add output handled=%v out=%q", handled, out)
 	}
+	memories, err := persistentStore.ListMemoriesWithOptions(store.MemoryListOptions{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(memories) != 1 {
+		t.Fatalf("unexpected stored memories %#v", memories)
+	}
+	memoryID := memories[0].ID
 	out, handled, err = submitter.HandleCommand(t.Context(), "/memory search compact")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !handled || !strings.Contains(out, "prefer compact memory panel") {
+	if !handled || !strings.Contains(out, memoryID) || !strings.Contains(out, "prefer compact memory panel") {
 		t.Fatalf("unexpected search output handled=%v out=%q", handled, out)
+	}
+	out, handled, err = submitter.HandleCommand(t.Context(), "/memory edit "+memoryID+" prefer explicit memory panel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, "Memory updated") || !strings.Contains(out, "prefer explicit memory panel") {
+		t.Fatalf("unexpected edit output handled=%v out=%q", handled, out)
+	}
+	out, handled, err = submitter.HandleCommand(t.Context(), "/memory disable "+memoryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, "Memory disabled") || !strings.Contains(out, "[preference source=manual disabled]") {
+		t.Fatalf("unexpected disable output handled=%v out=%q", handled, out)
 	}
 	out, handled, err = submitter.HandleCommand(t.Context(), "/memory")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !handled || !strings.Contains(out, "prefer compact memory panel") {
+	if !handled || out != "No memories found." {
 		t.Fatalf("unexpected list output handled=%v out=%q", handled, out)
+	}
+	out, handled, err = submitter.HandleCommand(t.Context(), "/memory list all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, memoryID) || !strings.Contains(out, "prefer explicit memory panel") || !strings.Contains(out, "disabled") {
+		t.Fatalf("unexpected list all output handled=%v out=%q", handled, out)
 	}
 }
 
@@ -165,6 +251,29 @@ func (e *blockingShellExecutor) Run(ctx context.Context, _ string, _ string) (to
 	<-ctx.Done()
 	close(e.done)
 	return tools.ShellResult{ExitCode: -1}, ctx.Err()
+}
+
+type countingBlockingShellExecutor struct {
+	started chan string
+}
+
+func newCountingBlockingShellExecutor() *countingBlockingShellExecutor {
+	return &countingBlockingShellExecutor{started: make(chan string, 10)}
+}
+
+func (e *countingBlockingShellExecutor) Run(ctx context.Context, _ string, command string) (tools.ShellResult, error) {
+	e.started <- command
+	<-ctx.Done()
+	return tools.ShellResult{ExitCode: -1}, ctx.Err()
+}
+
+func waitCountingStarted(t *testing.T, executor *countingBlockingShellExecutor) {
+	t.Helper()
+	select {
+	case <-executor.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not start")
+	}
 }
 
 func TestDaemonSubmitterCancelsCurrentTask(t *testing.T) {
@@ -603,6 +712,12 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 		t.Fatalf("expected one reused session, got %#v", sessions)
 	}
 	sessionID := sessions[0].ID
+	if err := repo.AppendEvent(t.Context(), sessions[0].LastTaskID, taskpkg.EventArtifactReference, taskpkg.EventPayload{Tool: "shell", Path: ".liora/tool-results/context.txt", Message: "context artifact"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), sessions[0].LastTaskID, taskpkg.EventCompactBoundary, taskpkg.EventPayload{Message: "context compact boundary"}); err != nil {
+		t.Fatal(err)
+	}
 	otherWorkspace := t.TempDir()
 	otherTask, err := repo.Create(t.Context(), taskpkg.CreateRequest{
 		Workspace: otherWorkspace,
@@ -665,6 +780,15 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 			t.Fatalf("expected /transcript output to contain %q handled=%v output=%q", want, handled, transcriptOutput)
 		}
 	}
+	contextOutput, handled, err := fresh.HandleCommand(t.Context(), "/context 8 512")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Context " + sessionID, "Budget:", "Transcript items:", "Artifacts: 1", "Compact boundaries: 1", ".liora/tool-results/context.txt"} {
+		if !handled || !strings.Contains(contextOutput, want) {
+			t.Fatalf("expected /context output to contain %q handled=%v output=%q", want, handled, contextOutput)
+		}
+	}
 	historyOutput, handled, err := fresh.HandleCommand(t.Context(), "/history second")
 	if err != nil {
 		t.Fatal(err)
@@ -678,15 +802,19 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !handled || !strings.Contains(resumeLatestOutput, "Resumed session "+sessionID) {
-		t.Fatalf("unexpected /resume-latest output handled=%v output=%q", handled, resumeLatestOutput)
+	for _, want := range []string{"Resumed session " + sessionID, "Context: transcript_items=", "Transcript:", "User", "second prompt", "Tool result", "completed 1 step"} {
+		if !handled || !strings.Contains(resumeLatestOutput, want) {
+			t.Fatalf("expected /resume-latest output to contain %q handled=%v output=%q", want, handled, resumeLatestOutput)
+		}
 	}
 	resumeOutput, handled, err := fresh.HandleCommand(t.Context(), "/resume-session "+sessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !handled || !strings.Contains(resumeOutput, "Session "+sessionID) || !strings.Contains(resumeOutput, "second prompt") {
-		t.Fatalf("unexpected /resume-session output handled=%v output=%q", handled, resumeOutput)
+	for _, want := range []string{"Session " + sessionID, "Context: transcript_items=", "Transcript:", "User", "second prompt", "Tool result", "completed 1 step"} {
+		if !handled || !strings.Contains(resumeOutput, want) {
+			t.Fatalf("expected /resume-session output to contain %q handled=%v output=%q", want, handled, resumeOutput)
+		}
 	}
 	newOutput, handled, err := fresh.HandleCommand(t.Context(), "/new-session")
 	if err != nil {
@@ -721,6 +849,725 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 	}
 	if len(sessions) != 4 {
 		t.Fatalf("expected /clear to create one more session, got %#v", sessions)
+	}
+}
+
+func TestDaemonSubmitterShowsPromptContextSourceSummary(t *testing.T) {
+	root := t.TempDir()
+	persistentStore := store.New(t.TempDir())
+	memory, err := persistentStore.CreateMemoryWithOptions(store.CreateMemoryRequest{
+		Text:       "prefer source summaries without expanding content",
+		Kind:       "preference",
+		Workspace:  root,
+		Importance: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Store: persistentStore}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+
+	created, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: root,
+		Prompt:    "diagnose prompt context",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), created.ID, taskpkg.EventToolCall, taskpkg.EventPayload{Tool: "shell", Input: "cat notes.md"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), created.ID, taskpkg.EventToolResult, taskpkg.EventPayload{Tool: "shell", Input: "cat notes.md", Output: "prompt context tool result artifact://prompt-context/result.txt", Status: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), created.ID, taskpkg.EventArtifactReference, taskpkg.EventPayload{Tool: "shell", Path: "artifact://prompt-context/result.txt", Message: "prompt context artifact"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.WriteTodos(t.Context(), taskpkg.TodoWriteRequest{
+		SessionID:    created.SessionID,
+		SourceTaskID: created.ID,
+		Todos: []taskpkg.TodoWriteItem{{
+			ID:       "todo-prompt-context",
+			Content:  "show prompt context source summary",
+			Status:   taskpkg.TodoStatusPending,
+			Priority: taskpkg.TodoPriorityCritical,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	submitter.rememberSession(created.SessionID)
+
+	output, handled, err := submitter.HandleCommand(t.Context(), "/prompt-context 20 4096")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Prompt context " + created.SessionID,
+		"Budget:",
+		"Sources:",
+		"transcript: selected=",
+		"todo: selected=",
+		"memory: selected=",
+		"artifact_preview: selected=",
+		"Diagnostics:",
+		"transcript id=",
+		"tool_result id=",
+		"todo id=todo-prompt-context kind=pending tokens=",
+		"memory id=" + memory.ID + " kind=preference tokens=",
+		"artifact_preview id=artifact://prompt-context/result.txt kind=artifact_preview tokens=",
+		"reason=enabled unexpired memory matched the current workspace",
+	} {
+		if !handled || !strings.Contains(output, want) {
+			t.Fatalf("expected /prompt-context output to contain %q handled=%v output=%q", want, handled, output)
+		}
+	}
+	if strings.Contains(output, "prefer source summaries without expanding content") || strings.Contains(output, "show prompt context source summary") {
+		t.Fatalf("/prompt-context should summarize sources without expanding selected content, got %q", output)
+	}
+
+	aliasOutput, handled, err := submitter.HandleCommand(t.Context(), "/context sources 20 4096")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(aliasOutput, "Prompt context "+created.SessionID) || !strings.Contains(aliasOutput, "Diagnostics:") {
+		t.Fatalf("expected /context sources alias to show prompt context summary handled=%v output=%q", handled, aliasOutput)
+	}
+}
+
+func TestDaemonSubmitterPromptContextHandlesEmptyAndOmittedSources(t *testing.T) {
+	root := t.TempDir()
+	persistentStore := store.New(t.TempDir())
+	disabled, err := persistentStore.CreateMemoryWithOptions(store.CreateMemoryRequest{
+		Text:       "disabled prompt context leak",
+		Kind:       "preference",
+		Workspace:  root,
+		Importance: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := persistentStore.SetMemoryEnabled(disabled.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	expiredAt := time.Now().Add(-time.Hour)
+	if _, err := persistentStore.CreateMemoryWithOptions(store.CreateMemoryRequest{
+		Text:       "expired prompt context leak",
+		Kind:       "preference",
+		Workspace:  root,
+		Importance: 5,
+		ExpiresAt:  &expiredAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := persistentStore.CreateMemoryWithOptions(store.CreateMemoryRequest{
+		Text:       "cross workspace prompt context leak",
+		Kind:       "preference",
+		Workspace:  root + "-other",
+		Importance: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Store: persistentStore}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+
+	output, handled, err := submitter.HandleCommand(t.Context(), "/prompt-context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(output, "No current daemon session.") {
+		t.Fatalf("unexpected empty /prompt-context output handled=%v output=%q", handled, output)
+	}
+
+	emptySession, err := repo.CreateSession(t.Context(), taskpkg.CreateSessionRequest{Workspace: root, Title: "empty prompt context"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyOutput, handled, err := submitter.HandleCommand(t.Context(), "/prompt-context 10 256")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Prompt context " + emptySession.ID, "Sources:", "transcript: selected=0/0", "Diagnostics: none"} {
+		if !handled || !strings.Contains(emptyOutput, want) {
+			t.Fatalf("expected empty /prompt-context output to contain %q handled=%v output=%q", want, handled, emptyOutput)
+		}
+	}
+	if _, err := persistentStore.CreateMemoryWithOptions(store.CreateMemoryRequest{
+		Text:       strings.Repeat("allowed tight prompt context memory ", 20),
+		Kind:       "rule",
+		Workspace:  root,
+		Importance: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: root,
+		Prompt:    strings.Repeat("tight prompt context ", 80),
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 6; i++ {
+		if _, err := repo.AppendMessage(t.Context(), created.SessionID, "assistant", strings.Repeat("tight transcript ", 90), created.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := repo.WriteTodos(t.Context(), taskpkg.TodoWriteRequest{
+		SessionID:    created.SessionID,
+		SourceTaskID: created.ID,
+		Todos: []taskpkg.TodoWriteItem{{
+			ID:       "todo-done-prompt-context",
+			Content:  "done prompt context leak",
+			Status:   taskpkg.TodoStatusDone,
+			Priority: taskpkg.TodoPriorityCritical,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	submitter.rememberSession(created.SessionID)
+
+	tightOutput, handled, err := submitter.HandleCommand(t.Context(), "/prompt-context 20 128")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Prompt context " + created.SessionID, "truncated=true", "Sources:", "Diagnostics:"} {
+		if !handled || !strings.Contains(tightOutput, want) {
+			t.Fatalf("expected tight /prompt-context output to contain %q handled=%v output=%q", want, handled, tightOutput)
+		}
+	}
+	for _, forbidden := range []string{"disabled prompt context leak", "expired prompt context leak", "cross workspace prompt context leak", "done prompt context leak"} {
+		if strings.Contains(tightOutput, forbidden) {
+			t.Fatalf("omitted source content %q leaked into /prompt-context output %q", forbidden, tightOutput)
+		}
+	}
+}
+
+func TestDaemonSubmitterCompactCommandWritesManualAndAutoBoundaries(t *testing.T) {
+	root := t.TempDir()
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+
+	manualTask, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: root,
+		Prompt:    "manual compact prompt",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), manualTask.ID, taskpkg.EventSummary, taskpkg.EventPayload{Message: "manual compact assistant response"}); err != nil {
+		t.Fatal(err)
+	}
+	submitter.rememberSession(manualTask.SessionID)
+	manualOutput, handled, err := submitter.HandleCommand(t.Context(), "/compact 20 512")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Compact " + manualTask.SessionID, "Mode: manual", "Compacted: true", "Boundary: Manual compact"} {
+		if !handled || !strings.Contains(manualOutput, want) {
+			t.Fatalf("expected /compact output to contain %q handled=%v output=%q", want, handled, manualOutput)
+		}
+	}
+
+	autoTask, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: root,
+		Prompt:    strings.Repeat("auto compact prompt ", 120),
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), autoTask.ID, taskpkg.EventToolResult, taskpkg.EventPayload{
+		Tool:   "shell",
+		Output: strings.Repeat("auto compact output ", 180),
+		Status: "ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	submitter.rememberSession(autoTask.SessionID)
+	autoOutput, handled, err := submitter.HandleCommand(t.Context(), "/compact auto 20 128")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Mode: auto", "Compacted: true", "Boundary: Auto compact"} {
+		if !handled || !strings.Contains(autoOutput, want) {
+			t.Fatalf("expected /compact auto output to contain %q handled=%v output=%q", want, handled, autoOutput)
+		}
+	}
+	duplicateOutput, handled, err := submitter.HandleCommand(t.Context(), "/compact auto 20 128")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Mode: auto", "Compacted: false", "Skipped: already_compacted"} {
+		if !handled || !strings.Contains(duplicateOutput, want) {
+			t.Fatalf("expected duplicate /compact auto output to contain %q handled=%v output=%q", want, handled, duplicateOutput)
+		}
+	}
+}
+
+func TestDaemonSubmitterResumeCommandsHandleEmptyAndUsage(t *testing.T) {
+	root := t.TempDir()
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "unused"}))
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Runner: runner}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+
+	output, handled, err := submitter.HandleCommand(t.Context(), "/resume-latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(output, "No previous daemon session for this workspace.") {
+		t.Fatalf("unexpected empty /resume-latest output handled=%v output=%q", handled, output)
+	}
+	output, handled, err = submitter.HandleCommand(t.Context(), "/resume-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(output, "Usage: /resume-session <session_id>") {
+		t.Fatalf("unexpected /resume-session usage output handled=%v output=%q", handled, output)
+	}
+}
+
+func TestDaemonSubmitterThreadCommands(t *testing.T) {
+	root := t.TempDir()
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Store: persistentStore}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+	client, err := daemonclient.New(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := client.CreateConversationThread(t.Context(), store.CreateConversationThreadRequest{Workspace: root, Title: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := client.CreateConversationThread(t.Context(), store.CreateConversationThreadRequest{Workspace: root, Title: "Second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := client.CreateConversationThread(t.Context(), store.CreateConversationThreadRequest{Workspace: root, Title: "Third"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UpdateThreadModelConfig(t.Context(), first.ID, store.UpdateThreadModelConfigRequest{Provider: "openai-chat", Model: "gpt-5", Profile: "strong"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CreateTask(t.Context(), taskpkg.CreateRequest{Workspace: root, ThreadID: &first.ID, Prompt: "active", Natural: false}); err != nil {
+		t.Fatal(err)
+	}
+	threadsOutput, handled, err := submitter.HandleCommand(t.Context(), "/threads")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Threads:", first.ID, second.ID, third.ID, "model=openai-chat/gpt-5", "profile=strong"} {
+		if !handled || !strings.Contains(threadsOutput, want) {
+			t.Fatalf("expected /threads output to contain %q handled=%v output=%q", want, handled, threadsOutput)
+		}
+	}
+	switchOutput, handled, err := submitter.HandleCommand(t.Context(), "/thread "+second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(switchOutput, "Switched thread "+second.ID) {
+		t.Fatalf("unexpected /thread output handled=%v output=%q", handled, switchOutput)
+	}
+	sendUsage, handled, err := submitter.HandleCommand(t.Context(), "/thread-send")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(sendUsage, "Usage: /thread-send <thread_id> <message>") {
+		t.Fatalf("unexpected /thread-send usage handled=%v output=%q", handled, sendUsage)
+	}
+	sendOutput, handled, err := submitter.HandleCommand(t.Context(), "/thread-send "+third.ID+" Please review the failing smoke output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(sendOutput, "Sent thread message") || !strings.Contains(sendOutput, "To: "+third.ID) {
+		t.Fatalf("unexpected /thread-send output handled=%v output=%q", handled, sendOutput)
+	}
+	inboxOutput, handled, err := submitter.HandleCommand(t.Context(), "/thread-inbox "+third.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Thread inbox " + third.ID, "from=" + second.ID, "Please review the failing smoke output"} {
+		if !handled || !strings.Contains(inboxOutput, want) {
+			t.Fatalf("expected /thread-inbox output to contain %q handled=%v output=%q", want, handled, inboxOutput)
+		}
+	}
+	messages, err := client.ListCrossThreadMessages(t.Context(), third.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].FromThreadID != second.ID || messages[0].ToThreadID != third.ID || messages[0].ExplicitContent != "Please review the failing smoke output" {
+		t.Fatalf("unexpected persisted thread messages %#v", messages)
+	}
+	targetTranscript, err := client.SessionMessages(t.Context(), third.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsSessionRoleContent(targetTranscript, "thread_message.received", messages[0].ID) {
+		t.Fatalf("expected target thread transcript to include received handoff, got %#v", targetTranscript)
+	}
+	workbenchOutput, handled, err := submitter.HandleCommand(t.Context(), "/workbench")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Threads:", "* " + second.ID, first.ID, "last=", "model=openai-chat/gpt-5"} {
+		if !handled || !strings.Contains(workbenchOutput, want) {
+			t.Fatalf("expected /workbench thread output to contain %q handled=%v output=%q", want, handled, workbenchOutput)
+		}
+	}
+	renameOutput, handled, err := submitter.HandleCommand(t.Context(), "/thread-rename "+second.ID+" Renamed thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(renameOutput, "Renamed thread "+second.ID+": Renamed thread") {
+		t.Fatalf("unexpected /thread-rename output handled=%v output=%q", handled, renameOutput)
+	}
+	archiveOutput, handled, err := submitter.HandleCommand(t.Context(), "/thread-archive "+second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(archiveOutput, "Archived thread "+second.ID) {
+		t.Fatalf("unexpected /thread-archive output handled=%v output=%q", handled, archiveOutput)
+	}
+	threadsOutput, handled, err = submitter.HandleCommand(t.Context(), "/threads")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || strings.Contains(threadsOutput, second.ID) {
+		t.Fatalf("/threads should hide archived current-workspace thread by default, got %q", threadsOutput)
+	}
+	unarchiveOutput, handled, err := submitter.HandleCommand(t.Context(), "/thread-unarchive "+second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(unarchiveOutput, "Unarchived thread "+second.ID) {
+		t.Fatalf("unexpected /thread-unarchive output handled=%v output=%q", handled, unarchiveOutput)
+	}
+}
+
+func TestDaemonSubmitterModelCommandQueriesAndSwitchesThreadModel(t *testing.T) {
+	root := t.TempDir()
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Store: persistentStore}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+	client, err := daemonclient.New(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	noThread, handled, err := submitter.HandleCommand(t.Context(), "/model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(noThread, "No current thread") {
+		t.Fatalf("unexpected /model without thread handled=%v output=%q", handled, noThread)
+	}
+	thread, err := client.CreateConversationThread(t.Context(), store.CreateConversationThreadRequest{Workspace: root, Title: "Model Switch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, handled, err := submitter.HandleCommand(t.Context(), "/thread "+thread.ID); err != nil || !handled {
+		t.Fatalf("failed to switch thread handled=%v err=%v", handled, err)
+	}
+	defaultModel, handled, err := submitter.HandleCommand(t.Context(), "/model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Thread model " + thread.ID, "Model: default", "/model set <provider> <model> [profile]"} {
+		if !handled || !strings.Contains(defaultModel, want) {
+			t.Fatalf("expected default /model output to contain %q handled=%v output=%q", want, handled, defaultModel)
+		}
+	}
+	profileOnlyMissingConfig, handled, err := submitter.HandleCommand(t.Context(), "/model set strong")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(profileOnlyMissingConfig, "No thread model is configured") {
+		t.Fatalf("unexpected profile-only missing-config output handled=%v output=%q", handled, profileOnlyMissingConfig)
+	}
+	updated, handled, err := submitter.HandleCommand(t.Context(), "/model set openai-chat gpt-5 strong")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Updated thread model " + thread.ID, "Provider: openai-chat", "Model: gpt-5", "Profile: strong"} {
+		if !handled || !strings.Contains(updated, want) {
+			t.Fatalf("expected set output to contain %q handled=%v output=%q", want, handled, updated)
+		}
+	}
+	shown, handled, err := submitter.HandleCommand(t.Context(), "/model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(shown, "Provider: openai-chat") || !strings.Contains(shown, "Profile: strong") {
+		t.Fatalf("unexpected shown model output handled=%v output=%q", handled, shown)
+	}
+	switchedProfile, handled, err := submitter.HandleCommand(t.Context(), "/model set cheap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(switchedProfile, "Profile: cheap") {
+		t.Fatalf("unexpected profile switch output handled=%v output=%q", handled, switchedProfile)
+	}
+	config, err := client.GetThreadModelConfig(t.Context(), thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Provider != "openai-chat" || config.Model != "gpt-5" || config.Profile != "cheap" {
+		t.Fatalf("unexpected persisted model config %#v", config)
+	}
+	malformed, handled, err := submitter.HandleCommand(t.Context(), "/model set too many fields here")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(malformed, "Usage: /model") {
+		t.Fatalf("unexpected malformed output handled=%v output=%q", handled, malformed)
+	}
+}
+
+func TestDaemonSubmitterCreatesThreeThreadsAndSpawnsParallelRuns(t *testing.T) {
+	root := t.TempDir()
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	executor := newCountingBlockingShellExecutor()
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "run sleep 100"}))
+	runner.SetSandbox(executor)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{
+		Repository: repo,
+		Runner:     runner,
+		Store:      persistentStore,
+		Foreground: daemon.ForegroundLimits{MaxConcurrent: 3, MaxActive: 6},
+	}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+	client, err := daemonclient.New(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	usage, handled, err := submitter.HandleCommand(t.Context(), "/thread-new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(usage, "Usage: /thread-new <title>") {
+		t.Fatalf("unexpected /thread-new usage handled=%v output=%q", handled, usage)
+	}
+	titles := []string{"Alpha", "Beta", "Gamma"}
+	for _, title := range titles {
+		output, handled, err := submitter.HandleCommand(t.Context(), "/thread-new "+title)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !handled || !strings.Contains(output, "Created thread") || !strings.Contains(output, "Title: "+title) {
+			t.Fatalf("unexpected /thread-new output handled=%v output=%q", handled, output)
+		}
+	}
+	threads, err := client.ListConversationThreadsWithOptions(t.Context(), store.ConversationThreadListOptions{Workspace: root, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadIDs := map[string]string{}
+	for _, thread := range threads {
+		threadIDs[thread.Title] = thread.ID
+	}
+	for _, title := range titles {
+		if threadIDs[title] == "" {
+			t.Fatalf("missing created thread %q in %#v", title, threads)
+		}
+	}
+
+	taskIDs := map[string]string{}
+	for _, title := range titles {
+		threadID := threadIDs[title]
+		if _, handled, err := submitter.HandleCommand(t.Context(), "/thread "+threadID); err != nil || !handled {
+			t.Fatalf("failed to switch thread %s handled=%v err=%v", threadID, handled, err)
+		}
+		output, handled, err := submitter.HandleCommand(t.Context(), "/spawn parallel "+title)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !handled || !strings.Contains(output, "Spawned task") {
+			t.Fatalf("unexpected /spawn output handled=%v output=%q", handled, output)
+		}
+		waitCountingStarted(t, executor)
+		thread, err := client.GetConversationThread(t.Context(), threadID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if thread.LastTaskID == "" {
+			t.Fatalf("expected thread %s to record last task after /spawn", threadID)
+		}
+		taskIDs[threadID] = thread.LastTaskID
+	}
+	if len(taskIDs) != 3 {
+		t.Fatalf("expected three distinct running thread tasks, got %#v", taskIDs)
+	}
+	for threadID, taskID := range taskIDs {
+		taskRecord, err := repo.Get(t.Context(), taskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if taskRecord.SessionID != threadID {
+			t.Fatalf("expected task %s to stay bound to thread session %s, got %#v", taskID, threadID, taskRecord)
+		}
+		if taskRecord.Status != taskpkg.StatusPlanning && taskRecord.Status != taskpkg.StatusRunning {
+			t.Fatalf("expected task %s to be active, got %#v", taskID, taskRecord)
+		}
+	}
+	betaID := threadIDs["Beta"]
+	if _, handled, err := submitter.HandleCommand(t.Context(), "/thread "+betaID); err != nil || !handled {
+		t.Fatalf("failed to switch to beta handled=%v err=%v", handled, err)
+	}
+	workbench, handled, err := submitter.HandleCommand(t.Context(), "/workbench")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Threads:", "* " + betaID, threadIDs["Alpha"], threadIDs["Gamma"], "Active tasks:"} {
+		if !handled || !strings.Contains(workbench, want) {
+			t.Fatalf("expected /workbench output to contain %q handled=%v output=%q", want, handled, workbench)
+		}
+	}
+	for _, taskID := range taskIDs {
+		if _, _, err := submitter.HandleCommand(t.Context(), "/cancel "+taskID); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestDaemonSubmitterThreadModelMetadataVisibleInTranscript(t *testing.T) {
+	t.Setenv("LIORA_AGENT_LOOP", "off")
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("model metadata\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"read README.md"}}]}`))
+	}))
+	defer llmServer.Close()
+	registry, err := llm.NewRegistry(llm.Config{
+		Provider: llm.ProviderOpenAIChat,
+		BaseURL:  llmServer.URL,
+		APIKey:   "test-key",
+		Model:    "default-model",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "read README.md"}))
+	runner.SetLLMRegistry(registry)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Runner: runner, Store: persistentStore}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+	client, err := daemonclient.New(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread, err := client.CreateConversationThread(t.Context(), store.CreateConversationThreadRequest{Workspace: root, Title: "Model bound"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UpdateThreadModelConfig(t.Context(), thread.ID, store.UpdateThreadModelConfigRequest{Provider: "openai-chat", Model: "gpt-5", Profile: "strong"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, handled, err := submitter.HandleCommand(t.Context(), "/thread "+thread.ID); err != nil || !handled {
+		t.Fatalf("failed to switch model thread handled=%v err=%v", handled, err)
+	}
+
+	result, err := submitter.SubmitStream(t.Context(), "inspect model metadata", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AgentResult.Status != agent.StatusCompleted {
+		t.Fatalf("expected completed result, got %#v", result.AgentResult)
+	}
+	updatedThread, err := client.GetConversationThread(t.Context(), thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID := updatedThread.LastTaskID
+	if taskID == "" {
+		t.Fatal("expected thread last task to be recorded")
+	}
+	events, err := repo.Events(t.Context(), taskID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eventPayloadHasModel(t, events, taskpkg.EventToolResult, "openai-chat", "gpt-5", "strong") {
+		t.Fatalf("expected tool trace event to include resolved model metadata, got %#v", events)
+	}
+	timeline, err := client.SessionTimeline(t.Context(), thread.ID, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !timelineHasModel(timeline, "openai-chat", "gpt-5", "strong") {
+		t.Fatalf("expected timeline to include model metadata, got %#v", timeline)
+	}
+	transcript, handled, err := submitter.HandleCommand(t.Context(), "/transcript")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"model=openai-chat/gpt-5", "profile=strong"} {
+		if !handled || !strings.Contains(transcript, want) {
+			t.Fatalf("expected transcript to contain %q handled=%v output=%q", want, handled, transcript)
+		}
+	}
+	workbench, handled, err := submitter.HandleCommand(t.Context(), "/workbench")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{thread.ID, "model=openai-chat/gpt-5", "profile=strong"} {
+		if !handled || !strings.Contains(workbench, want) {
+			t.Fatalf("expected workbench to contain %q handled=%v output=%q", want, handled, workbench)
+		}
 	}
 }
 
@@ -764,7 +1611,7 @@ func TestDaemonSubmitterApprovesAndDeniesWaitingTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Pending approvals", taskID, "request: run rm -rf build", "risk: dangerous_shell", "reason: Command contains rm -rf.", "/approve " + taskID, "/deny " + taskID} {
+	for _, want := range []string{"Pending approvals", taskID, "tool_call_id:", "request: run rm -rf build", "risk: dangerous_shell", "command: rm -rf build", "reason: Command contains rm -rf.", "/approve " + taskID, "/deny " + taskID} {
 		if !handled || !strings.Contains(pendingOutput, want) {
 			t.Fatalf("expected approvals output to contain %q handled=%v output=%q", want, handled, pendingOutput)
 		}
@@ -791,6 +1638,17 @@ func TestDaemonSubmitterApprovesAndDeniesWaitingTask(t *testing.T) {
 
 	second, err := repo.Create(t.Context(), taskpkg.CreateRequest{Workspace: root, Prompt: "run rm -rf other", Natural: false})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), second.ID, taskpkg.StatusWaitingUser); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), second.ID, taskpkg.EventPermissionRequest, taskpkg.EventPayload{
+		Tool:   "run",
+		Input:  "rm -rf other",
+		Risk:   "dangerous_shell",
+		Reason: "deny branch",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	submitter.rememberTask(second.ID)
@@ -845,6 +1703,58 @@ func newTestSubmitter(t *testing.T, serverURL string, root string, natural bool)
 func containsStreamType(events []string, want string) bool {
 	for _, event := range events {
 		if event == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsEventType(events []taskpkg.EventType, want taskpkg.EventType) bool {
+	for _, event := range events {
+		if event == want {
+			return true
+		}
+	}
+	return false
+}
+
+func eventTypes(events []taskpkg.Event) []taskpkg.EventType {
+	types := make([]taskpkg.EventType, 0, len(events))
+	for _, event := range events {
+		types = append(types, event.Type)
+	}
+	return types
+}
+
+func containsSessionRoleContent(messages []taskpkg.Message, role string, content string) bool {
+	for _, message := range messages {
+		if message.Role == role && strings.Contains(message.Content, content) {
+			return true
+		}
+	}
+	return false
+}
+
+func eventPayloadHasModel(t *testing.T, events []taskpkg.Event, eventType taskpkg.EventType, provider string, model string, profile string) bool {
+	t.Helper()
+	for _, event := range events {
+		if event.Type != eventType {
+			continue
+		}
+		payload, err := eventPayload(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if payload.Provider == provider && payload.Model == model && payload.Profile == profile {
+			return true
+		}
+	}
+	return false
+}
+
+func timelineHasModel(items []taskpkg.TimelineItem, provider string, model string, profile string) bool {
+	for _, item := range items {
+		if item.Provider == provider && item.Model == model && item.Profile == profile {
 			return true
 		}
 	}

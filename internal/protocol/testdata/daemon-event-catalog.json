@@ -1,0 +1,223 @@
+{
+  "version": "2026-06-30.task-events.v1",
+  "contract_version": "2026-06-30.task-events.v1",
+  "events": [
+    {
+      "event": "task.created",
+      "data": {
+        "message": "created",
+        "risk": "safe",
+        "origin": "background",
+        "kind": "background",
+        "source": "fixture",
+        "trigger": "manual-smoke"
+      }
+    },
+    {
+      "event": "task.queued",
+      "data": {
+        "message": "queued",
+        "status": "queued"
+      }
+    },
+    {
+      "event": "task.planning",
+      "data": {
+        "message": "planning task"
+      }
+    },
+    {
+      "event": "task.plan_ready",
+      "data": {
+        "steps": "read README.md\nsummarize"
+      }
+    },
+    {
+      "event": "task.replanning",
+      "data": {
+        "message": "replanning after tool result",
+        "reason": "read missing.txt: no such file",
+        "replan_reason": "read missing.txt: no such file"
+      }
+    },
+    {
+      "event": "tool.call",
+      "data": {
+        "tool": "read",
+        "tool_call_id": "catalog-call-1",
+        "input": "README.md"
+      }
+    },
+    {
+      "event": "tool.result",
+      "data": {
+        "tool": "read",
+        "tool_call_id": "catalog-call-1",
+        "tool_result_id": "catalog-call-1-result",
+        "input": "README.md",
+        "output": "Liora",
+        "status": "ok"
+      }
+    },
+    {
+      "event": "todo.updated",
+      "data": {
+        "id": "todo-001",
+        "message": "write tests",
+        "action": "complete",
+        "target": "tests",
+        "parent_task_id": "task-001"
+      }
+    },
+    {
+      "event": "transcript.entry",
+      "data": {
+        "message": "summary persisted",
+        "kind": "assistant"
+      }
+    },
+    {
+      "event": "artifact.reference",
+      "data": {
+        "message": "full output reference",
+        "path": ".liora/tool-results/context.txt",
+        "tool": "shell",
+        "token_estimate": 2048
+      }
+    },
+    {
+      "event": "compact.boundary",
+      "data": {
+        "message": "compacted before resume",
+        "token_estimate": 128,
+        "token_budget": 512
+      }
+    },
+    {
+      "event": "task.summary",
+      "data": {
+        "message": "background summary"
+      }
+    },
+    {
+      "event": "task.diff",
+      "data": {
+        "diff": "--- a/app.txt\n+++ b/app.txt\n"
+      }
+    },
+    {
+      "event": "sandbox.run",
+      "data": {
+        "message": "shell executor: local"
+      }
+    },
+    {
+      "event": "sandbox.workspace",
+      "data": {
+        "message": "workspace mode: copy"
+      }
+    },
+    {
+      "event": "task.patch_applied",
+      "data": {
+        "message": "patch applied",
+        "action": "apply",
+        "status": "ok"
+      }
+    },
+    {
+      "event": "permission.requested",
+      "data": {
+        "tool": "run",
+        "input": "rm -rf tmp",
+        "risk": "dangerous_shell",
+        "reason": "requires approval"
+      }
+    },
+    {
+      "event": "permission.approved",
+      "data": {
+        "message": "approved",
+        "status": "approved"
+      }
+    },
+    {
+      "event": "permission.denied",
+      "data": {
+        "message": "denied",
+        "status": "denied"
+      }
+    },
+    {
+      "event": "hook.run",
+      "data": {
+        "message": "checked command",
+        "action": "PreToolUse",
+        "status": "ok",
+        "source": "workspace"
+      }
+    },
+    {
+      "event": "schedule.triggered",
+      "data": {
+        "id": "schedule-001",
+        "message": "nightly audit",
+        "trigger": "0 2 * * *"
+      }
+    },
+    {
+      "event": "subagent.started",
+      "data": {
+        "id": "agent-001",
+        "message": "review started",
+        "status": "running",
+        "parent_task_id": "task-001"
+      }
+    },
+    {
+      "event": "subagent.completed",
+      "data": {
+        "id": "agent-001",
+        "message": "review completed",
+        "status": "completed",
+        "parent_task_id": "task-001"
+      }
+    },
+    {
+      "event": "user_input.requested",
+      "data": {
+        "id": "input-001",
+        "message": "need clarification",
+        "reason": "missing target"
+      }
+    },
+    {
+      "event": "user_input.received",
+      "data": {
+        "id": "input-001",
+        "message": "use the current workspace"
+      }
+    },
+    {
+      "event": "task.error",
+      "data": {
+        "message": "failed at step 1/1",
+        "status": "failed"
+      }
+    },
+    {
+      "event": "task.completed",
+      "data": {
+        "message": "completed",
+        "status": "completed"
+      }
+    },
+    {
+      "event": "task.cancelled",
+      "data": {
+        "message": "cancelled",
+        "status": "cancelled"
+      }
+    }
+  ]
+}
