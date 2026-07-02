@@ -184,6 +184,7 @@ func (m *model) View() tea.View {
 	content := joinViewSections(header, viewport, panel)
 	view := tea.NewView(content)
 	view.AltScreen = true
+	view.MouseMode = tea.MouseModeCellMotion
 	if cursor := m.input.Cursor(); cursor != nil {
 		cursor.Position.X += 2
 		cursor.Position.Y += lipgloss.Height(viewport) + 1
