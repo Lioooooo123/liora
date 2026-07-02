@@ -1,6 +1,6 @@
 # Liora 1.0 计划
 
-> 更新日期：2026-07-01
+> 更新日期：2026-07-02
 > 目标：先把 Liora 做成一个可靠的本地 coding agent，再在同一套 core 上扩展定时任务、用户个性化、上下文治理和 hook 生态。
 
 ## 1. 1.0 定位
@@ -20,6 +20,7 @@ Liora 1.0 的核心不是“多 agent swarm”，也不是套一个通用 agent 
 - **事件是一等公民**：tool、todo、transcript、approval、hook、schedule、subagent 都必须落事件和持久化记录，UI 只做投影。
 - **默认安全**：真实 workspace 默认不在执行阶段直接写入；危险 shell、外部 MCP、非预期网络和 hook 副作用必须可见、可拒绝、可回放。
 - **上下文有边界**：长会话必须有 transcript、artifact、summary、compact boundary 和 token budget，不靠无限塞历史。
+- **交互不能拖执行后腿**：TUI 必须以 Claude Code 级别的流式反馈、可滚动历史和低延迟输入为 1.0 主体验；慢模型、长输出或滚动操作不能让界面假死。
 - **用户个性化可解释**：偏好、记忆、规则和自动化必须能查看、编辑、禁用，不能变成模型隐形指令。
 
 ## 3. 1.0 横切基线
@@ -156,6 +157,27 @@ Liora 1.0 的核心不是“多 agent swarm”，也不是套一个通用 agent 
 
 - 干净 checkout 运行 `GOTOOLCHAIN=local ./scripts/liora-1.0-audit.sh "$PWD"` 通过。
 - release tarball、npm GitHub install 和本地源码 install 都能启动 `liora -doctor` 并通过基础 smoke。
+
+### 3.8 TUI Experience and Performance
+
+目标：默认 `liora` 进入的 TUI 要对标 Claude Code 的主交互体验，做到任务输出即时可见、历史可回看、输入不被长任务或滚动阻塞。
+
+工作项：
+
+- Bubble Tea 全屏 TUI 必须支持真正的 token/event streaming：assistant 文本、plan、tool call、tool result、approval、diff 和 summary 随 daemon SSE 增量刷新，不等 task terminal 后一次性输出。
+- transcript/history viewport 必须可滚动，支持鼠标滚轮、触控板上滑、键盘 PgUp/PgDown/Home/End，并且滚动时不阻塞 SSE 消费、输入框、cancel/apply/approval 命令。
+- 输入框、状态栏、任务流、diff/approval/todo 面板需要拆成稳定 layout；长行、宽字符、大 diff、大工具输出和窗口 resize 不得造成重排抖动或假死。
+- TUI 需要明确区分“模型正在思考 / 等待 provider / 工具执行 / 等待审批 / queued / cancelled / failed”，并展示 provider/model、elapsed、token/latency/retry 摘要，避免用户只能感觉“卡住了”。
+- 性能优化纳入 1.0 主线：provider timeout/retry、首 token/首事件延迟、SSE backlog、render frame cost、SQLite 查询、artifact 分页和 context packer 都要有可观测指标与预算。
+- 默认模型和 profile 要支持快/强分层：普通交互优先低延迟 profile，复杂架构或大改动再显式切到强推理 profile；切换结果必须在 TUI 和 task metadata 中可见。
+- line-based TUI 继续作为 smoke/fallback，但不能替代全屏 TUI 的手工验收；所有 TUI 主体验修复都要有 Bubble Tea 级别的可滚动/流式回归或等价 PTY smoke。
+
+验收：
+
+- 用真实 TTY 启动 `liora` 后，提交一个会产生多段 assistant/tool 输出的任务，用户能在任务运行中看到增量输出，并能立即 `/cancel`。
+- 同一 session 产生 200+ 行 transcript 后，上滑/滚轮/PgUp 能稳定查看历史；持续 streaming 时滚动历史不冻结、不丢输入、不把 viewport 强制跳回底部，除非用户显式跟随最新。
+- 运行大输出和大 diff 任务时，TUI 不假死；完整内容通过 artifact/diff 分页查看，主 transcript 只显示 bounded preview。
+- 性能 smoke 记录首事件延迟、任务总耗时、render backlog 和 provider/model；慢 provider 能被 doctor/timeline 定位，而不是表现成无状态等待。
 
 ## 4. 1.0 能力柱
 
@@ -363,6 +385,7 @@ Liora 1.0 的核心不是“多 agent swarm”，也不是套一个通用 agent 
 | Context governance | Context packer, compact | Manual compact eval; compact boundary persisted; prompt context diagnostics visible |
 | Threaded conversations | Scheduler, transcript, daemon SSE, TUI | 3+ threads run concurrently; cross-thread message persists in both transcripts; cancellation isolated; bounded worker/backpressure tested |
 | Provider/model routing | `internal/llm`, daemon task metadata, TUI, doctor | Per-thread model eval; provider failure isolation; capability/profile visible with redacted credentials |
+| TUI experience/performance | Bubble Tea TUI, daemon SSE, provider metrics | Streaming output visible during task; scrollback works with 200+ lines; no freeze on wheel/PgUp; first-event/render/provider latency captured |
 | Tool-call approval | Daemon API, TUI, events | Multiple pending approvals, duplicate response, expiry, restart recovery, deny path |
 | Background/subagent | Task store, tools, SSE | Parent creates child, TaskOutput reads artifact, TaskStop cancels, least-privilege enforced |
 | Schedule | Scheduler, task runner, TUI | One-shot and interval trigger; missed-run policy; dangerous action pauses for approval |
@@ -387,11 +410,14 @@ Liora 1.0 的核心不是“多 agent swarm”，也不是套一个通用 agent 
 - artifact store MVP。
 - conversation thread data model MVP：兼容现有 session，补 thread metadata、thread model binding、thread event envelope 和 cross-thread message fixture。
 - provider registry / per-request resolved model config MVP，先让 task metadata、trace 和 doctor 能看见实际 provider/model。
+- TUI 流式输出 MVP：daemon SSE 到 Bubble Tea viewport 增量刷新，任务运行中可见首事件/工具事件/summary，并保留 line-based smoke。
+- 性能指标 MVP：记录 provider/model、首事件延迟、总耗时、retry 和基础 render backlog，能在 doctor/timeline/trace 中定位慢 provider。
 
 退出标准：
 
 - 一个多文件 coding task 能稳定计划、执行、测试、产出 diff、恢复 transcript。
 - 失败、重试、replan、token/latency 基础指标可见。
+- TUI 不再等任务结束后一次性输出；长任务运行中用户能看到流式进展并执行取消。
 - protocol tests、migration fixture、deterministic coding eval 和 no-write-before-apply 安全回归通过。
 
 ### 1.0-beta：长期会话可信
@@ -402,6 +428,7 @@ Liora 1.0 的核心不是“多 agent swarm”，也不是套一个通用 agent 
 - tool-call approval queue。
 - always allow/deny/ask 规则。
 - 多线程对话执行：thread switcher、per-thread model switch、cross-thread message、bounded scheduler、取消隔离。
+- Claude Code 对标 TUI 主体验：可滚动 transcript/history、稳定输入框、状态栏、任务/工具/diff/approval 面板和滚动时不中断 streaming。
 - background task / subagent MVP。
 - schedule MVP，但危险 unattended action 默认 pause。
 - Docker/network/file policy 默认化到自动化路径。
@@ -412,6 +439,7 @@ Liora 1.0 的核心不是“多 agent swarm”，也不是套一个通用 agent 
 - 不同 thread 可以使用不同模型，provider 失败和限流互相隔离。
 - 后台子任务可创建、观察、停止、恢复输出。
 - 多个 conversation thread 可并行推进，跨线程交流可恢复，单个 thread 失败不影响其它 thread。
+- 200+ 行历史、持续 streaming、大 diff 和大输出场景下，上滑/滚轮/PgUp 不假死、不丢输入、不破坏取消/apply/approval。
 - 定时任务能在 daemon 重启后继续按计划触发。
 - approval、schedule、subagent、hook 的安全回归没有 bypass。
 
@@ -423,7 +451,7 @@ Liora 1.0 的核心不是“多 agent swarm”，也不是套一个通用 agent 
 - hook contract 与 hook runner。
 - context diagnostics。
 - MCP/plugin 状态面、doctor/config、release diagnostics。
-- TUI 主体验补齐 approval、todo、subagent、schedule、memory 面板。
+- TUI 主体验补齐 approval、todo、subagent、schedule、memory 面板，并完成性能 polish：低延迟 profile 默认、慢 provider 可诊断、render/backlog budget 进入 release gate。
 
 退出标准：
 
