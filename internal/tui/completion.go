@@ -39,6 +39,7 @@ func (builtinCompletionProvider) Completions(_ context.Context, line string) ([]
 		{Value: "/skill ", Label: "/skill <name>", Description: "read an installed skill", Kind: "command"},
 		{Value: "/mcp", Label: "/mcp", Description: "list MCP tools", Kind: "command"},
 		{Value: "/memory", Label: "/memory", Description: "manage memory", Kind: "command"},
+		{Value: "/schedule", Label: "/schedule", Description: "manage schedules", Kind: "command"},
 		{Value: "/model", Label: "/model", Description: "show or set thread model", Kind: "command"},
 		{Value: "/exit", Label: "/exit", Description: "quit", Kind: "command"},
 	}, nil

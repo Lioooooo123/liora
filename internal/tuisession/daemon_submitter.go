@@ -2,6 +2,7 @@ package tuisession
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -291,6 +292,8 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		return "Usage: /history <query>", true, nil
 	case "/memory":
 		return s.handleMemory(ctx, "list")
+	case "/schedule":
+		return s.handleSchedule(ctx, "list")
 	case "/permissions", "/permission-rules":
 		return s.listPermissionRules(ctx)
 	case "/permission-rule":
@@ -347,6 +350,9 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		}
 		if strings.HasPrefix(line, "/memory ") {
 			return s.handleMemory(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/memory ")))
+		}
+		if strings.HasPrefix(line, "/schedule ") {
+			return s.handleSchedule(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/schedule ")))
 		}
 		if strings.HasPrefix(line, "/permission-rule ") {
 			return s.handlePermissionRule(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/permission-rule ")))
@@ -566,6 +572,133 @@ func formatMemory(memory store.Memory) string {
 		source = "unknown"
 	}
 	return fmt.Sprintf("%s [%s source=%s %s] %s", memory.ID, memory.Kind, source, status, memory.Text)
+}
+
+func (s *DaemonSubmitter) handleSchedule(ctx context.Context, args string) (string, bool, error) {
+	command, rest, _ := strings.Cut(strings.TrimSpace(args), " ")
+	switch strings.TrimSpace(command) {
+	case "", "list":
+		schedules, err := s.client.ListSchedules(ctx, store.ScheduleListOptions{
+			Workspace:       s.workspace,
+			Limit:           50,
+			IncludeDisabled: strings.TrimSpace(rest) == "all",
+		})
+		if err != nil {
+			return "", true, err
+		}
+		return formatSchedules(schedules), true, nil
+	case "add":
+		request, err := s.scheduleCreateRequest(rest)
+		if err != nil {
+			return err.Error(), true, nil
+		}
+		schedule, err := s.client.CreateSchedule(ctx, request)
+		if err != nil {
+			return "", true, err
+		}
+		return "Schedule saved: " + formatSchedule(schedule), true, nil
+	case "pause", "resume":
+		id := strings.TrimSpace(rest)
+		if id == "" {
+			return "Usage: /schedule " + command + " <id>", true, nil
+		}
+		schedule, err := s.client.SetScheduleEnabled(ctx, id, command == "resume")
+		if err != nil {
+			return "", true, err
+		}
+		verb := "paused"
+		if command == "resume" {
+			verb = "resumed"
+		}
+		return "Schedule " + verb + ": " + formatSchedule(schedule), true, nil
+	case "delete":
+		id := strings.TrimSpace(rest)
+		if id == "" {
+			return "Usage: /schedule delete <id>", true, nil
+		}
+		if err := s.client.DeleteSchedule(ctx, id); err != nil {
+			return "", true, err
+		}
+		return "Schedule deleted: " + id, true, nil
+	default:
+		return scheduleUsage(), true, nil
+	}
+}
+
+func (s *DaemonSubmitter) scheduleCreateRequest(input string) (store.CreateScheduleRequest, error) {
+	left, prompt, ok := strings.Cut(input, " -- ")
+	if !ok || strings.TrimSpace(prompt) == "" {
+		return store.CreateScheduleRequest{}, errors.New(scheduleUsage())
+	}
+	fields := strings.Fields(left)
+	if len(fields) < 3 {
+		return store.CreateScheduleRequest{}, errors.New(scheduleUsage())
+	}
+	kind, err := scheduleTriggerKind(fields[1])
+	if err != nil {
+		return store.CreateScheduleRequest{}, err
+	}
+	triggerFields := fields[2:]
+	trigger := ""
+	switch kind {
+	case store.ScheduleTriggerCron:
+		if len(triggerFields) != 5 {
+			return store.CreateScheduleRequest{}, fmt.Errorf("cron-like trigger must have 5 fields, got %d", len(triggerFields))
+		}
+		trigger = strings.Join(triggerFields, " ")
+	default:
+		if len(triggerFields) != 1 {
+			return store.CreateScheduleRequest{}, errors.New(scheduleUsage())
+		}
+		trigger = triggerFields[0]
+	}
+	return store.CreateScheduleRequest{
+		ID:          fields[0],
+		Workspace:   s.workspace,
+		TriggerKind: kind,
+		Trigger:     trigger,
+		Prompt:      strings.TrimSpace(prompt),
+	}, nil
+}
+
+func scheduleTriggerKind(value string) (store.ScheduleTriggerKind, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "one-shot", "one_shot":
+		return store.ScheduleTriggerOneShot, nil
+	case "interval":
+		return store.ScheduleTriggerInterval, nil
+	case "cron":
+		return store.ScheduleTriggerCron, nil
+	default:
+		return "", fmt.Errorf("unknown schedule trigger kind %q", value)
+	}
+}
+
+func formatSchedules(schedules []store.ScheduleSpec) string {
+	if len(schedules) == 0 {
+		return "No schedules found."
+	}
+	lines := []string{"Schedules"}
+	for _, schedule := range schedules {
+		lines = append(lines, "- "+formatSchedule(schedule))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatSchedule(schedule store.ScheduleSpec) string {
+	status := "disabled"
+	if schedule.Enabled {
+		status = "enabled"
+	}
+	scope := "global"
+	if strings.TrimSpace(schedule.Workspace) != "" {
+		scope = "workspace=" + schedule.Workspace
+	}
+	return fmt.Sprintf("%s [%s %s %s] %s -> %s", schedule.ID, schedule.TriggerKind, status, scope, schedule.Trigger, schedule.Prompt)
+}
+
+func scheduleUsage() string {
+	return "Usage: /schedule add <id> <one-shot|interval|cron> <trigger> -- <prompt> | /schedule list [all] | /schedule pause <id> | /schedule resume <id> | /schedule delete <id>"
 }
 
 func (s *DaemonSubmitter) listPermissionRules(ctx context.Context) (string, bool, error) {

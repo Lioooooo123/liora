@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"strings"
 	"time"
@@ -177,4 +178,28 @@ func (s *Store) UpdateSchedule(id string, request UpdateScheduleRequest) (Schedu
 
 func (s *Store) SetScheduleEnabled(id string, enabled bool) (ScheduleSpec, error) {
 	return s.UpdateSchedule(id, UpdateScheduleRequest{Enabled: &enabled})
+}
+
+func (s *Store) DeleteSchedule(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("schedule id is required")
+	}
+	db, err := s.OpenDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	result, err := db.Exec(`DELETE FROM schedules WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if deleted == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }

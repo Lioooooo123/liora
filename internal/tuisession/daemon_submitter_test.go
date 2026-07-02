@@ -285,6 +285,158 @@ func TestDaemonSubmitterHandlesPermissionRulesThroughDaemon(t *testing.T) {
 	}
 }
 
+func TestDaemonSubmitterHandlesScheduleCommandsThroughDaemon(t *testing.T) {
+	root := t.TempDir()
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Store: persistentStore}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+
+	out, handled, err := submitter.HandleCommand(t.Context(), "/schedule add nightly cron 0 2 * * * -- run nightly maintenance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, "Schedule saved") || !strings.Contains(out, "nightly") || !strings.Contains(out, "cron") || !strings.Contains(out, "enabled") {
+		t.Fatalf("unexpected add output handled=%v out=%q", handled, out)
+	}
+	out, handled, err = submitter.HandleCommand(t.Context(), "/schedule add hourly interval 1h -- run hourly checks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, "hourly") || !strings.Contains(out, "interval") {
+		t.Fatalf("unexpected interval add output handled=%v out=%q", handled, out)
+	}
+	out, handled, err = submitter.HandleCommand(t.Context(), "/schedule add launch one-shot 2026-07-03T09:30:00Z -- prepare launch notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, "launch") || !strings.Contains(out, "one_shot") {
+		t.Fatalf("unexpected one-shot add output handled=%v out=%q", handled, out)
+	}
+
+	out, handled, err = submitter.HandleCommand(t.Context(), "/schedule list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Schedules", "nightly", "hourly", "launch", "run nightly maintenance"} {
+		if !handled || !strings.Contains(out, want) {
+			t.Fatalf("expected schedule list to contain %q, handled=%v out=%q", want, handled, out)
+		}
+	}
+	schedules, err := persistentStore.ListSchedules(store.ScheduleListOptions{Workspace: root, IncludeDisabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(schedules) != 3 {
+		t.Fatalf("expected three schedules, got %#v", schedules)
+	}
+
+	out, handled, err = submitter.HandleCommand(t.Context(), "/schedule pause hourly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, "Schedule paused") || !strings.Contains(out, "disabled") {
+		t.Fatalf("unexpected pause output handled=%v out=%q", handled, out)
+	}
+	paused, err := persistentStore.GetSchedule("hourly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paused.Enabled {
+		t.Fatalf("expected hourly to be paused, got %#v", paused)
+	}
+	out, handled, err = submitter.HandleCommand(t.Context(), "/schedule resume hourly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, "Schedule resumed") || !strings.Contains(out, "enabled") {
+		t.Fatalf("unexpected resume output handled=%v out=%q", handled, out)
+	}
+	resumed, err := persistentStore.GetSchedule("hourly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resumed.Enabled {
+		t.Fatalf("expected hourly to be resumed, got %#v", resumed)
+	}
+	out, handled, err = submitter.HandleCommand(t.Context(), "/schedule delete launch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, "Schedule deleted: launch") {
+		t.Fatalf("unexpected delete output handled=%v out=%q", handled, out)
+	}
+	schedules, err = persistentStore.ListSchedules(store.ScheduleListOptions{Workspace: root, IncludeDisabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(schedules) != 2 || scheduleListContainsID(schedules, "launch") {
+		t.Fatalf("expected launch deleted, got %#v", schedules)
+	}
+}
+
+func TestDaemonSubmitterScheduleCommandsRejectMalformedInputs(t *testing.T) {
+	root := t.TempDir()
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Store: persistentStore}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+
+	cases := []struct {
+		name string
+		line string
+		want string
+	}{
+		{"missing add parts", "/schedule add nightly cron", "Usage: /schedule add"},
+		{"blank prompt", "/schedule add nightly interval 1h --   ", "Usage: /schedule add"},
+		{"invalid interval", "/schedule add bad-interval interval 0s -- run checks", "interval trigger must be positive"},
+		{"invalid one shot", "/schedule add bad-once one-shot soon -- run checks", "invalid one-shot trigger"},
+		{"invalid cron", "/schedule add bad-cron cron 0 2 * -- run checks", "cron-like trigger must have 5 fields"},
+		{"unknown pause", "/schedule pause missing-schedule", "task not found"},
+		{"unknown resume", "/schedule resume missing-schedule", "task not found"},
+		{"unknown delete", "/schedule delete missing-schedule", "task not found"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, handled, err := submitter.HandleCommand(t.Context(), tc.line)
+			if err != nil {
+				out = err.Error()
+			}
+			if !handled || !strings.Contains(out, tc.want) {
+				t.Fatalf("expected handled output containing %q, handled=%v out=%q err=%v", tc.want, handled, out, err)
+			}
+			schedules, listErr := persistentStore.ListSchedules(store.ScheduleListOptions{Workspace: root, IncludeDisabled: true})
+			if listErr != nil {
+				t.Fatal(listErr)
+			}
+			if len(schedules) != 0 {
+				t.Fatalf("malformed command created schedules: %#v", schedules)
+			}
+		})
+	}
+}
+
+func scheduleListContainsID(schedules []store.ScheduleSpec, id string) bool {
+	for _, schedule := range schedules {
+		if schedule.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 type blockingShellExecutor struct {
 	started chan struct{}
 	done    chan struct{}

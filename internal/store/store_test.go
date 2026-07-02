@@ -264,6 +264,19 @@ func TestStorePersistsAndFiltersSchedules(t *testing.T) {
 	if toggled.Enabled {
 		t.Fatalf("expected schedule disabled, got %#v", toggled)
 	}
+	if err := s.DeleteSchedule("nightly-audit"); err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := s.ListSchedules(ScheduleListOptions{Workspace: "/repo", IncludeDisabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 2 {
+		t.Fatalf("expected deleted schedule to disappear, got %#v", remaining)
+	}
+	if _, err := s.GetSchedule("nightly-audit"); err == nil {
+		t.Fatal("expected deleted schedule lookup to fail")
+	}
 }
 
 func TestStoreRejectsMalformedSchedulesWithoutPartialRows(t *testing.T) {

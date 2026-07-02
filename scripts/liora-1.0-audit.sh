@@ -46,7 +46,7 @@ echo "[4/14] context boundary"
 echo "[5/14] explainable personalization"
 (
   cd "$ROOT"
-  GOTOOLCHAIN="$GO_TOOLCHAIN" go test -count=1 ./internal/store ./internal/daemon ./internal/daemonclient ./internal/tuisession -run 'TestStorePersistsAndSearchesMemories|TestServerServesMemoryAPI|TestClientMemoryLifecycle|TestDaemonSubmitterHandlesMemoryThroughDaemon'
+  GOTOOLCHAIN="$GO_TOOLCHAIN" go test -count=1 ./internal/store ./internal/daemon ./internal/daemonclient ./internal/tuisession -run 'TestStorePersistsAndSearchesMemories|TestServerServesMemoryAPI|TestClientMemoryLifecycle|TestDaemonSubmitterHandlesMemoryThroughDaemon|TestClientScheduleLifecycle|TestDaemonSubmitterHandlesScheduleCommandsThroughDaemon|TestDaemonSubmitterScheduleCommandsRejectMalformedInputs'
 )
 
 echo "[6/14] safety gates"
@@ -183,6 +183,7 @@ echo "[post] scoped diff check"
     internal/task/store.go \
     internal/task/store_test.go \
     internal/daemon/server.go \
+    internal/daemon/server_schedule.go \
     internal/daemon/server_queue.go \
     internal/daemon/task_control.go \
     internal/daemon/task_control_test.go \

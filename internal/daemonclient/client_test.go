@@ -286,6 +286,86 @@ func TestClientPermissionRuleLifecycle(t *testing.T) {
 	}
 }
 
+func TestClientScheduleLifecycle(t *testing.T) {
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: task.NewRepository(db), Store: persistentStore}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	created, err := client.CreateSchedule(t.Context(), store.CreateScheduleRequest{
+		ID:          "nightly",
+		Workspace:   "/repo",
+		TriggerKind: store.ScheduleTriggerCron,
+		Trigger:     "0 2 * * *",
+		Prompt:      "run nightly checks",
+		Timezone:    "Asia/Shanghai",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID != "nightly" || created.TriggerKind != store.ScheduleTriggerCron || !created.Enabled {
+		t.Fatalf("unexpected created schedule %#v", created)
+	}
+	schedules, err := client.ListSchedules(t.Context(), store.ScheduleListOptions{Workspace: "/repo", IncludeDisabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(schedules) != 1 || schedules[0].ID != created.ID {
+		t.Fatalf("unexpected schedule list %#v", schedules)
+	}
+	got, err := client.GetSchedule(t.Context(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != created.ID || got.Prompt != created.Prompt {
+		t.Fatalf("unexpected fetched schedule %#v", got)
+	}
+	updatedPrompt := "run nightly checks and summarize"
+	updated, err := client.UpdateSchedule(t.Context(), created.ID, store.UpdateScheduleRequest{Prompt: &updatedPrompt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Prompt != updatedPrompt {
+		t.Fatalf("unexpected updated schedule %#v", updated)
+	}
+	paused, err := client.SetScheduleEnabled(t.Context(), created.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paused.Enabled {
+		t.Fatalf("expected paused schedule, got %#v", paused)
+	}
+	schedules, err = client.ListSchedules(t.Context(), store.ScheduleListOptions{Workspace: "/repo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(schedules) != 0 {
+		t.Fatalf("expected paused schedule hidden by default, got %#v", schedules)
+	}
+	resumed, err := client.SetScheduleEnabled(t.Context(), created.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resumed.Enabled {
+		t.Fatalf("expected resumed schedule, got %#v", resumed)
+	}
+	if err := client.DeleteSchedule(t.Context(), created.ID); err != nil {
+		t.Fatal(err)
+	}
+	schedules, err = client.ListSchedules(t.Context(), store.ScheduleListOptions{Workspace: "/repo", IncludeDisabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(schedules) != 0 {
+		t.Fatalf("expected deleted schedule to disappear, got %#v", schedules)
+	}
+}
+
 func TestClientUsesCapabilityTokenForSensitiveAPIs(t *testing.T) {
 	workspace := t.TempDir()
 	persistentStore := store.New(t.TempDir())

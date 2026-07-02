@@ -270,6 +270,87 @@ func (c *Client) DeletePermissionRule(ctx context.Context, id string) error {
 	return c.deleteJSON(ctx, "/v1/permission-rules/"+escapedID, http.StatusNoContent)
 }
 
+func (c *Client) CreateSchedule(ctx context.Context, request store.CreateScheduleRequest) (store.ScheduleSpec, error) {
+	var result store.ScheduleSpec
+	if err := c.postJSON(ctx, "/v1/schedules", request, &result, http.StatusCreated); err != nil {
+		return store.ScheduleSpec{}, err
+	}
+	return result, nil
+}
+
+func (c *Client) ListSchedules(ctx context.Context, options store.ScheduleListOptions) ([]store.ScheduleSpec, error) {
+	if err := ensureNonNegativeLimit(options.Limit); err != nil {
+		return nil, err
+	}
+	values := url.Values{}
+	if strings.TrimSpace(options.Workspace) != "" {
+		values.Set("workspace", options.Workspace)
+	}
+	if options.Limit > 0 {
+		values.Set("limit", fmt.Sprintf("%d", options.Limit))
+	}
+	if options.IncludeDisabled {
+		values.Set("include_disabled", "true")
+	}
+	path := "/v1/schedules"
+	if encoded := values.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	var result []store.ScheduleSpec
+	if err := c.getJSON(ctx, path, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *Client) GetSchedule(ctx context.Context, id string) (store.ScheduleSpec, error) {
+	escapedID, err := pathID("schedule id", id)
+	if err != nil {
+		return store.ScheduleSpec{}, err
+	}
+	var result store.ScheduleSpec
+	if err := c.getJSON(ctx, "/v1/schedules/"+escapedID, &result); err != nil {
+		return store.ScheduleSpec{}, err
+	}
+	return result, nil
+}
+
+func (c *Client) UpdateSchedule(ctx context.Context, id string, request store.UpdateScheduleRequest) (store.ScheduleSpec, error) {
+	escapedID, err := pathID("schedule id", id)
+	if err != nil {
+		return store.ScheduleSpec{}, err
+	}
+	var result store.ScheduleSpec
+	if err := c.patchJSON(ctx, "/v1/schedules/"+escapedID, request, &result, http.StatusOK); err != nil {
+		return store.ScheduleSpec{}, err
+	}
+	return result, nil
+}
+
+func (c *Client) SetScheduleEnabled(ctx context.Context, id string, enabled bool) (store.ScheduleSpec, error) {
+	escapedID, err := pathID("schedule id", id)
+	if err != nil {
+		return store.ScheduleSpec{}, err
+	}
+	action := "pause"
+	if enabled {
+		action = "resume"
+	}
+	var result store.ScheduleSpec
+	if err := c.postJSON(ctx, "/v1/schedules/"+escapedID+"/"+action, struct{}{}, &result, http.StatusOK); err != nil {
+		return store.ScheduleSpec{}, err
+	}
+	return result, nil
+}
+
+func (c *Client) DeleteSchedule(ctx context.Context, id string) error {
+	escapedID, err := pathID("schedule id", id)
+	if err != nil {
+		return err
+	}
+	return c.deleteJSON(ctx, "/v1/schedules/"+escapedID, http.StatusNoContent)
+}
+
 func (c *Client) CreateConversationThread(ctx context.Context, request store.CreateConversationThreadRequest) (store.ConversationThread, error) {
 	if strings.TrimSpace(request.Workspace) == "" {
 		return store.ConversationThread{}, fmt.Errorf("workspace is required")

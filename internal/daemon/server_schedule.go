@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
+	"github.com/Lioooooo123/liora/internal/store"
 	"github.com/Lioooooo123/liora/internal/task"
 )
 
@@ -21,19 +23,117 @@ type scheduleTriggerRequest struct {
 	MaxCatchUpRuns int                        `json:"max_catch_up_runs,omitempty"`
 }
 
+func (s *server) handleSchedules(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusInternalServerError, errors.New("store is not configured"))
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		schedules, err := s.store.ListSchedules(store.ScheduleListOptions{
+			Workspace:       r.URL.Query().Get("workspace"),
+			Limit:           limit,
+			IncludeDisabled: truthyQuery(r.URL.Query().Get("include_disabled")),
+		})
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, schedules)
+	case http.MethodPost:
+		var request store.CreateScheduleRequest
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		schedule, err := s.store.CreateSchedule(request)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, schedule)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+	}
+}
+
 func (s *server) handleSchedule(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusInternalServerError, errors.New("store is not configured"))
+		return
+	}
 	path := strings.TrimPrefix(r.URL.Path, "/v1/schedules/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] != "trigger" {
+	if len(parts) == 1 && parts[0] != "" {
+		s.handleScheduleResource(w, r, parts[0])
+		return
+	}
+	if len(parts) != 2 || parts[0] == "" {
 		writeError(w, http.StatusNotFound, fmt.Errorf("unknown schedule route %q", r.URL.Path))
 		return
 	}
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
-		return
+	switch parts[1] {
+	case "pause", "resume":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+			return
+		}
+		schedule, err := s.store.SetScheduleEnabled(parts[0], parts[1] == "resume")
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, schedule)
+	case "trigger":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+			return
+		}
+		s.handleScheduleTrigger(w, r, parts[0])
+	default:
+		writeError(w, http.StatusNotFound, fmt.Errorf("unknown schedule route %q", r.URL.Path))
 	}
-	s.handleScheduleTrigger(w, r, parts[0])
+}
+
+func (s *server) handleScheduleResource(w http.ResponseWriter, r *http.Request, scheduleID string) {
+	switch r.Method {
+	case http.MethodGet:
+		schedule, err := s.store.GetSchedule(scheduleID)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, schedule)
+	case http.MethodPatch:
+		var request store.UpdateScheduleRequest
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		schedule, err := s.store.UpdateSchedule(scheduleID, request)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, schedule)
+	case http.MethodDelete:
+		if err := s.store.DeleteSchedule(scheduleID); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.Header().Set("Allow", "GET, PATCH, DELETE")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+	}
 }
 
 func (s *server) handleScheduleTrigger(w http.ResponseWriter, r *http.Request, scheduleID string) {

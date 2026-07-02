@@ -134,7 +134,7 @@ func RenderWelcome(config Config) string {
 	}
 	lines = append(lines,
 		"",
-		commandStyle.Render("/help")+" commands  "+commandStyle.Render("/workbench")+" workspace  "+commandStyle.Render("/memory")+" memory  "+commandStyle.Render("/exit")+" quit",
+		commandStyle.Render("/help")+" commands  "+commandStyle.Render("/workbench")+" workspace  "+commandStyle.Render("/memory")+" memory  "+commandStyle.Render("/schedule")+" schedules  "+commandStyle.Render("/exit")+" quit",
 		mutedStyle.Render("Patch-first: review changes, then /apply."),
 	)
 	return renderPanel("Liora", lines) + "\n"
@@ -465,7 +465,7 @@ func helpText() string {
 		commandStyle.Render("history") + "   /tasks  /sessions  /timeline [limit]  /transcript [limit]  /todo  /history <query>  /tail  /artifact <uri>",
 		commandStyle.Render("changes") + "   /diff [task_id]  /apply  /cancel [task_id]",
 		commandStyle.Render("approval") + "  /approvals  /approve [task_id]  /deny [task_id]",
-		commandStyle.Render("context") + "   /memory  /goal  /skills  /skill <name>  /mcp",
+		commandStyle.Render("context") + "   /memory  /schedule  /goal  /skills  /skill <name>  /mcp",
 		commandStyle.Render("system") + "    /doctor  /config  /status",
 		commandStyle.Render("session") + "   /resume <task_id>  /resume-session <id>  /resume-latest  /new-session  /clear  /exit",
 	}
