@@ -527,13 +527,28 @@ export const capabilitiesResponseSchema = z
   })
   .strict()
 
+export const scheduleTriggerKindSchema = z.enum(["one_shot", "interval", "cron"])
+
+export const scheduleQuietHoursSchema = z
+  .object({
+    start: z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9]$/),
+    end: z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9]$/),
+  })
+  .strict()
+
 export const scheduleSpecSchema = z
   .object({
     id: z.string(),
+    workspace: z.string().optional(),
+    trigger_kind: scheduleTriggerKindSchema.optional().default("cron"),
     trigger: z.string(),
     prompt: z.string(),
+    timezone: z.string().optional().default("Local"),
+    quiet_hours: scheduleQuietHoursSchema.optional(),
     enabled: z.boolean(),
     source: z.string().optional(),
+    created_at: z.string().optional(),
+    updated_at: z.string().optional(),
   })
   .strict()
 

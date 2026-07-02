@@ -451,12 +451,45 @@ describe("daemon event fixture parser", () => {
         created_at: "2026-07-01T00:00:00Z",
       }).path,
     ).toContain("tool-results")
-    expect(scheduleSpecSchema.parse({ id: "schedule-001", trigger: "0 2 * * *", prompt: "audit", enabled: true }).enabled).toBe(
-      true,
-    )
+    const parsedSchedule = scheduleSpecSchema.parse({
+      id: "schedule-001",
+      workspace: "/repo",
+      trigger_kind: "cron",
+      trigger: "0 2 * * *",
+      prompt: "audit",
+      timezone: "Asia/Shanghai",
+      quiet_hours: { start: "22:00", end: "07:30" },
+      enabled: true,
+      created_at: "2026-07-01T00:00:00Z",
+      updated_at: "2026-07-01T00:00:00Z",
+    })
+    expect(parsedSchedule.trigger_kind).toBe("cron")
+    expect(parsedSchedule.quiet_hours?.start).toBe("22:00")
     expect(hookSpecSchema.parse({ id: "hook-001", event: "PreToolUse", command: "check", enabled: false }).event).toBe(
       "PreToolUse",
     )
+  })
+
+  it("rejects malformed schedule protocol shapes", () => {
+    expect(
+      scheduleSpecSchema.safeParse({
+        id: "schedule-001",
+        trigger_kind: "weekly",
+        trigger: "0 2 * * *",
+        prompt: "audit",
+        enabled: true,
+      }).success,
+    ).toBe(false)
+    expect(
+      scheduleSpecSchema.safeParse({
+        id: "schedule-001",
+        trigger_kind: "cron",
+        trigger: "0 2 * * *",
+        prompt: "audit",
+        enabled: true,
+        quiet_hours: { start: "22:00" },
+      }).success,
+    ).toBe(false)
   })
 })
 

@@ -67,6 +67,9 @@ func TestStoreSchemaReportMigratesOldDatabaseFixtureIdempotently(t *testing.T) {
 	for _, table := range schemaVersionedSurfaceTables() {
 		assertTableHasColumn(t, db, table, "schema_version")
 	}
+	for _, column := range scheduleModelColumns() {
+		assertTableHasColumn(t, db, "schedules", column)
+	}
 	assertTableHasColumn(t, db, "todos", "priority")
 }
 
@@ -95,6 +98,9 @@ func TestStoreSchemaReportRunsMigrationFixtureMatrixIdempotently(t *testing.T) {
 			defer db.Close()
 			for _, table := range schemaVersionedSurfaceTables() {
 				assertTableHasColumn(t, db, table, "schema_version")
+			}
+			for _, column := range scheduleModelColumns() {
+				assertTableHasColumn(t, db, "schedules", column)
 			}
 			var version int
 			if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
@@ -127,6 +133,9 @@ func TestStoreSchemaReportCreatesFreshVersionedSurfaces(t *testing.T) {
 	defer db.Close()
 	for _, table := range schemaVersionedSurfaceTables() {
 		assertTableHasColumn(t, db, table, "schema_version")
+	}
+	for _, column := range scheduleModelColumns() {
+		assertTableHasColumn(t, db, "schedules", column)
 	}
 	for _, kind := range []string{"note", "preference", "rule", "automation", "credential_hint"} {
 		var count int
@@ -239,6 +248,9 @@ func TestStoreSchemaReportCompletesPartialSurfaceMigrationIdempotently(t *testin
 	}
 	for _, table := range schemaVersionedSurfaceTables() {
 		assertTableHasColumn(t, db, table, "schema_version")
+	}
+	for _, column := range scheduleModelColumns() {
+		assertTableHasColumn(t, db, "schedules", column)
 	}
 }
 
@@ -392,6 +404,16 @@ func schemaVersionedSurfaceTables() []string {
 		"cross_thread_messages",
 		"subagent_relations",
 		"compact_boundaries",
+	}
+}
+
+func scheduleModelColumns() []string {
+	return []string{
+		"workspace",
+		"trigger_kind",
+		"timezone",
+		"quiet_hours_start",
+		"quiet_hours_end",
 	}
 }
 

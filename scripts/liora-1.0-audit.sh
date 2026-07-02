@@ -60,7 +60,7 @@ echo "[6/14] safety gates"
 echo "[7/14] migration fixture"
 (
   cd "$ROOT"
-  GOTOOLCHAIN="$GO_TOOLCHAIN" go test -count=1 ./internal/store -run 'TestStoreSchemaReportMigratesOldDatabaseFixtureIdempotently|TestStoreSchemaReportReportsCorruptDatabase'
+  GOTOOLCHAIN="$GO_TOOLCHAIN" go test -count=1 ./internal/store -run 'TestStoreSchemaReportMigratesOldDatabaseFixtureIdempotently|TestStoreSchemaReportReportsCorruptDatabase|TestStoreSchemaReportCreatesFreshVersionedSurfaces|TestStoreSchemaReportRunsMigrationFixtureMatrixIdempotently|TestStoreSchemaReportCompletesPartialSurfaceMigrationIdempotently|TestStorePersistsAndFiltersSchedules|TestStoreRejectsMalformedSchedulesWithoutPartialRows'
 )
 
 echo "[8/14] doctor schema tests"
@@ -89,7 +89,7 @@ echo "[10/14] doctor binary smoke"
     LIORA_LLM_MODEL=claude-audit \
     "$AUDIT_TMP/liora" -doctor >"$AUDIT_TMP/doctor.txt"
   grep -q 'database: ok' "$AUDIT_TMP/doctor.txt"
-  grep -q "schema_version: ${CURRENT_SCHEMA_VERSION:-14}" "$AUDIT_TMP/doctor.txt"
+  grep -q "schema_version: ${CURRENT_SCHEMA_VERSION:-15}" "$AUDIT_TMP/doctor.txt"
   grep -q 'migration: complete' "$AUDIT_TMP/doctor.txt"
   grep -q 'api_key: configured' "$AUDIT_TMP/doctor.txt"
   if grep -q 'audit-secret' "$AUDIT_TMP/doctor.txt"; then
@@ -151,6 +151,8 @@ echo "[post] scoped diff check"
   files=(
     internal/store/schema.go \
     internal/store/store.go \
+    internal/store/schedule.go \
+    internal/store/store_test.go \
     internal/store/schema_test.go \
     internal/store/testdata/old-liora-v0.1.sql \
     internal/permission/permission.go \

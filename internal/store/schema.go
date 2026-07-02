@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const CurrentSchemaVersion = 14
+const CurrentSchemaVersion = 15
 
 type RetentionPolicy string
 

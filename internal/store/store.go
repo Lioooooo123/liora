@@ -1277,10 +1277,15 @@ func initDB(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_permission_rules_scope ON permission_rules(workspace, session_id, enabled)`,
 		`CREATE TABLE IF NOT EXISTS schedules (
 				id TEXT PRIMARY KEY,
+				workspace TEXT NOT NULL DEFAULT '',
+				trigger_kind TEXT NOT NULL DEFAULT 'cron',
 				trigger TEXT NOT NULL DEFAULT '',
 				prompt TEXT NOT NULL DEFAULT '',
+				timezone TEXT NOT NULL DEFAULT 'Local',
+				quiet_hours_start TEXT NOT NULL DEFAULT '',
+				quiet_hours_end TEXT NOT NULL DEFAULT '',
 				enabled INTEGER NOT NULL DEFAULT 1,
-				schema_version INTEGER NOT NULL DEFAULT 2,
+				schema_version INTEGER NOT NULL DEFAULT 15,
 				created_at TEXT NOT NULL DEFAULT '',
 				updated_at TEXT NOT NULL DEFAULT ''
 			)`,
@@ -1457,6 +1462,11 @@ func initDB(db *sql.DB) error {
 		`ALTER TABLE compact_boundaries ADD COLUMN source_start_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE compact_boundaries ADD COLUMN source_end_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE compact_boundaries ADD COLUMN source_item_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE schedules ADD COLUMN workspace TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE schedules ADD COLUMN trigger_kind TEXT NOT NULL DEFAULT 'cron'`,
+		`ALTER TABLE schedules ADD COLUMN timezone TEXT NOT NULL DEFAULT 'Local'`,
+		`ALTER TABLE schedules ADD COLUMN quiet_hours_start TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE schedules ADD COLUMN quiet_hours_end TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(statement); err != nil && !isDuplicateColumn(err) {
 			return err

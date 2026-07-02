@@ -177,12 +177,163 @@ func TestStorePersistsAndFiltersPermissionRules(t *testing.T) {
 	}
 }
 
+func TestStorePersistsAndFiltersSchedules(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	oneShot, err := s.CreateSchedule(CreateScheduleRequest{
+		ID:              "release-cutover",
+		Workspace:       "/repo",
+		TriggerKind:     ScheduleTriggerOneShot,
+		Trigger:         "2026-07-02T10:30:00+08:00",
+		Prompt:          "prepare release",
+		Timezone:        "Asia/Shanghai",
+		QuietHoursStart: "22:00",
+		QuietHoursEnd:   "07:30",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	interval, err := s.CreateSchedule(CreateScheduleRequest{
+		ID:          "index-refresh",
+		Workspace:   "/repo",
+		TriggerKind: ScheduleTriggerInterval,
+		Trigger:     "2h30m",
+		Prompt:      "refresh index",
+		Timezone:    "Local",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled := false
+	cron, err := s.CreateSchedule(CreateScheduleRequest{
+		ID:          "nightly-audit",
+		Workspace:   "/repo",
+		TriggerKind: ScheduleTriggerCron,
+		Trigger:     "0 2 * * *",
+		Prompt:      "audit",
+		Timezone:    "Asia/Shanghai",
+		Enabled:     &disabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if oneShot.TriggerKind != ScheduleTriggerOneShot || oneShot.QuietHoursStart != "22:00" || oneShot.QuietHoursEnd != "07:30" || !oneShot.Enabled {
+		t.Fatalf("unexpected one-shot schedule %#v", oneShot)
+	}
+	if interval.TriggerKind != ScheduleTriggerInterval || interval.Timezone != "Local" {
+		t.Fatalf("unexpected interval schedule %#v", interval)
+	}
+	if cron.Enabled {
+		t.Fatalf("expected disabled cron schedule, got %#v", cron)
+	}
+
+	visible, err := New(root).ListSchedules(ScheduleListOptions{Workspace: "/repo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(visible) != 2 {
+		t.Fatalf("expected disabled schedule hidden by default, got %#v", visible)
+	}
+	all, err := New(root).ListSchedules(ScheduleListOptions{Workspace: "/repo", IncludeDisabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("expected include disabled to return all schedules, got %#v", all)
+	}
+
+	updatedQuietHours := ScheduleQuietHours{Start: "23:00", End: "06:00"}
+	updatedPrompt := "audit and summarize"
+	updated, err := s.UpdateSchedule("nightly-audit", UpdateScheduleRequest{
+		Prompt:     &updatedPrompt,
+		QuietHours: &updatedQuietHours,
+		Enabled:    boolPtr(true),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Prompt != updatedPrompt || updated.QuietHoursStart != "23:00" || updated.QuietHoursEnd != "06:00" || !updated.Enabled {
+		t.Fatalf("unexpected updated schedule %#v", updated)
+	}
+	toggled, err := s.SetScheduleEnabled("nightly-audit", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if toggled.Enabled {
+		t.Fatalf("expected schedule disabled, got %#v", toggled)
+	}
+}
+
+func TestStoreRejectsMalformedSchedulesWithoutPartialRows(t *testing.T) {
+	tests := []struct {
+		name    string
+		request CreateScheduleRequest
+	}{
+		{name: "blank id", request: validScheduleRequest("", ScheduleTriggerCron, "0 2 * * *")},
+		{name: "blank prompt", request: CreateScheduleRequest{ID: "bad", TriggerKind: ScheduleTriggerCron, Trigger: "0 2 * * *", Prompt: " "}},
+		{name: "unknown kind", request: validScheduleRequest("bad-kind", ScheduleTriggerKind("weekly"), "0 2 * * *")},
+		{name: "bad one-shot timestamp", request: validScheduleRequest("bad-once", ScheduleTriggerOneShot, "tomorrow")},
+		{name: "zero interval", request: validScheduleRequest("zero-interval", ScheduleTriggerInterval, "0s")},
+		{name: "bad interval", request: validScheduleRequest("bad-interval", ScheduleTriggerInterval, "soon")},
+		{name: "bad cron expression", request: validScheduleRequest("bad-cron", ScheduleTriggerCron, "0 2 * * * *")},
+		{name: "unknown timezone", request: scheduleRequestWithTimezone("bad-zone", "Mars/Olympus")},
+		{name: "partial quiet hours", request: scheduleRequestWithQuietHours("partial-quiet", "22:00", "")},
+		{name: "invalid quiet hours", request: scheduleRequestWithQuietHours("bad-quiet", "25:00", "07:30")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := New(t.TempDir())
+			if _, err := s.CreateSchedule(tt.request); err == nil {
+				t.Fatalf("expected malformed schedule to fail: %#v", tt.request)
+			}
+			schedules, err := s.ListSchedules(ScheduleListOptions{IncludeDisabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(schedules) != 0 {
+				t.Fatalf("expected no partial schedule rows, got %#v", schedules)
+			}
+		})
+	}
+}
+
 func stringPtr(value string) *string {
+	return &value
+}
+
+func boolPtr(value bool) *bool {
 	return &value
 }
 
 func intPtr(value int) *int {
 	return &value
+}
+
+func validScheduleRequest(id string, kind ScheduleTriggerKind, trigger string) CreateScheduleRequest {
+	return CreateScheduleRequest{
+		ID:          id,
+		Workspace:   "/repo",
+		TriggerKind: kind,
+		Trigger:     trigger,
+		Prompt:      "run scheduled task",
+		Timezone:    "Asia/Shanghai",
+	}
+}
+
+func scheduleRequestWithTimezone(id string, timezone string) CreateScheduleRequest {
+	request := validScheduleRequest(id, ScheduleTriggerCron, "0 2 * * *")
+	request.Timezone = timezone
+	return request
+}
+
+func scheduleRequestWithQuietHours(id string, start string, end string) CreateScheduleRequest {
+	request := validScheduleRequest(id, ScheduleTriggerCron, "0 2 * * *")
+	request.QuietHoursStart = start
+	request.QuietHoursEnd = end
+	return request
 }
 
 func TestStoreMigratesLegacyJSONLMemoryToSQLite(t *testing.T) {
