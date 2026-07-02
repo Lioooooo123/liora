@@ -214,9 +214,13 @@ type MCPConfig struct {
 }
 
 type MCPServerConfig struct {
-	Command string            `json:"command"`
-	Args    []string          `json:"args,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
+	Command     string            `json:"command"`
+	Args        []string          `json:"args,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	Enabled     *bool             `json:"enabled,omitempty"`
+	Source      string            `json:"source,omitempty"`
+	Version     string            `json:"version,omitempty"`
+	Permissions []string          `json:"permissions,omitempty"`
 }
 
 func DefaultRoot() string {

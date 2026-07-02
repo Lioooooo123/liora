@@ -1157,11 +1157,24 @@ func TestServerServesMCPToolsInCapabilities(t *testing.T) {
 	}
 	storeRoot := t.TempDir()
 	s := store.New(storeRoot)
+	disabled := false
 	if err := s.SaveMCPConfig(store.MCPConfig{Servers: map[string]store.MCPServerConfig{
+		"disabled": {
+			Command:     os.Args[0],
+			Args:        []string{"-test.run=TestServerServesMCPToolsInCapabilities"},
+			Env:         map[string]string{"LIORA_DAEMON_FAKE_MCP_SERVER": "fail"},
+			Enabled:     &disabled,
+			Source:      "workspace",
+			Version:     "0.9.0",
+			Permissions: []string{"network:blocked.example.test"},
+		},
 		"fake": {
-			Command: os.Args[0],
-			Args:    []string{"-test.run=TestServerServesMCPToolsInCapabilities"},
-			Env:     map[string]string{"LIORA_DAEMON_FAKE_MCP_SERVER": "1"},
+			Command:     os.Args[0],
+			Args:        []string{"-test.run=TestServerServesMCPToolsInCapabilities"},
+			Env:         map[string]string{"LIORA_DAEMON_FAKE_MCP_SERVER": "1"},
+			Source:      "global",
+			Version:     "1.2.3",
+			Permissions: []string{"filesystem:read"},
 		},
 	}}); err != nil {
 		t.Fatal(err)
@@ -1184,11 +1197,22 @@ func TestServerServesMCPToolsInCapabilities(t *testing.T) {
 	}
 	var body struct {
 		MCPTools []struct {
-			Server string `json:"server"`
-			Name   string `json:"name"`
-			Usage  string `json:"usage"`
-			Kind   string `json:"kind"`
+			Server      string   `json:"server"`
+			Name        string   `json:"name"`
+			Usage       string   `json:"usage"`
+			Kind        string   `json:"kind"`
+			Permissions []string `json:"permissions"`
 		} `json:"mcp_tools"`
+		MCPServers []struct {
+			Name        string   `json:"name"`
+			Enabled     bool     `json:"enabled"`
+			Source      string   `json:"source"`
+			Version     string   `json:"version"`
+			Permissions []string `json:"permissions"`
+			ToolCount   int      `json:"tool_count"`
+			Auth        string   `json:"auth"`
+			LastError   string   `json:"last_error"`
+		} `json:"mcp_servers"`
 		MCPError string `json:"mcp_error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
@@ -1202,6 +1226,18 @@ func TestServerServesMCPToolsInCapabilities(t *testing.T) {
 	}
 	if body.MCPTools[0].Usage != "mcp fake echo <json arguments>" {
 		t.Fatalf("unexpected mcp usage %q", body.MCPTools[0].Usage)
+	}
+	if len(body.MCPTools[0].Permissions) != 1 || body.MCPTools[0].Permissions[0] != "filesystem:read" {
+		t.Fatalf("unexpected mcp tool permissions %#v", body.MCPTools[0].Permissions)
+	}
+	if len(body.MCPServers) != 2 {
+		t.Fatalf("expected two mcp server statuses, got %#v", body.MCPServers)
+	}
+	if body.MCPServers[0].Name != "disabled" || body.MCPServers[0].Enabled || body.MCPServers[0].ToolCount != 0 || body.MCPServers[0].Auth != "not_probed" {
+		t.Fatalf("unexpected disabled mcp status %#v", body.MCPServers[0])
+	}
+	if body.MCPServers[1].Name != "fake" || !body.MCPServers[1].Enabled || body.MCPServers[1].Source != "global" || body.MCPServers[1].Version != "1.2.3" || body.MCPServers[1].ToolCount != 1 {
+		t.Fatalf("unexpected enabled mcp status %#v", body.MCPServers[1])
 	}
 }
 

@@ -15,7 +15,6 @@ import (
 
 	"github.com/Lioooooo123/liora/internal/apply"
 	"github.com/Lioooooo123/liora/internal/capabilities"
-	mcppkg "github.com/Lioooooo123/liora/internal/mcp"
 	"github.com/Lioooooo123/liora/internal/store"
 	taskpkg "github.com/Lioooooo123/liora/internal/task"
 )
@@ -175,9 +174,12 @@ func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body := map[string]any{"tools": capabilities.BuiltinTools()}
-	mcpTools, err := s.mcpTools(r.Context())
+	mcpTools, mcpServers, err := s.mcpCapabilities(r.Context())
 	if err != nil {
 		body["mcp_error"] = err.Error()
+	}
+	if len(mcpServers) > 0 {
+		body["mcp_servers"] = mcpServers
 	}
 	if len(mcpTools) > 0 {
 		body["mcp_tools"] = mcpTools
@@ -586,40 +588,6 @@ func crossThreadTranscriptContent(event string, message store.CrossThreadMessage
 		parts = append(parts, "cross_workspace_authorized=true")
 	}
 	return strings.Join(parts, "\n")
-}
-
-func (s *server) mcpTools(ctx context.Context) ([]capabilities.MCPToolSpec, error) {
-	if s.store == nil {
-		return nil, nil
-	}
-	config, err := s.store.LoadMCPConfig()
-	if err != nil {
-		return nil, err
-	}
-	if len(config.Servers) == 0 {
-		return nil, nil
-	}
-	servers := make(map[string]mcppkg.ServerConfig, len(config.Servers))
-	for name, server := range config.Servers {
-		servers[name] = mcppkg.ServerConfig{
-			Command: server.Command,
-			Args:    server.Args,
-			Env:     server.Env,
-		}
-	}
-	tools, err := mcppkg.NewManager(mcppkg.Config{Servers: servers}).ListToolsDetailed(ctx)
-	specs := make([]capabilities.MCPToolSpec, 0, len(tools))
-	for _, tool := range tools {
-		specs = append(specs, capabilities.MCPToolSpec{
-			Server:      tool.Server,
-			Name:        tool.Name,
-			Usage:       "mcp " + tool.Server + " " + tool.Name + " <json arguments>",
-			Description: tool.Description,
-			Kind:        capabilities.ToolExternal,
-			InputSchema: tool.InputSchema,
-		})
-	}
-	return specs, err
 }
 
 func (s *server) handleWorkbench(w http.ResponseWriter, r *http.Request) {

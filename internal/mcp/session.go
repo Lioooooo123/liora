@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -19,13 +20,24 @@ type session struct {
 	stdout  *bufio.Reader
 	encoder *json.Encoder
 	nextID  *atomic.Int64
+	once    sync.Once
+}
+
+type lineReadResult struct {
+	line []byte
+	err  error
 }
 
 func (c *Client) start(ctx context.Context) (*session, error) {
 	if strings.TrimSpace(c.config.Command) == "" {
 		return nil, errors.New("MCP server command is required")
 	}
-	cmd := exec.CommandContext(ctx, c.config.Command, c.config.Args...)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	cmd := exec.Command(c.config.Command, c.config.Args...)
 	cmd.Env = os.Environ()
 	for key, value := range c.config.Env {
 		cmd.Env = append(cmd.Env, key+"="+value)
@@ -82,7 +94,7 @@ func (s *session) request(ctx context.Context, method string, params any, result
 			return ctx.Err()
 		default:
 		}
-		line, err := s.stdout.ReadBytes('\n')
+		line, err := s.readLine(ctx)
 		if err != nil {
 			return err
 		}
@@ -110,10 +122,27 @@ func (s *session) request(ctx context.Context, method string, params any, result
 	}
 }
 
-func (s *session) close() {
-	_ = s.stdin.Close()
-	if s.cmd.Process != nil {
-		_ = s.cmd.Process.Kill()
+func (s *session) readLine(ctx context.Context) ([]byte, error) {
+	result := make(chan lineReadResult, 1)
+	go func() {
+		line, err := s.stdout.ReadBytes('\n')
+		result <- lineReadResult{line: line, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		s.close()
+		return nil, ctx.Err()
+	case read := <-result:
+		return read.line, read.err
 	}
-	_ = s.cmd.Wait()
+}
+
+func (s *session) close() {
+	s.once.Do(func() {
+		_ = s.stdin.Close()
+		if s.cmd.Process != nil {
+			_ = s.cmd.Process.Kill()
+		}
+		_ = s.cmd.Wait()
+	})
 }
