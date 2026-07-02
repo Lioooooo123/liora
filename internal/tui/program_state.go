@@ -57,7 +57,7 @@ func isControlCommandDuringRun(line string) bool {
 		return false
 	}
 	switch command[0] {
-	case "/cancel", "/approve", "/deny":
+	case "/cancel", "/approvals", "/approve", "/deny":
 		return true
 	default:
 		return false
