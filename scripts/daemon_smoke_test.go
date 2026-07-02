@@ -90,6 +90,25 @@ func TestLioraAuditRunsEndToEndSmokeAndEvalGates(t *testing.T) {
 	}
 }
 
+func TestLioraAuditBootstrapsProtocolDependencies_whenNodeModulesMissing(t *testing.T) {
+	data, err := os.ReadFile("liora-1.0-audit.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"ensure_protocol_deps",
+		"packages/protocol/node_modules/.bin/vitest",
+		"packages/protocol/node_modules/zod",
+		`rm -rf "$ROOT/node_modules" "$ROOT/packages/protocol/node_modules"`,
+		"pnpm install --frozen-lockfile",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected 1.0 audit script to contain %q, got:\n%s", want, content)
+		}
+	}
+}
+
 func TestLioraAuditRunsLoopRetryAndBudgetGuards(t *testing.T) {
 	data, err := os.ReadFile("liora-1.0-audit.sh")
 	if err != nil {

@@ -11,6 +11,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
+ensure_protocol_deps() {
+  if [[ -x "$ROOT/packages/protocol/node_modules/.bin/vitest" ]] && [[ -d "$ROOT/packages/protocol/node_modules/zod" ]]; then
+    return
+  fi
+  echo "[pre] protocol dependencies"
+  rm -rf "$ROOT/node_modules" "$ROOT/packages/protocol/node_modules"
+  (
+    cd "$ROOT"
+    pnpm install --frozen-lockfile
+  )
+}
+
+ensure_protocol_deps
+
 echo "[1/14] protocol package"
 (
   cd "$ROOT"
