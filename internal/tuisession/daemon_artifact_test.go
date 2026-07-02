@@ -109,6 +109,30 @@ func TestDaemonSubmitterPagesLargeArtifactWithoutInliningFullContext(t *testing.
 	}
 	t.Logf("artifact page 2:\n%s", secondPage)
 
+	tailPage, handled, err := submitter.HandleCommand(t.Context(), "/artifact "+artifactURI+" tail 3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Tail Page", "page_size=3", "artifact-line-6998", "artifact-line-6999", "artifact-line-7000-tail-marker"} {
+		if !handled || !strings.Contains(tailPage, want) {
+			t.Fatalf("expected artifact tail to contain %q handled=%v output=%q", want, handled, tailPage)
+		}
+	}
+	if strings.Contains(tailPage, "artifact-line-6997") {
+		t.Fatalf("artifact tail should not inline lines before the tail page, got %q", tailPage)
+	}
+	t.Logf("artifact tail:\n%s", tailPage)
+
+	taskTail, handled, err := submitter.HandleCommand(t.Context(), "/tail "+taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"artifact.reference", artifactURI, "/artifact " + artifactURI + " tail"} {
+		if !handled || !strings.Contains(taskTail, want) {
+			t.Fatalf("expected task tail to contain %q handled=%v output=%q", want, handled, taskTail)
+		}
+	}
+
 	envelope, err := client.SessionContext(t.Context(), taskRecord.SessionID, taskpkg.ContextRequest{ItemLimit: 50, TokenBudget: 4096})
 	if err != nil {
 		t.Fatal(err)
@@ -148,6 +172,7 @@ func TestDaemonSubmitterArtifactCommandRejectsInvalidInputsWithoutSessionState(t
 		"/artifact artifact://artifacts/sessions/missing/tasks/task/tool-results/out.txt",
 		"/artifact artifact://artifacts/sessions/s/tasks/t/tool-results/out.txt zero",
 		"/artifact artifact://artifacts/sessions/s/tasks/t/tool-results/out.txt 1 zero",
+		"/artifact artifact://artifacts/sessions/s/tasks/t/tool-results/out.txt tail zero",
 	}
 	for _, command := range commands {
 		output, handled, err := submitter.HandleCommand(t.Context(), command)

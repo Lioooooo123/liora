@@ -46,6 +46,25 @@ func TestServerArtifactPageServesPagedStoreArtifact(t *testing.T) {
 	if got := strings.Join(page.Lines, "\n"); got != "line-3\nline-4" {
 		t.Fatalf("unexpected page lines %q", got)
 	}
+
+	tailResp, err := http.Get(server.URL + "/v1/artifacts/page?uri=" + url.QueryEscape(uri) + "&tail=true&page_size=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tailResp.Body.Close()
+	if tailResp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected tail status %d", tailResp.StatusCode)
+	}
+	var tail taskpkg.ArtifactPage
+	if err := json.NewDecoder(tailResp.Body).Decode(&tail); err != nil {
+		t.Fatal(err)
+	}
+	if !tail.Tail || tail.Page != 3 || tail.TotalLines != 5 || tail.TotalPages != 3 || !tail.HasPrev || tail.HasNext {
+		t.Fatalf("unexpected tail metadata %#v", tail)
+	}
+	if got := strings.Join(tail.Lines, "\n"); got != "line-4\nline-5" {
+		t.Fatalf("unexpected tail lines %q", got)
+	}
 }
 
 func TestServerArtifactPageRejectsUnsafeRequests(t *testing.T) {
@@ -63,6 +82,7 @@ func TestServerArtifactPageRejectsUnsafeRequests(t *testing.T) {
 		{name: "missing", query: "uri=" + url.QueryEscape("artifact://artifacts/sessions/missing/tasks/task/tool-results/out.txt"), status: http.StatusNotFound},
 		{name: "invalid page", query: "uri=" + url.QueryEscape("artifact://artifacts/sessions/s/tasks/t/tool-results/out.txt") + "&page=bad", status: http.StatusBadRequest},
 		{name: "invalid page size", query: "uri=" + url.QueryEscape("artifact://artifacts/sessions/s/tasks/t/tool-results/out.txt") + "&page_size=0", status: http.StatusBadRequest},
+		{name: "invalid tail", query: "uri=" + url.QueryEscape("artifact://artifacts/sessions/s/tasks/t/tool-results/out.txt") + "&tail=maybe", status: http.StatusBadRequest},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {

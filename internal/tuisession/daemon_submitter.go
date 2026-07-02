@@ -726,8 +726,13 @@ func (s *DaemonSubmitter) tailTask(ctx context.Context, args string) (string, bo
 		return "", true, err
 	}
 	var transcript []string
+	var artifactReferences []string
 	for _, event := range events {
-		transcript = append(transcript, tui.FormatDaemonEventTail(string(event.Type), event.Payload)...)
+		lines := tui.FormatDaemonEventTail(string(event.Type), event.Payload)
+		transcript = append(transcript, lines...)
+		if event.Type == taskpkg.EventArtifactReference {
+			artifactReferences = append(artifactReferences, lines...)
+		}
 	}
 	if len(transcript) == 0 {
 		return "No event output for task " + taskID + ".", true, nil
@@ -738,9 +743,23 @@ func (s *DaemonSubmitter) tailTask(ctx context.Context, args string) (string, bo
 	if len(transcript) > lineCount {
 		transcript = transcript[len(transcript)-lineCount:]
 	}
+	for _, line := range artifactReferences {
+		if !containsLine(transcript, line) {
+			transcript = append(transcript, line)
+		}
+	}
 	lines := []string{fmt.Sprintf("Tail %s last %d lines", taskID, lineCount)}
 	lines = append(lines, transcript...)
 	return strings.Join(lines, "\n"), true, nil
+}
+
+func containsLine(lines []string, want string) bool {
+	for _, line := range lines {
+		if line == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *DaemonSubmitter) showTools(ctx context.Context) (string, bool, error) {
@@ -1004,6 +1023,9 @@ func (s *DaemonSubmitter) showArtifact(ctx context.Context, args string) (string
 		fmt.Sprintf("Artifact %s", artifact.URI),
 		fmt.Sprintf("Page %d/%d, lines %d, page_size=%d, has_prev=%t, has_next=%t", artifact.Page, artifact.TotalPages, artifact.TotalLines, artifact.PageSize, artifact.HasPrev, artifact.HasNext),
 	}
+	if artifact.Tail {
+		lines[1] = "Tail " + lines[1]
+	}
 	lines = append(lines, artifact.Lines...)
 	return strings.Join(lines, "\n"), true, nil
 }
@@ -1011,10 +1033,24 @@ func (s *DaemonSubmitter) showArtifact(ctx context.Context, args string) (string
 func parseArtifactPageRequest(args string) (taskpkg.ArtifactPageRequest, error) {
 	fields := strings.Fields(args)
 	if len(fields) == 0 {
-		return taskpkg.ArtifactPageRequest{}, fmt.Errorf("usage: /artifact <artifact://...> [page] [page_size]")
+		return taskpkg.ArtifactPageRequest{}, fmt.Errorf("usage: /artifact <artifact://...> [page] [page_size] or /artifact <artifact://...> tail [page_size]")
 	}
 	request := taskpkg.ArtifactPageRequest{URI: fields[0], Page: 1, PageSize: defaultArtifactCommandPageSize}
 	if len(fields) > 1 {
+		if strings.EqualFold(fields[1], "tail") {
+			request.Tail = true
+			if len(fields) > 2 {
+				parsed, ok := parsePositiveInt(fields[2])
+				if !ok {
+					return taskpkg.ArtifactPageRequest{}, fmt.Errorf("page_size must be a positive integer")
+				}
+				request.PageSize = parsed
+			}
+			if len(fields) > 3 {
+				return taskpkg.ArtifactPageRequest{}, fmt.Errorf("usage: /artifact <artifact://...> [page] [page_size] or /artifact <artifact://...> tail [page_size]")
+			}
+			return request, nil
+		}
 		parsed, ok := parsePositiveInt(fields[1])
 		if !ok {
 			return taskpkg.ArtifactPageRequest{}, fmt.Errorf("page must be a positive integer")
@@ -1029,7 +1065,7 @@ func parseArtifactPageRequest(args string) (taskpkg.ArtifactPageRequest, error) 
 		request.PageSize = parsed
 	}
 	if len(fields) > 3 {
-		return taskpkg.ArtifactPageRequest{}, fmt.Errorf("usage: /artifact <artifact://...> [page] [page_size]")
+		return taskpkg.ArtifactPageRequest{}, fmt.Errorf("usage: /artifact <artifact://...> [page] [page_size] or /artifact <artifact://...> tail [page_size]")
 	}
 	return request, nil
 }

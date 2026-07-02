@@ -604,6 +604,9 @@ func (c *Client) ArtifactPage(ctx context.Context, request task.ArtifactPageRequ
 	if request.PageSize > 0 {
 		values.Set("page_size", fmt.Sprintf("%d", request.PageSize))
 	}
+	if request.Tail {
+		values.Set("tail", "true")
+	}
 	var result task.ArtifactPage
 	if err := c.getJSON(ctx, "/v1/artifacts/page?"+values.Encode(), &result); err != nil {
 		return task.ArtifactPage{}, err

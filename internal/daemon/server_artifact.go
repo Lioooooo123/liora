@@ -38,6 +38,11 @@ func (s *server) handleArtifactPage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	tail, err := optionalBool(r.URL.Query().Get("tail"), "tail")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	if page == 0 {
 		page = 1
 	}
@@ -52,7 +57,7 @@ func (s *server) handleArtifactPage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	artifact, err := readArtifactPage(uri, path, page, pageSize)
+	artifact, err := readArtifactPage(uri, path, page, pageSize, tail)
 	if errors.Is(err, os.ErrNotExist) {
 		writeError(w, http.StatusNotFound, fmt.Errorf("artifact not found"))
 		return
@@ -97,12 +102,15 @@ func (s *server) artifactPath(uri string) (string, error) {
 	return path, nil
 }
 
-func readArtifactPage(uri string, path string, page int, pageSize int) (taskpkg.ArtifactPage, error) {
+func readArtifactPage(uri string, path string, page int, pageSize int, tail bool) (taskpkg.ArtifactPage, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return taskpkg.ArtifactPage{}, err
 	}
 	defer file.Close()
+	if tail {
+		return readArtifactTail(uri, file, pageSize)
+	}
 	start := (page - 1) * pageSize
 	end := start + pageSize
 	scanner := bufio.NewScanner(file)
@@ -132,4 +140,58 @@ func readArtifactPage(uri string, path string, page int, pageSize int) (taskpkg.
 		HasNext:    page < totalPages,
 		Lines:      lines,
 	}, nil
+}
+
+func readArtifactTail(uri string, file *os.File, pageSize int) (taskpkg.ArtifactPage, error) {
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	lines := make([]string, 0, pageSize)
+	total := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		if len(lines) < pageSize {
+			lines = append(lines, line)
+		} else {
+			copy(lines, lines[1:])
+			lines[len(lines)-1] = line
+		}
+		total++
+	}
+	if err := scanner.Err(); err != nil {
+		return taskpkg.ArtifactPage{}, err
+	}
+	totalPages := 0
+	if total > 0 {
+		totalPages = (total + pageSize - 1) / pageSize
+	}
+	page := totalPages
+	if page == 0 {
+		page = 1
+	}
+	return taskpkg.ArtifactPage{
+		URI:        uri,
+		Page:       page,
+		PageSize:   pageSize,
+		Tail:       true,
+		TotalLines: total,
+		TotalPages: totalPages,
+		HasPrev:    page > 1 && totalPages > 0,
+		HasNext:    false,
+		Lines:      lines,
+	}, nil
+}
+
+func optionalBool(value string, label string) (bool, error) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return false, nil
+	}
+	switch value {
+	case "1", "true", "yes":
+		return true, nil
+	case "0", "false", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be true or false", label)
+	}
 }

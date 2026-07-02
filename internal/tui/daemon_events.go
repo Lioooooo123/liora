@@ -17,6 +17,7 @@ const (
 	daemonEventToolCall           = "tool.call"
 	daemonEventToolResult         = "tool.result"
 	daemonEventTodoUpdated        = "todo.updated"
+	daemonEventArtifactReference  = "artifact.reference"
 	daemonEventSummary            = "task.summary"
 	daemonEventDiff               = "task.diff"
 	daemonEventPermissionRequest  = "permission.requested"
@@ -190,6 +191,16 @@ func daemonEventTail(eventType string, payload eventPayload) []string {
 		return append(lines, daemonIndentLines(payload.Output)...)
 	case daemonEventTodoUpdated:
 		return daemonAppendPrefixedLines(header, formatTodoEvent(payload))
+	case daemonEventArtifactReference:
+		line := strings.TrimSpace(header + ": " + payload.Path)
+		if strings.TrimSpace(payload.Message) != "" {
+			line += " " + strings.TrimSpace(payload.Message)
+		}
+		lines := []string{line}
+		if strings.TrimSpace(payload.Path) != "" {
+			lines = append(lines, "  use /artifact "+payload.Path+" tail to read the stored output tail")
+		}
+		return lines
 	case daemonEventSummary:
 		return daemonAppendPrefixedLines(header, payload.Message)
 	case daemonEventDiff:

@@ -625,12 +625,14 @@ type ArtifactPageRequest struct {
 	URI      string `json:"uri,omitempty"`
 	Page     int    `json:"page,omitempty"`
 	PageSize int    `json:"page_size,omitempty"`
+	Tail     bool   `json:"tail,omitempty"`
 }
 
 type ArtifactPage struct {
 	URI        string   `json:"uri"`
 	Page       int      `json:"page"`
 	PageSize   int      `json:"page_size"`
+	Tail       bool     `json:"tail,omitempty"`
 	TotalLines int      `json:"total_lines"`
 	TotalPages int      `json:"total_pages"`
 	HasPrev    bool     `json:"has_prev"`
