@@ -77,6 +77,32 @@ func TestPolicyAllowsNetworkShellForDomainAllowlist(t *testing.T) {
 	}
 }
 
+func TestPolicyAppliesPersistentPermissionRulesBySpecificity(t *testing.T) {
+	policy := Policy{
+		Mode: ModeAuto,
+		Rules: []Rule{
+			{Action: RuleAlwaysAllow, Workspace: "/repo", Tool: "run"},
+			{Action: RuleAlwaysAsk, Workspace: "/repo", Tool: "run", Risk: "network"},
+			{Action: RuleAlwaysDeny, Workspace: "/repo", SessionID: "s1", Tool: "run", Risk: "dangerous_shell", Reason: "blocked by saved rule"},
+		},
+	}
+	var required *RequiredError
+	if err := policy.Check(t.Context(), Request{Workspace: "/repo", Tool: "run", Input: "curl https://example.com"}); !errors.As(err, &required) {
+		t.Fatalf("expected specific ask rule to override broad allow, got %v", err)
+	}
+	var denied *DeniedError
+	err := policy.Check(t.Context(), Request{Workspace: "/repo", SessionID: "s1", Tool: "run", Input: "rm -rf build"})
+	if !errors.As(err, &denied) {
+		t.Fatalf("expected deny rule, got %v", err)
+	}
+	if denied.Request.Reason != "blocked by saved rule" {
+		t.Fatalf("expected deny reason from rule, got %#v", denied.Request)
+	}
+	if err := policy.Check(t.Context(), Request{Workspace: "/repo", Tool: "run", Input: "rm -rf build"}); err != nil {
+		t.Fatalf("expected broad allow to apply outside denied session, got %v", err)
+	}
+}
+
 func TestPolicyDefaultDeniesUnknownOrMalformedNetworkShell(t *testing.T) {
 	policy := Policy{
 		Mode:               ModeAuto,

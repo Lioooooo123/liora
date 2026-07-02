@@ -291,6 +291,10 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		return "Usage: /history <query>", true, nil
 	case "/memory":
 		return s.handleMemory(ctx, "list")
+	case "/permissions", "/permission-rules":
+		return s.listPermissionRules(ctx)
+	case "/permission-rule":
+		return "Usage: /permission-rule add <always_allow|always_deny|always_ask> [workspace=current|global|<path>] [session=current|global|<id>] [tool=<tool>] [risk=<risk>] [reason=<text>] or /permission-rule delete <id>", true, nil
 	case "/last":
 		return s.replayLastTask(ctx)
 	default:
@@ -343,6 +347,9 @@ func (s *DaemonSubmitter) HandleCommand(ctx context.Context, line string) (strin
 		}
 		if strings.HasPrefix(line, "/memory ") {
 			return s.handleMemory(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/memory ")))
+		}
+		if strings.HasPrefix(line, "/permission-rule ") {
+			return s.handlePermissionRule(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/permission-rule ")))
 		}
 		if strings.HasPrefix(line, "/model ") {
 			return s.handleModel(ctx, strings.TrimSpace(strings.TrimPrefix(line, "/model ")))
@@ -559,6 +566,133 @@ func formatMemory(memory store.Memory) string {
 		source = "unknown"
 	}
 	return fmt.Sprintf("%s [%s source=%s %s] %s", memory.ID, memory.Kind, source, status, memory.Text)
+}
+
+func (s *DaemonSubmitter) listPermissionRules(ctx context.Context) (string, bool, error) {
+	rules, err := s.client.ListPermissionRules(ctx, store.PermissionRuleListOptions{
+		Workspace: s.workspace,
+		SessionID: s.currentSessionID(),
+		Limit:     50,
+	})
+	if err != nil {
+		return "", true, err
+	}
+	if len(rules) == 0 {
+		return "No permission rules found.", true, nil
+	}
+	lines := []string{"Permission rules"}
+	for _, rule := range rules {
+		lines = append(lines, "- "+formatPermissionRule(rule))
+	}
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func (s *DaemonSubmitter) handlePermissionRule(ctx context.Context, args string) (string, bool, error) {
+	command, rest, _ := strings.Cut(strings.TrimSpace(args), " ")
+	switch command {
+	case "add":
+		request, err := s.permissionRuleCreateRequest(rest)
+		if err != nil {
+			return err.Error(), true, nil
+		}
+		rule, err := s.client.CreatePermissionRule(ctx, request)
+		if err != nil {
+			return "", true, err
+		}
+		return "Permission rule saved: " + formatPermissionRule(rule), true, nil
+	case "delete":
+		id := strings.TrimSpace(rest)
+		if id == "" {
+			return "Usage: /permission-rule delete <id>", true, nil
+		}
+		if err := s.client.DeletePermissionRule(ctx, id); err != nil {
+			return "", true, err
+		}
+		return "Permission rule deleted: " + id, true, nil
+	default:
+		return "Usage: /permission-rule add <always_allow|always_deny|always_ask> [workspace=current|global|<path>] [session=current|global|<id>] [tool=<tool>] [risk=<risk>] [reason=<text>] or /permission-rule delete <id>", true, nil
+	}
+}
+
+func (s *DaemonSubmitter) permissionRuleCreateRequest(input string) (store.CreatePermissionRuleRequest, error) {
+	fields := strings.Fields(input)
+	if len(fields) == 0 {
+		return store.CreatePermissionRuleRequest{}, fmt.Errorf("Usage: /permission-rule add <always_allow|always_deny|always_ask> [workspace=current|global|<path>] [session=current|global|<id>] [tool=<tool>] [risk=<risk>] [reason=<text>]")
+	}
+	request := store.CreatePermissionRuleRequest{Action: store.PermissionRuleAction(fields[0])}
+	hasWorkspaceOrSession := false
+	for _, field := range fields[1:] {
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			return store.CreatePermissionRuleRequest{}, fmt.Errorf("unknown permission rule argument %q", field)
+		}
+		switch strings.TrimSpace(key) {
+		case "workspace":
+			hasWorkspaceOrSession = true
+			switch strings.TrimSpace(value) {
+			case "current":
+				request.Workspace = s.workspace
+			case "global":
+				request.Workspace = ""
+			default:
+				request.Workspace = value
+			}
+		case "session":
+			hasWorkspaceOrSession = true
+			switch strings.TrimSpace(value) {
+			case "current":
+				sessionID := s.currentSessionID()
+				if sessionID == "" {
+					return store.CreatePermissionRuleRequest{}, fmt.Errorf("no current session for session=current")
+				}
+				request.SessionID = sessionID
+			case "global":
+				request.SessionID = ""
+			default:
+				request.SessionID = value
+			}
+		case "tool":
+			request.Tool = value
+		case "risk":
+			request.Risk = value
+		case "reason":
+			request.Reason = value
+		default:
+			return store.CreatePermissionRuleRequest{}, fmt.Errorf("unknown permission rule argument %q", field)
+		}
+	}
+	if !hasWorkspaceOrSession {
+		request.Workspace = s.workspace
+	}
+	return request, nil
+}
+
+func formatPermissionRule(rule store.PermissionRule) string {
+	status := "disabled"
+	if rule.Enabled {
+		status = "enabled"
+	}
+	scope := []string{}
+	if strings.TrimSpace(rule.Workspace) != "" {
+		scope = append(scope, "workspace="+rule.Workspace)
+	}
+	if strings.TrimSpace(rule.SessionID) != "" {
+		scope = append(scope, "session="+rule.SessionID)
+	}
+	if strings.TrimSpace(rule.Tool) != "" {
+		scope = append(scope, "tool="+rule.Tool)
+	}
+	if strings.TrimSpace(rule.Risk) != "" {
+		scope = append(scope, "risk="+rule.Risk)
+	}
+	if len(scope) == 0 {
+		scope = append(scope, "global")
+	}
+	line := fmt.Sprintf("%s [%s %s] %s", rule.ID, rule.Action, status, strings.Join(scope, " "))
+	if strings.TrimSpace(rule.Reason) != "" {
+		line += " reason=" + rule.Reason
+	}
+	return line
 }
 
 func (s *DaemonSubmitter) tailTask(ctx context.Context, args string) (string, bool, error) {

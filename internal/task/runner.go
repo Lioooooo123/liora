@@ -224,7 +224,40 @@ func (r *Runner) permissionChecker(task Task) permission.Checker {
 	policy := r.permission
 	policy.Approved = policy.Approved || task.ApprovalGranted
 	policy.AllowWritesInPatchMode = r.patchMode
-	return policy
+	return permission.CheckerFunc(func(ctx context.Context, request permission.Request) error {
+		request.Workspace = task.Workspace
+		request.SessionID = task.SessionID
+		policyForRequest := policy
+		if r.store != nil {
+			rules, err := r.store.ListPermissionRules(store.PermissionRuleListOptions{
+				Workspace: task.Workspace,
+				SessionID: task.SessionID,
+			})
+			if err != nil {
+				return fmt.Errorf("load permission rules: %w", err)
+			}
+			policyForRequest.Rules = permissionRulesFromStore(rules)
+		}
+		return policyForRequest.Check(ctx, request)
+	})
+}
+
+func permissionRulesFromStore(rules []store.PermissionRule) []permission.Rule {
+	converted := make([]permission.Rule, 0, len(rules))
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		converted = append(converted, permission.Rule{
+			Action:    permission.RuleAction(rule.Action),
+			Workspace: rule.Workspace,
+			SessionID: rule.SessionID,
+			Tool:      rule.Tool,
+			Risk:      rule.Risk,
+			Reason:    rule.Reason,
+		})
+	}
+	return converted
 }
 
 func (r *Runner) plannerForTask(task Task) (*llm.Planner, error) {

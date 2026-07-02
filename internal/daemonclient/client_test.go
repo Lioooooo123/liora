@@ -244,6 +244,48 @@ func TestClientMemoryLifecycle(t *testing.T) {
 	}
 }
 
+func TestClientPermissionRuleLifecycle(t *testing.T) {
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: task.NewRepository(db), Store: persistentStore}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	created, err := client.CreatePermissionRule(t.Context(), store.CreatePermissionRuleRequest{
+		Action:    store.PermissionRuleAlwaysAsk,
+		Workspace: "/repo",
+		Tool:      "run",
+		Risk:      "network",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == "" || created.Action != store.PermissionRuleAlwaysAsk || created.Tool != "run" || !created.Enabled {
+		t.Fatalf("unexpected created rule %#v", created)
+	}
+	rules, err := client.ListPermissionRules(t.Context(), store.PermissionRuleListOptions{Workspace: "/repo", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 || rules[0].ID != created.ID {
+		t.Fatalf("unexpected rules %#v", rules)
+	}
+	if err := client.DeletePermissionRule(t.Context(), created.ID); err != nil {
+		t.Fatal(err)
+	}
+	rules, err = client.ListPermissionRules(t.Context(), store.PermissionRuleListOptions{Workspace: "/repo", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 0 {
+		t.Fatalf("expected deleted rule to disappear, got %#v", rules)
+	}
+}
+
 func TestClientUsesCapabilityTokenForSensitiveAPIs(t *testing.T) {
 	workspace := t.TempDir()
 	persistentStore := store.New(t.TempDir())

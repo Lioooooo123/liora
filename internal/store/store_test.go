@@ -134,6 +134,49 @@ func TestStorePersistsAndSearchesMemories(t *testing.T) {
 	}
 }
 
+func TestStorePersistsAndFiltersPermissionRules(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	created, err := s.CreatePermissionRule(CreatePermissionRuleRequest{
+		Action:    PermissionRuleAlwaysAllow,
+		Workspace: "/repo",
+		Tool:      "run",
+		Risk:      "network",
+		Reason:    "trusted endpoint",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == "" || created.Action != PermissionRuleAlwaysAllow || created.Workspace != "/repo" || created.Tool != "run" || created.Risk != "network" || !created.Enabled {
+		t.Fatalf("unexpected created rule %#v", created)
+	}
+	reloaded := New(root)
+	rules, err := reloaded.ListPermissionRules(PermissionRuleListOptions{Workspace: "/repo", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 || rules[0].ID != created.ID || rules[0].Reason != "trusted endpoint" {
+		t.Fatalf("unexpected rules %#v", rules)
+	}
+	other, err := reloaded.ListPermissionRules(PermissionRuleListOptions{Workspace: "/other", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other) != 0 {
+		t.Fatalf("expected workspace filter to hide rule, got %#v", other)
+	}
+	for _, request := range []CreatePermissionRuleRequest{
+		{Action: PermissionRuleAction("bad"), Workspace: "/repo"},
+		{Action: PermissionRuleAlwaysAllow},
+		{Action: PermissionRuleAlwaysAllow, Tool: "unknown"},
+		{Action: PermissionRuleAlwaysAllow, Risk: "unknown"},
+	} {
+		if _, err := s.CreatePermissionRule(request); err == nil {
+			t.Fatalf("expected invalid permission rule request to fail: %#v", request)
+		}
+	}
+}
+
 func stringPtr(value string) *string {
 	return &value
 }

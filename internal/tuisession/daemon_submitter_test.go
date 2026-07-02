@@ -234,6 +234,57 @@ func TestDaemonSubmitterHandlesMemoryThroughDaemon(t *testing.T) {
 	}
 }
 
+func TestDaemonSubmitterHandlesPermissionRulesThroughDaemon(t *testing.T) {
+	root := t.TempDir()
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Store: persistentStore}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+
+	out, handled, err := submitter.HandleCommand(t.Context(), "/permission-rule add always_allow tool=run risk=network")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, "Permission rule saved") || !strings.Contains(out, "always_allow") || !strings.Contains(out, "workspace="+root) {
+		t.Fatalf("unexpected add output handled=%v out=%q", handled, out)
+	}
+	rules, err := persistentStore.ListPermissionRules(store.PermissionRuleListOptions{Workspace: root, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 || rules[0].Tool != "run" || rules[0].Risk != "network" {
+		t.Fatalf("unexpected stored rules %#v", rules)
+	}
+	ruleID := rules[0].ID
+	out, handled, err = submitter.HandleCommand(t.Context(), "/permission-rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, ruleID) || !strings.Contains(out, "tool=run") {
+		t.Fatalf("unexpected list output handled=%v out=%q", handled, out)
+	}
+	out, handled, err = submitter.HandleCommand(t.Context(), "/permission-rule delete "+ruleID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(out, "Permission rule deleted") {
+		t.Fatalf("unexpected delete output handled=%v out=%q", handled, out)
+	}
+	rules, err = persistentStore.ListPermissionRules(store.PermissionRuleListOptions{Workspace: root, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 0 {
+		t.Fatalf("expected rule deleted, got %#v", rules)
+	}
+}
+
 type blockingShellExecutor struct {
 	started chan struct{}
 	done    chan struct{}

@@ -72,6 +72,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
 	mux.HandleFunc("/v1/memories", s.requireCapability(s.handleMemories))
 	mux.HandleFunc("/v1/memories/", s.requireCapability(s.handleMemory))
+	mux.HandleFunc("/v1/permission-rules", s.requireCapability(s.handlePermissionRules))
+	mux.HandleFunc("/v1/permission-rules/", s.requireCapability(s.handlePermissionRule))
 	mux.HandleFunc("/v1/workbench", s.requireCapability(s.handleWorkbench))
 	mux.HandleFunc("/v1/artifacts/page", s.requireCapability(s.handleArtifactPage))
 	mux.HandleFunc("/v1/timeline/search", s.requireCapability(s.handleTimelineSearch))
@@ -278,6 +280,69 @@ func (s *server) handleMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusNotFound, fmt.Errorf("unknown memory route %q", r.URL.Path))
+}
+
+func (s *server) handlePermissionRules(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusInternalServerError, errors.New("store is not configured"))
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		rules, err := s.store.ListPermissionRules(store.PermissionRuleListOptions{
+			Workspace:       r.URL.Query().Get("workspace"),
+			SessionID:       r.URL.Query().Get("session_id"),
+			Limit:           limit,
+			IncludeDisabled: truthyQuery(r.URL.Query().Get("include_disabled")),
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, rules)
+	case http.MethodPost:
+		var request store.CreatePermissionRuleRequest
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		rule, err := s.store.CreatePermissionRule(request)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, rule)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+	}
+}
+
+func (s *server) handlePermissionRule(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusInternalServerError, errors.New("store is not configured"))
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/v1/permission-rules/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 1 || parts[0] == "" {
+		writeError(w, http.StatusNotFound, errors.New("permission rule id is required"))
+		return
+	}
+	switch r.Method {
+	case http.MethodDelete:
+		if err := s.store.DeletePermissionRule(parts[0]); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.Header().Set("Allow", "DELETE")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+	}
 }
 
 func truthyQuery(value string) bool {

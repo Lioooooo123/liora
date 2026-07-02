@@ -65,6 +65,43 @@ type MemoryListOptions struct {
 	IncludeExpired  bool
 }
 
+type PermissionRuleAction string
+
+const (
+	PermissionRuleAlwaysAllow PermissionRuleAction = "always_allow"
+	PermissionRuleAlwaysDeny  PermissionRuleAction = "always_deny"
+	PermissionRuleAlwaysAsk   PermissionRuleAction = "always_ask"
+)
+
+type PermissionRule struct {
+	ID        string               `json:"id"`
+	Action    PermissionRuleAction `json:"action"`
+	Workspace string               `json:"workspace,omitempty"`
+	SessionID string               `json:"session_id,omitempty"`
+	Tool      string               `json:"tool,omitempty"`
+	Risk      string               `json:"risk,omitempty"`
+	Reason    string               `json:"reason,omitempty"`
+	Enabled   bool                 `json:"enabled"`
+	CreatedAt time.Time            `json:"created_at"`
+	UpdatedAt time.Time            `json:"updated_at"`
+}
+
+type CreatePermissionRuleRequest struct {
+	Action    PermissionRuleAction `json:"action"`
+	Workspace string               `json:"workspace,omitempty"`
+	SessionID string               `json:"session_id,omitempty"`
+	Tool      string               `json:"tool,omitempty"`
+	Risk      string               `json:"risk,omitempty"`
+	Reason    string               `json:"reason,omitempty"`
+}
+
+type PermissionRuleListOptions struct {
+	Workspace       string
+	SessionID       string
+	Limit           int
+	IncludeDisabled bool
+}
+
 type ConversationThread struct {
 	ID          string             `json:"id"`
 	Title       string             `json:"title"`
@@ -416,6 +453,75 @@ func (s *Store) DeleteMemoryForWorkspace(id string, workspace string) error {
 	} else {
 		result, err = db.Exec(`DELETE FROM memories WHERE id = ? AND workspace = ?`, id, strings.TrimSpace(workspace))
 	}
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) CreatePermissionRule(request CreatePermissionRuleRequest) (PermissionRule, error) {
+	action, err := normalizePermissionRuleAction(request.Action)
+	if err != nil {
+		return PermissionRule{}, err
+	}
+	rule := PermissionRule{
+		ID:        newID(),
+		Action:    action,
+		Workspace: strings.TrimSpace(request.Workspace),
+		SessionID: strings.TrimSpace(request.SessionID),
+		Tool:      strings.ToLower(strings.TrimSpace(request.Tool)),
+		Risk:      strings.ToLower(strings.TrimSpace(request.Risk)),
+		Reason:    strings.TrimSpace(request.Reason),
+		Enabled:   true,
+	}
+	if err := validatePermissionRuleScope(rule); err != nil {
+		return PermissionRule{}, err
+	}
+	db, err := s.OpenDB()
+	if err != nil {
+		return PermissionRule{}, err
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	rule.CreatedAt = now
+	rule.UpdatedAt = now
+	_, err = db.Exec(`
+			INSERT INTO permission_rules (id, action, workspace, session_id, tool, risk, reason, enabled, schema_version, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, rule.ID, rule.Action, rule.Workspace, rule.SessionID, rule.Tool, rule.Risk, rule.Reason, boolInt(rule.Enabled), CurrentSchemaVersion, formatTime(rule.CreatedAt), formatTime(rule.UpdatedAt))
+	if err != nil {
+		return PermissionRule{}, err
+	}
+	return rule, nil
+}
+
+func (s *Store) ListPermissionRules(options PermissionRuleListOptions) ([]PermissionRule, error) {
+	db, err := s.OpenDB()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return queryPermissionRules(db, options)
+}
+
+func (s *Store) DeletePermissionRule(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("permission rule id is required")
+	}
+	db, err := s.OpenDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	result, err := db.Exec(`DELETE FROM permission_rules WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
@@ -1151,6 +1257,20 @@ func initDB(db *sql.DB) error {
 				updated_at TEXT NOT NULL DEFAULT ''
 			)`,
 		`CREATE INDEX IF NOT EXISTS idx_approval_items_task_status ON approval_items(task_id, status)`,
+		`CREATE TABLE IF NOT EXISTS permission_rules (
+					id TEXT PRIMARY KEY,
+					action TEXT NOT NULL DEFAULT '',
+					workspace TEXT NOT NULL DEFAULT '',
+					session_id TEXT NOT NULL DEFAULT '',
+					tool TEXT NOT NULL DEFAULT '',
+					risk TEXT NOT NULL DEFAULT '',
+					reason TEXT NOT NULL DEFAULT '',
+					enabled INTEGER NOT NULL DEFAULT 1,
+					schema_version INTEGER NOT NULL DEFAULT 13,
+					created_at TEXT NOT NULL DEFAULT '',
+					updated_at TEXT NOT NULL DEFAULT ''
+				)`,
+		`CREATE INDEX IF NOT EXISTS idx_permission_rules_scope ON permission_rules(workspace, session_id, enabled)`,
 		`CREATE TABLE IF NOT EXISTS schedules (
 				id TEXT PRIMARY KEY,
 				trigger TEXT NOT NULL DEFAULT '',
@@ -1512,6 +1632,111 @@ func queryMemories(db *sql.DB, options MemoryListOptions) ([]Memory, error) {
 		memories[i], memories[j] = memories[j], memories[i]
 	}
 	return memories, nil
+}
+
+func queryPermissionRules(db *sql.DB, options PermissionRuleListOptions) ([]PermissionRule, error) {
+	var clauses []string
+	args := []any{}
+	if !options.IncludeDisabled {
+		clauses = append(clauses, `enabled = 1`)
+	}
+	if workspace := strings.TrimSpace(options.Workspace); workspace != "" {
+		clauses = append(clauses, `(workspace = '' OR workspace = ?)`)
+		args = append(args, workspace)
+	}
+	if sessionID := strings.TrimSpace(options.SessionID); sessionID != "" {
+		clauses = append(clauses, `(session_id = '' OR session_id = ?)`)
+		args = append(args, sessionID)
+	}
+	sqlText := `SELECT id, action, workspace, session_id, tool, risk, reason, enabled, created_at, updated_at FROM permission_rules`
+	if len(clauses) > 0 {
+		sqlText += ` WHERE ` + strings.Join(clauses, ` AND `)
+	}
+	sqlText += ` ORDER BY updated_at DESC, id DESC`
+	if options.Limit > 0 {
+		sqlText += fmt.Sprintf(" LIMIT %d", options.Limit)
+	}
+	rows, err := db.Query(sqlText, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var rules []PermissionRule
+	for rows.Next() {
+		rule, err := scanPermissionRule(rows)
+		if err != nil {
+			return nil, err
+		}
+		rules = append(rules, rule)
+	}
+	return rules, rows.Err()
+}
+
+func scanPermissionRule(scanner interface {
+	Scan(dest ...any) error
+}) (PermissionRule, error) {
+	var rule PermissionRule
+	var enabled int
+	var createdAt, updatedAt string
+	if err := scanner.Scan(&rule.ID, &rule.Action, &rule.Workspace, &rule.SessionID, &rule.Tool, &rule.Risk, &rule.Reason, &enabled, &createdAt, &updatedAt); err != nil {
+		return PermissionRule{}, err
+	}
+	rule.Enabled = enabled != 0
+	rule.CreatedAt = parseTime(createdAt)
+	rule.UpdatedAt = parseTime(updatedAt)
+	return rule, nil
+}
+
+func normalizePermissionRuleAction(action PermissionRuleAction) (PermissionRuleAction, error) {
+	switch PermissionRuleAction(strings.ToLower(strings.TrimSpace(string(action)))) {
+	case PermissionRuleAlwaysAllow:
+		return PermissionRuleAlwaysAllow, nil
+	case PermissionRuleAlwaysDeny:
+		return PermissionRuleAlwaysDeny, nil
+	case PermissionRuleAlwaysAsk:
+		return PermissionRuleAlwaysAsk, nil
+	default:
+		return "", fmt.Errorf("unknown permission rule action %q", action)
+	}
+}
+
+func validatePermissionRuleScope(rule PermissionRule) error {
+	if strings.TrimSpace(rule.Workspace) == "" && strings.TrimSpace(rule.SessionID) == "" && strings.TrimSpace(rule.Tool) == "" && strings.TrimSpace(rule.Risk) == "" {
+		return errors.New("permission rule requires at least one scope field")
+	}
+	if err := validatePermissionRuleTool(rule.Tool); err != nil {
+		return err
+	}
+	if err := validatePermissionRuleRisk(rule.Risk); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validatePermissionRuleTool(tool string) error {
+	tool = strings.TrimSpace(tool)
+	if tool == "" {
+		return nil
+	}
+	switch tool {
+	case "run", "write", "append", "edit", "replace", "mkdir", "delete", "mcp", "hook":
+		return nil
+	default:
+		return fmt.Errorf("unknown permission rule tool %q", tool)
+	}
+}
+
+func validatePermissionRuleRisk(risk string) error {
+	risk = strings.TrimSpace(risk)
+	if risk == "" {
+		return nil
+	}
+	switch risk {
+	case "write", "dangerous_shell", "network", "external", "hook_side_effect":
+		return nil
+	default:
+		return fmt.Errorf("unknown permission rule risk %q", risk)
+	}
 }
 
 func getMemory(db *sql.DB, id string) (Memory, error) {

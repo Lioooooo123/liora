@@ -21,6 +21,8 @@ type Request struct {
 	Input         string `json:"input"`
 	Risk          string `json:"risk"`
 	Reason        string `json:"reason"`
+	Workspace     string `json:"workspace,omitempty"`
+	SessionID     string `json:"session_id,omitempty"`
 	Trust         string `json:"trust,omitempty"`
 	ContentSource string `json:"content_source,omitempty"`
 }
@@ -63,6 +65,24 @@ type Policy struct {
 	AllowWritesInPatchMode bool
 	NetworkDefaultDeny     bool
 	NetworkAllowlist       []string
+	Rules                  []Rule
+}
+
+type RuleAction string
+
+const (
+	RuleAlwaysAllow RuleAction = "always_allow"
+	RuleAlwaysDeny  RuleAction = "always_deny"
+	RuleAlwaysAsk   RuleAction = "always_ask"
+)
+
+type Rule struct {
+	Action    RuleAction
+	Workspace string
+	SessionID string
+	Tool      string
+	Risk      string
+	Reason    string
 }
 
 func (p Policy) Check(_ context.Context, request Request) error {
@@ -80,6 +100,21 @@ func (p Policy) Check(_ context.Context, request Request) error {
 	if !required {
 		return nil
 	}
+	classified.Workspace = strings.TrimSpace(request.Workspace)
+	classified.SessionID = strings.TrimSpace(request.SessionID)
+	if rule, ok := p.bestMatchingRule(classified); ok {
+		if strings.TrimSpace(rule.Reason) != "" {
+			classified.Reason = strings.TrimSpace(rule.Reason)
+		}
+		switch rule.Action {
+		case RuleAlwaysAllow:
+			return nil
+		case RuleAlwaysDeny:
+			return &DeniedError{Request: classified}
+		case RuleAlwaysAsk:
+			return &RequiredError{Request: classified}
+		}
+	}
 	if classified.Risk == "network" && p.networkAllowed(classified.Input) {
 		return nil
 	}
@@ -90,6 +125,68 @@ func (p Policy) Check(_ context.Context, request Request) error {
 		return nil
 	}
 	return &RequiredError{Request: classified}
+}
+
+func (p Policy) bestMatchingRule(request Request) (Rule, bool) {
+	bestScore := -1
+	var best Rule
+	for _, rule := range p.Rules {
+		score, ok := matchRule(rule, request)
+		if !ok {
+			continue
+		}
+		if score > bestScore || (score == bestScore && rulePrecedence(rule.Action) > rulePrecedence(best.Action)) {
+			bestScore = score
+			best = rule
+		}
+	}
+	return best, bestScore >= 0
+}
+
+func matchRule(rule Rule, request Request) (int, bool) {
+	action := RuleAction(strings.TrimSpace(string(rule.Action)))
+	if action != RuleAlwaysAllow && action != RuleAlwaysDeny && action != RuleAlwaysAsk {
+		return 0, false
+	}
+	score := 0
+	for _, candidate := range []struct {
+		ruleValue    string
+		requestValue string
+		lower        bool
+	}{
+		{rule.Workspace, request.Workspace, false},
+		{rule.SessionID, request.SessionID, false},
+		{rule.Tool, request.Tool, true},
+		{rule.Risk, request.Risk, true},
+	} {
+		ruleValue := strings.TrimSpace(candidate.ruleValue)
+		if ruleValue == "" {
+			continue
+		}
+		requestValue := strings.TrimSpace(candidate.requestValue)
+		if candidate.lower {
+			ruleValue = strings.ToLower(ruleValue)
+			requestValue = strings.ToLower(requestValue)
+		}
+		if ruleValue != requestValue {
+			return 0, false
+		}
+		score++
+	}
+	return score, true
+}
+
+func rulePrecedence(action RuleAction) int {
+	switch action {
+	case RuleAlwaysDeny:
+		return 3
+	case RuleAlwaysAsk:
+		return 2
+	case RuleAlwaysAllow:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func isUntrustedPolicyOverride(request Request) bool {

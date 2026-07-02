@@ -383,6 +383,7 @@ func schemaVersionedSurfaceTables() []string {
 		"todos",
 		"artifact_refs",
 		"approval_items",
+		"permission_rules",
 		"schedules",
 		"hooks",
 		"conversation_threads",

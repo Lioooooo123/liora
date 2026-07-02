@@ -89,7 +89,7 @@ echo "[10/14] doctor binary smoke"
     LIORA_LLM_MODEL=claude-audit \
     "$AUDIT_TMP/liora" -doctor >"$AUDIT_TMP/doctor.txt"
   grep -q 'database: ok' "$AUDIT_TMP/doctor.txt"
-  grep -q "schema_version: ${CURRENT_SCHEMA_VERSION:-12}" "$AUDIT_TMP/doctor.txt"
+  grep -q "schema_version: ${CURRENT_SCHEMA_VERSION:-13}" "$AUDIT_TMP/doctor.txt"
   grep -q 'migration: complete' "$AUDIT_TMP/doctor.txt"
   grep -q 'api_key: configured' "$AUDIT_TMP/doctor.txt"
   if grep -q 'audit-secret' "$AUDIT_TMP/doctor.txt"; then

@@ -226,6 +226,50 @@ func (c *Client) DeleteMemoryForWorkspace(ctx context.Context, id string, worksp
 	return c.deleteJSON(ctx, path, http.StatusNoContent)
 }
 
+func (c *Client) CreatePermissionRule(ctx context.Context, request store.CreatePermissionRuleRequest) (store.PermissionRule, error) {
+	var result store.PermissionRule
+	if err := c.postJSON(ctx, "/v1/permission-rules", request, &result, http.StatusCreated); err != nil {
+		return store.PermissionRule{}, err
+	}
+	return result, nil
+}
+
+func (c *Client) ListPermissionRules(ctx context.Context, options store.PermissionRuleListOptions) ([]store.PermissionRule, error) {
+	if err := ensureNonNegativeLimit(options.Limit); err != nil {
+		return nil, err
+	}
+	values := url.Values{}
+	if strings.TrimSpace(options.Workspace) != "" {
+		values.Set("workspace", options.Workspace)
+	}
+	if strings.TrimSpace(options.SessionID) != "" {
+		values.Set("session_id", options.SessionID)
+	}
+	if options.Limit > 0 {
+		values.Set("limit", fmt.Sprintf("%d", options.Limit))
+	}
+	if options.IncludeDisabled {
+		values.Set("include_disabled", "true")
+	}
+	path := "/v1/permission-rules"
+	if encoded := values.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	var result []store.PermissionRule
+	if err := c.getJSON(ctx, path, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *Client) DeletePermissionRule(ctx context.Context, id string) error {
+	escapedID, err := pathID("permission rule id", id)
+	if err != nil {
+		return err
+	}
+	return c.deleteJSON(ctx, "/v1/permission-rules/"+escapedID, http.StatusNoContent)
+}
+
 func (c *Client) CreateConversationThread(ctx context.Context, request store.CreateConversationThreadRequest) (store.ConversationThread, error) {
 	if strings.TrimSpace(request.Workspace) == "" {
 		return store.ConversationThread{}, fmt.Errorf("workspace is required")

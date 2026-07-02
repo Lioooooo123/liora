@@ -200,6 +200,112 @@ func TestServerChildTaskScopeRequiresParentSubset(t *testing.T) {
 	}
 }
 
+func TestServerPermissionRulesPersistAndAffectTasks(t *testing.T) {
+	workspace := t.TempDir()
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "run curl https://example.com/data.json"}))
+	server := httptest.NewServer(NewServer(Config{Repository: repo, Runner: runner, Store: persistentStore}))
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/v1/permission-rules", "application/json", strings.NewReader(`{
+		"action":"always_ask",
+		"workspace":`+quote(workspace)+`,
+		"tool":"run",
+		"risk":"network",
+		"reason":"saved ask rule"
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("unexpected create rule status %d: %s", resp.StatusCode, string(body))
+	}
+	var rule store.PermissionRule
+	if err := json.NewDecoder(resp.Body).Decode(&rule); err != nil {
+		t.Fatal(err)
+	}
+	if rule.ID == "" || rule.Action != store.PermissionRuleAlwaysAsk {
+		t.Fatalf("unexpected rule %#v", rule)
+	}
+	reloaded, err := persistentStore.ListPermissionRules(store.PermissionRuleListOptions{Workspace: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded) != 1 || reloaded[0].ID != rule.ID {
+		t.Fatalf("expected persisted rule, got %#v", reloaded)
+	}
+
+	body := strings.NewReader(`{"workspace":` + quote(workspace) + `,"prompt":"fetch data","natural":true}`)
+	resp, err = http.Post(server.URL+"/v1/tasks", "application/json", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		responseBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("unexpected create task status %d: %s", resp.StatusCode, string(responseBody))
+	}
+	var created taskpkg.CreateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Task.Status != taskpkg.StatusWaitingUser {
+		t.Fatalf("expected task to pause for saved permission rule, got %#v", created.Task)
+	}
+	events, err := repo.Events(t.Context(), created.Task.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasEvent(events, taskpkg.EventPermissionRequest) {
+		t.Fatalf("expected permission request event, got %#v", events)
+	}
+}
+
+func TestServerPermissionRulesRejectInvalidRequests(t *testing.T) {
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := httptest.NewServer(NewServer(Config{Repository: taskpkg.NewRepository(db), Store: persistentStore}))
+	defer server.Close()
+
+	for _, body := range []string{
+		`{"action":"sometimes","workspace":"/repo"}`,
+		`{"action":"always_allow"}`,
+		`{"action":"always_allow","workspace":"/repo","tool":"unknown"}`,
+		`{"action":"always_allow","workspace":"/repo","risk":"unknown"}`,
+		`{"action":"always_allow","scope":"workspace"}`,
+	} {
+		resp, err := http.Post(server.URL+"/v1/permission-rules", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusBadRequest {
+			responseBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			t.Fatalf("expected 400 for %s, got %d: %s", body, resp.StatusCode, string(responseBody))
+		}
+		resp.Body.Close()
+	}
+	rules, err := persistentStore.ListPermissionRules(store.PermissionRuleListOptions{IncludeDisabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 0 {
+		t.Fatalf("invalid requests should not create rules, got %#v", rules)
+	}
+}
+
 func postTaskForTest(t *testing.T, baseURL string, body string) taskpkg.CreateResponse {
 	t.Helper()
 	resp, err := http.Post(baseURL+"/v1/tasks", "application/json", strings.NewReader(body))
