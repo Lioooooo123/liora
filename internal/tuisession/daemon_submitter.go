@@ -1373,6 +1373,10 @@ func (s *DaemonSubmitter) listThreads(ctx context.Context, includeArchived bool)
 	if err != nil {
 		return "", true, err
 	}
+	childThreadOwners, err := s.childThreadOwners(ctx)
+	if err != nil {
+		return "", true, err
+	}
 	if len(threads) == 0 {
 		return "No conversation threads found.", true, nil
 	}
@@ -1387,9 +1391,60 @@ func (s *DaemonSubmitter) listThreads(ctx context.Context, includeArchived bool)
 		if thread.ArchivedAt != nil {
 			status = "archived"
 		}
-		lines = append(lines, fmt.Sprintf("- %s %s [%s] %s last=%s%s (%s)", marker, thread.ID, status, thread.Title, emptyDash(thread.LastTaskID), threadModelSuffix(thread.ModelConfig), formatTaskTime(thread.UpdatedAt)))
+		lines = append(lines, fmt.Sprintf("- %s %s [%s] %s last=%s%s%s (%s)", marker, thread.ID, status, thread.Title, emptyDash(thread.LastTaskID), threadModelSuffix(thread.ModelConfig), childThreadOwnerSuffix(childThreadOwners[thread.ID]), formatTaskTime(thread.UpdatedAt)))
 	}
 	return strings.Join(lines, "\n"), true, nil
+}
+
+type childThreadOwner struct {
+	TaskID       string
+	ParentTaskID string
+	SubagentName string
+	Role         string
+}
+
+func (s *DaemonSubmitter) childThreadOwners(ctx context.Context) (map[string][]childThreadOwner, error) {
+	owners := map[string][]childThreadOwner{}
+	if s.client == nil {
+		return owners, nil
+	}
+	tasks, err := s.client.ListTasksForWorkspace(ctx, s.workspace, 100)
+	if err != nil {
+		return nil, err
+	}
+	for _, task := range tasks {
+		if strings.TrimSpace(task.ChildThreadID) == "" {
+			continue
+		}
+		owners[task.ChildThreadID] = append(owners[task.ChildThreadID], childThreadOwner{
+			TaskID:       task.ID,
+			ParentTaskID: task.ParentTaskID,
+			SubagentName: task.SubagentName,
+			Role:         task.Role,
+		})
+	}
+	return owners, nil
+}
+
+func childThreadOwnerSuffix(owners []childThreadOwner) string {
+	if len(owners) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(owners))
+	for _, owner := range owners {
+		fields := []string{"via=" + owner.TaskID}
+		if strings.TrimSpace(owner.ParentTaskID) != "" {
+			fields = append(fields, "parent="+owner.ParentTaskID)
+		}
+		if strings.TrimSpace(owner.SubagentName) != "" {
+			fields = append(fields, "subagent="+owner.SubagentName)
+		}
+		if strings.TrimSpace(owner.Role) != "" {
+			fields = append(fields, "role="+owner.Role)
+		}
+		parts = append(parts, strings.Join(fields, ","))
+	}
+	return " child_of=" + strings.Join(parts, ";")
 }
 
 func (s *DaemonSubmitter) createThread(ctx context.Context, title string) (string, bool, error) {
@@ -1716,16 +1771,16 @@ func (s *DaemonSubmitter) watchTasks(ctx context.Context, args string) (string, 
 	if s.client == nil {
 		return "No daemon client.", true, nil
 	}
-	taskIDs, err := s.watchTaskIDs(ctx, args)
+	selection, err := s.watchTaskIDs(ctx, args)
 	if err != nil {
 		return "", true, err
 	}
-	if len(taskIDs) == 0 {
-		return "No active daemon tasks for this workspace.", true, nil
+	if len(selection.TaskIDs) == 0 {
+		return selection.EmptyMessage, true, nil
 	}
-	stream, errs := s.client.StreamTaskEvents(ctx, taskIDs)
-	lines := []string{"Watch tasks"}
-	for _, taskID := range taskIDs {
+	stream, errs := s.client.StreamTaskEvents(ctx, selection.TaskIDs)
+	lines := []string{selection.Title}
+	for _, taskID := range selection.TaskIDs {
 		lines = append(lines, "- "+taskID)
 	}
 	eventCount := 0
@@ -1756,21 +1811,77 @@ func (s *DaemonSubmitter) watchTasks(ctx context.Context, args string) (string, 
 	return strings.Join(lines, "\n"), true, nil
 }
 
-func (s *DaemonSubmitter) watchTaskIDs(ctx context.Context, args string) ([]string, error) {
+type watchTaskSelection struct {
+	Title        string
+	EmptyMessage string
+	TaskIDs      []string
+}
+
+func (s *DaemonSubmitter) watchTaskIDs(ctx context.Context, args string) (watchTaskSelection, error) {
 	fields := strings.Fields(args)
+	if len(fields) > 0 && fields[0] == "children" {
+		if len(fields) != 2 {
+			return watchTaskSelection{}, fmt.Errorf("usage: /watch children <parent_task_id>")
+		}
+		return s.watchChildTaskIDs(ctx, fields[1])
+	}
 	if len(fields) > 0 && fields[0] != "active" {
-		return uniqueStrings(fields), nil
+		return watchTaskSelection{
+			Title:        "Watch tasks",
+			EmptyMessage: "No daemon tasks selected.",
+			TaskIDs:      uniqueStrings(fields),
+		}, nil
 	}
 	tasks, err := s.client.ListTasksForWorkspace(ctx, s.workspace, 50)
 	if err != nil {
-		return nil, err
+		return watchTaskSelection{}, err
 	}
 	active := filterActiveTasks(tasks)
 	taskIDs := make([]string, 0, len(active))
 	for _, task := range active {
 		taskIDs = append(taskIDs, task.ID)
 	}
-	return taskIDs, nil
+	return watchTaskSelection{
+		Title:        "Watch tasks",
+		EmptyMessage: "No active daemon tasks for this workspace.",
+		TaskIDs:      taskIDs,
+	}, nil
+}
+
+func (s *DaemonSubmitter) watchChildTaskIDs(ctx context.Context, parentTaskID string) (watchTaskSelection, error) {
+	parentTaskID = strings.TrimSpace(parentTaskID)
+	if parentTaskID == "" {
+		return watchTaskSelection{}, fmt.Errorf("usage: /watch children <parent_task_id>")
+	}
+	tasks, err := s.client.ListTasksForWorkspace(ctx, s.workspace, 100)
+	if err != nil {
+		return watchTaskSelection{}, err
+	}
+	var parentFound bool
+	taskIDs := []string{parentTaskID}
+	for _, task := range tasks {
+		if task.ID == parentTaskID {
+			parentFound = true
+			continue
+		}
+		if task.ParentTaskID == parentTaskID {
+			taskIDs = append(taskIDs, task.ID)
+		}
+	}
+	if !parentFound {
+		return watchTaskSelection{}, fmt.Errorf("parent task %s was not found in this workspace", parentTaskID)
+	}
+	if len(taskIDs) == 1 {
+		return watchTaskSelection{
+			Title:        "Watch child tasks for " + parentTaskID,
+			EmptyMessage: "No child daemon tasks for parent " + parentTaskID + ".",
+		}, nil
+	}
+	return watchTaskSelection{
+		Title:        "Watch child tasks for " + parentTaskID,
+		EmptyMessage: "No child daemon tasks for parent " + parentTaskID + ".",
+		TaskIDs:      uniqueStrings(taskIDs),
+	}, nil
 }
 
 func (s *DaemonSubmitter) spawnTask(ctx context.Context, input string) (string, bool, error) {
@@ -1984,9 +2095,32 @@ func (s *DaemonSubmitter) listTasks(ctx context.Context) (string, bool, error) {
 	}
 	var lines []string
 	for _, task := range tasks {
-		lines = append(lines, fmt.Sprintf("- %s [%s] %s (%s)", task.ID, task.Status, task.Title, formatTaskTime(task.UpdatedAt)))
+		lines = append(lines, fmt.Sprintf("- %s [%s] %s%s (%s)", task.ID, task.Status, task.Title, taskRelationSuffix(task), formatTaskTime(task.UpdatedAt)))
 	}
 	return strings.Join(lines, "\n"), true, nil
+}
+
+func taskRelationSuffix(task taskpkg.Task) string {
+	fields := []string{}
+	if strings.TrimSpace(task.ParentTaskID) != "" {
+		fields = append(fields, "parent="+task.ParentTaskID)
+	}
+	if strings.TrimSpace(task.ParentThreadID) != "" {
+		fields = append(fields, "parent_thread="+task.ParentThreadID)
+	}
+	if strings.TrimSpace(task.ChildThreadID) != "" {
+		fields = append(fields, "child_thread="+task.ChildThreadID)
+	}
+	if strings.TrimSpace(task.SubagentName) != "" {
+		fields = append(fields, "subagent="+task.SubagentName)
+	}
+	if strings.TrimSpace(task.Role) != "" {
+		fields = append(fields, "role="+task.Role)
+	}
+	if len(fields) == 0 {
+		return ""
+	}
+	return " " + strings.Join(fields, " ")
 }
 
 func (s *DaemonSubmitter) replayLastTask(ctx context.Context) (string, bool, error) {
@@ -2086,7 +2220,8 @@ func (s *DaemonSubmitter) resumeLatestWorkspaceSession(ctx context.Context) (tas
 	if err != nil {
 		return taskpkg.Session{}, false, err
 	}
-	for _, session := range sessions {
+	if len(sessions) > 0 {
+		session := sessions[0]
 		s.rememberSession(session.ID)
 		if session.LastTaskID != "" {
 			s.rememberTask(session.LastTaskID)

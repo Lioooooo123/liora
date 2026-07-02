@@ -740,6 +740,165 @@ func TestDaemonSubmitterWatchesExplicitTasks(t *testing.T) {
 	}
 }
 
+func TestDaemonSubmitterShowsAndWatchesChildTasksAndThreads(t *testing.T) {
+	root := t.TempDir()
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Store: persistentStore}))
+	defer server.Close()
+	client, err := daemonclient.New(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentThread, err := client.CreateConversationThread(t.Context(), store.CreateConversationThreadRequest{Workspace: root, Title: "Parent thread"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childThread, err := client.CreateConversationThread(t.Context(), store.CreateConversationThreadRequest{Workspace: root, Title: "Child thread"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: root,
+		Prompt:    "parent orchestration",
+		ThreadID:  &parentThread.ID,
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace:      root,
+		Prompt:         "child investigation",
+		ThreadID:       &childThread.ID,
+		Natural:        false,
+		Origin:         taskpkg.OriginSubagent,
+		Automation:     taskpkg.AutomationMetadata{Kind: taskpkg.AutomationKindSubagent, Risk: taskpkg.AutomationRiskSafe},
+		ParentTaskID:   parent.ID,
+		ParentThreadID: parentThread.ID,
+		ChildThreadID:  childThread.ID,
+		SubagentName:   "explorer",
+		Role:           "search",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), parent.ID, taskpkg.EventSubagentStarted, taskpkg.EventPayload{ParentTaskID: parent.ID, ID: child.ID, Message: "explorer started", Status: string(taskpkg.StatusRunning)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), parent.ID, taskpkg.EventCompleted, taskpkg.EventPayload{Status: string(taskpkg.StatusCompleted), Message: "parent done"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), child.ID, taskpkg.EventSummary, taskpkg.EventPayload{Message: "child found the answer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), child.ID, taskpkg.EventCompleted, taskpkg.EventPayload{Status: string(taskpkg.StatusCompleted), Message: "child done"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CreateCrossThreadMessage(t.Context(), childThread.ID, store.CreateCrossThreadMessageRequest{
+		FromThreadID:    parentThread.ID,
+		ToThreadID:      childThread.ID,
+		TaskID:          child.ID,
+		Summary:         "child handoff ready",
+		ExplicitContent: "child thread output",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	submitter := newTestSubmitter(t, server.URL, root, false)
+
+	tasksOutput, handled, err := submitter.HandleCommand(t.Context(), "/tasks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{parent.ID, child.ID, "parent=" + parent.ID, "parent_thread=" + parentThread.ID, "child_thread=" + childThread.ID, "subagent=explorer", "role=search"} {
+		if !handled || !strings.Contains(tasksOutput, want) {
+			t.Fatalf("expected /tasks output to contain %q handled=%v output=%q", want, handled, tasksOutput)
+		}
+	}
+
+	threadsOutput, handled, err := submitter.HandleCommand(t.Context(), "/threads")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{childThread.ID, "child_of=via=" + child.ID, "parent=" + parent.ID, "subagent=explorer", "role=search"} {
+		if !handled || !strings.Contains(threadsOutput, want) {
+			t.Fatalf("expected /threads output to contain %q handled=%v output=%q", want, handled, threadsOutput)
+		}
+	}
+
+	watchOutput, handled, err := submitter.HandleCommand(t.Context(), "/watch children "+parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Watch child tasks for " + parent.ID, "- " + parent.ID, "- " + child.ID, "subagent.started", "explorer started", "task.summary: child found the answer", "task.completed"} {
+		if !handled || !strings.Contains(watchOutput, want) {
+			t.Fatalf("expected /watch children output to contain %q handled=%v output=%q", want, handled, watchOutput)
+		}
+	}
+
+	tailOutput, handled, err := submitter.HandleCommand(t.Context(), "/tail "+child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(tailOutput, "child found the answer") || strings.Contains(tailOutput, "parent done") {
+		t.Fatalf("expected /tail child output to expand only child task handled=%v output=%q", handled, tailOutput)
+	}
+
+	inboxOutput, handled, err := submitter.HandleCommand(t.Context(), "/thread-inbox "+childThread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Thread inbox " + childThread.ID, "from=" + parentThread.ID, "task=" + child.ID, "child handoff ready"} {
+		if !handled || !strings.Contains(inboxOutput, want) {
+			t.Fatalf("expected /thread-inbox child output to contain %q handled=%v output=%q", want, handled, inboxOutput)
+		}
+	}
+}
+
+func TestDaemonSubmitterWatchChildrenHandlesBoundaryInputs(t *testing.T) {
+	root := t.TempDir()
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	parent, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: root,
+		Prompt:    "parent with no children",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, false)
+
+	for _, command := range []string{"/watch children", "/watch children " + parent.ID + " extra"} {
+		output, handled, err := submitter.HandleCommand(t.Context(), command)
+		if err == nil || !handled || output != "" || !strings.Contains(err.Error(), "usage: /watch children <parent_task_id>") {
+			t.Fatalf("expected usage error for %q handled=%v output=%q err=%v", command, handled, output, err)
+		}
+	}
+	output, handled, err := submitter.HandleCommand(t.Context(), "/watch children task_missing")
+	if err == nil || !handled || output != "" || !strings.Contains(err.Error(), "parent task task_missing was not found") {
+		t.Fatalf("expected unknown parent error handled=%v output=%q err=%v", handled, output, err)
+	}
+	output, handled, err = submitter.HandleCommand(t.Context(), "/watch children "+parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || !strings.Contains(output, "No child daemon tasks for parent "+parent.ID) {
+		t.Fatalf("unexpected no-child output handled=%v output=%q", handled, output)
+	}
+	output, handled, err = submitter.HandleCommand(t.Context(), "/tail task_missing")
+	if err != nil || !handled || !strings.Contains(output, "No event output for task task_missing.") {
+		t.Fatalf("expected unknown child tail to return empty output handled=%v output=%q err=%v", handled, output, err)
+	}
+}
+
 func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 	root := t.TempDir()
 	repo, closeDB := newTestRepository(t)
