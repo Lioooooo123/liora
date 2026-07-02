@@ -1812,6 +1812,48 @@ func TestRepositoryCancelsTask(t *testing.T) {
 	}
 }
 
+func TestRepositoryCancelResolvesPendingApprovalItem(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	repo := NewRepository(db)
+	created, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "run rm -rf build",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), created.ID, StatusWaitingUser); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), created.ID, EventPermissionRequest, EventPayload{
+		Tool:       "run",
+		ToolCallID: "cancelled-call",
+		Input:      "rm -rf build",
+		Risk:       "dangerous_shell",
+		Status:     string(StatusWaitingUser),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.Cancel(t.Context(), created.ID, "user requested"); err != nil {
+		t.Fatal(err)
+	}
+
+	item, ok, err := repo.ApprovalItemForTask(t.Context(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || item.Status != "resolved" || item.Decision != "cancelled" || item.ResolvedAt == nil {
+		t.Fatalf("expected cancelled approval item, got %#v ok=%v", item, ok)
+	}
+}
+
 func TestRepositoryQueuesAndReceivesUserInput(t *testing.T) {
 	workspace := t.TempDir()
 	db, err := store.New(t.TempDir()).OpenDB()
@@ -2021,6 +2063,13 @@ func TestRepositoryExpiryStaleMarksWaitScheduleAndHookTasks(t *testing.T) {
 		if !taskEventsHavePayloadStatus(t, events, StatusStale) {
 			t.Fatalf("expected stale event payload for %s, got %#v", id, events)
 		}
+	}
+	item, ok, err := repo.ApprovalItemForTask(t.Context(), approval.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || item.Status != "resolved" || item.Decision != "expired" || item.ResolvedAt == nil {
+		t.Fatalf("expected expired approval item, got %#v ok=%v", item, ok)
 	}
 }
 

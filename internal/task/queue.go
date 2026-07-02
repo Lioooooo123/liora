@@ -481,21 +481,44 @@ func (r *Repository) MarkExpiredTasksStale(ctx context.Context, now time.Time, r
 		if !ok || now.Before(expiresAt) {
 			continue
 		}
-		if err := r.UpdateStatus(ctx, id, StatusStale); err != nil {
-			return marked, err
-		}
-		if err := r.AppendEvent(ctx, id, EventError, EventPayload{
-			Message:   reason,
-			Status:    string(StatusStale),
-			Reason:    "stale",
-			ExpiresAt: formatTime(expiresAt),
-			StaleAt:   formatTime(now),
-		}); err != nil {
+		if err := r.markExpiredTaskStale(ctx, id, reason, expiresAt, now); err != nil {
 			return marked, err
 		}
 		marked++
 	}
 	return marked, nil
+}
+
+func (r *Repository) markExpiredTaskStale(ctx context.Context, id string, reason string, expiresAt time.Time, now time.Time) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE tasks
+		SET status = ?, updated_at = ?, completed_at = COALESCE(?, completed_at)
+		WHERE id = ?
+	`, string(StatusStale), formatTime(now), formatTime(now), id); err != nil {
+		return err
+	}
+	if err := r.resolveApprovalItemTx(ctx, tx, id, "expired", "system", now); err != nil {
+		return err
+	}
+	if err := r.appendEventTx(ctx, tx, id, EventError, EventPayload{
+		Message:   reason,
+		Status:    string(StatusStale),
+		Reason:    "stale",
+		ExpiresAt: formatTime(expiresAt),
+		StaleAt:   formatTime(now),
+	}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	r.notifyEventSubscribers(id)
+	return nil
 }
 
 func (r *Repository) latestExpiry(ctx context.Context, taskID string) (time.Time, bool, error) {

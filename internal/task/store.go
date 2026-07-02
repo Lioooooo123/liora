@@ -1741,17 +1741,37 @@ func (r *Repository) DenyApproval(ctx context.Context, id string, reason string,
 }
 
 func (r *Repository) Cancel(ctx context.Context, id string, reason string) error {
-	if err := r.UpdateStatus(ctx, id, StatusCancelled); err != nil {
+	now := time.Now().UTC()
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
+	defer tx.Rollback()
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		reason = "cancelled"
 	}
-	return r.AppendEvent(ctx, id, EventCancelled, EventPayload{
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE tasks
+		SET status = ?, updated_at = ?, completed_at = COALESCE(?, completed_at)
+		WHERE id = ?
+	`, string(StatusCancelled), formatTime(now), formatTime(now), id); err != nil {
+		return err
+	}
+	if err := r.resolveApprovalItemTx(ctx, tx, id, "cancelled", "user", now); err != nil {
+		return err
+	}
+	if err := r.appendEventTx(ctx, tx, id, EventCancelled, EventPayload{
 		Message: reason,
 		Status:  string(StatusCancelled),
-	})
+	}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	r.notifyEventSubscribers(id)
+	return nil
 }
 
 func (r *Repository) AppendEvent(ctx context.Context, taskID string, eventType EventType, payload EventPayload) error {
