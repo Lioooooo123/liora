@@ -169,6 +169,39 @@ func argInt(args map[string]any, key string, fallback int) int {
 	return fallback
 }
 
+func argNonNegativeInt(args map[string]any, key string, fallback int) (int, error) {
+	value, ok := args[key]
+	if !ok {
+		return fallback, nil
+	}
+	var parsed int
+	switch number := value.(type) {
+	case float64:
+		parsed = int(number)
+		if number != float64(parsed) {
+			return 0, fmt.Errorf("%s must be an integer", key)
+		}
+	case int:
+		parsed = number
+	case string:
+		text := strings.TrimSpace(number)
+		if text == "" {
+			return 0, fmt.Errorf("%s must be an integer", key)
+		}
+		var err error
+		parsed, err = strconv.Atoi(text)
+		if err != nil {
+			return 0, fmt.Errorf("%s must be an integer", key)
+		}
+	default:
+		return 0, fmt.Errorf("%s must be an integer", key)
+	}
+	if parsed < 0 {
+		return 0, fmt.Errorf("%s must be non-negative", key)
+	}
+	return parsed, nil
+}
+
 func argBool(args map[string]any, key string) bool {
 	if value, ok := args[key]; ok {
 		if flag, ok := value.(bool); ok {

@@ -112,6 +112,56 @@ func TestToolLoopRoutesTaskControlToolsThroughExecutor(t *testing.T) {
 	}
 }
 
+func TestTaskOutputRejectsMalformedWaitAndLimit(t *testing.T) {
+	root := t.TempDir()
+	a := newLoopAgent(t, root)
+	executor := &fakeTaskExecutor{}
+	a.SetTaskExecutor(executor)
+
+	cases := []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{
+			name: "negative wait",
+			args: map[string]any{"task_id": "task_child", "wait_ms": -1},
+			want: "wait_ms must be non-negative",
+		},
+		{
+			name: "fractional wait",
+			args: map[string]any{"task_id": "task_child", "wait_ms": 1.5},
+			want: "wait_ms must be an integer",
+		},
+		{
+			name: "non numeric wait",
+			args: map[string]any{"task_id": "task_child", "wait_ms": "soon"},
+			want: "wait_ms must be an integer",
+		},
+		{
+			name: "negative limit",
+			args: map[string]any{"task_id": "task_child", "limit": -10},
+			want: "limit must be non-negative",
+		},
+		{
+			name: "wrong limit type",
+			args: map[string]any{"task_id": "task_child", "limit": true},
+			want: "limit must be an integer",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := a.executeTaskOutput(t.Context(), tc.args)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected error containing %q, got %v", tc.want, err)
+			}
+			if len(executor.outputs) != 0 {
+				t.Fatalf("invalid TaskOutput args should not call executor, got %#v", executor.outputs)
+			}
+		})
+	}
+}
+
 func TestToolLoopTaskToolsFailClosedWithoutExecutor(t *testing.T) {
 	root := t.TempDir()
 	a := newLoopAgent(t, root)

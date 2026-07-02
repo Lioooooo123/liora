@@ -30,10 +30,18 @@ func (a *Agent) executeTaskOutput(ctx context.Context, args map[string]any) (str
 	if a.tasks == nil {
 		return "", fmt.Errorf("no task executor configured")
 	}
+	waitMilliseconds, err := argNonNegativeInt(args, "wait_ms", 0)
+	if err != nil {
+		return "", fmt.Errorf("TaskOutput %w", err)
+	}
+	limit, err := argNonNegativeInt(args, "limit", 0)
+	if err != nil {
+		return "", fmt.Errorf("TaskOutput %w", err)
+	}
 	request := TaskOutputRequest{
 		TaskID:           strings.TrimSpace(argString(args, "task_id")),
-		WaitMilliseconds: argInt(args, "wait_ms", 0),
-		Limit:            argInt(args, "limit", 0),
+		WaitMilliseconds: waitMilliseconds,
+		Limit:            limit,
 	}
 	if request.TaskID == "" {
 		return "", fmt.Errorf("TaskOutput expects a task_id")
