@@ -411,14 +411,29 @@ type CreateSessionResponse struct {
 }
 
 type Workbench struct {
-	Workspace         string            `json:"workspace,omitempty"`
-	Sessions          []Session         `json:"sessions"`
-	Threads           []ThreadWorkbench `json:"threads"`
-	ActiveTasks       []Task            `json:"active_tasks"`
-	QueuedTasks       []Task            `json:"queued_tasks"`
-	RecentTasks       []Task            `json:"recent_tasks"`
-	PendingApprovals  []PendingApproval `json:"pending_approvals"`
-	PendingUserInputs []PendingInput    `json:"pending_user_inputs"`
+	Workspace                 string                 `json:"workspace,omitempty"`
+	Sessions                  []Session              `json:"sessions"`
+	Threads                   []ThreadWorkbench      `json:"threads"`
+	ActiveTasks               []Task                 `json:"active_tasks"`
+	QueuedTasks               []Task                 `json:"queued_tasks"`
+	RecentTasks               []Task                 `json:"recent_tasks"`
+	BackgroundTasks           []Task                 `json:"background_tasks"`
+	BackgroundUnfinishedTasks []Task                 `json:"background_unfinished_tasks"`
+	BackgroundLostTasks       []Task                 `json:"background_lost_tasks"`
+	BackgroundCompletedTasks  []Task                 `json:"background_completed_tasks"`
+	BackgroundOutputs         []BackgroundTaskOutput `json:"background_outputs"`
+	PendingApprovals          []PendingApproval      `json:"pending_approvals"`
+	PendingUserInputs         []PendingInput         `json:"pending_user_inputs"`
+}
+
+type BackgroundTaskOutput struct {
+	TaskID           string    `json:"task_id"`
+	Status           Status    `json:"status"`
+	Title            string    `json:"title,omitempty"`
+	Output           string    `json:"output,omitempty"`
+	ArtifactURI      string    `json:"artifact_uri,omitempty"`
+	ArtifactTailHint string    `json:"artifact_tail_hint,omitempty"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type ThreadWorkbench struct {

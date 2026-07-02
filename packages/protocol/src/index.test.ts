@@ -562,6 +562,24 @@ describe("daemon protocol client", () => {
             active_tasks: [daemonTask({ id: "task-001", workspace: "/repo", origin: "background" })],
             queued_tasks: null,
             recent_tasks: [daemonTask({ id: "task-001", workspace: "/repo", origin: "background" })],
+            background_tasks: [daemonTask({ id: "task-001", workspace: "/repo", origin: "background" })],
+            background_unfinished_tasks: [daemonTask({ id: "task-001", workspace: "/repo", origin: "background" })],
+            background_lost_tasks: [daemonTask({ id: "task-lost", workspace: "/repo", origin: "background", status: "lost" })],
+            background_completed_tasks: [
+              daemonTask({ id: "task-done", workspace: "/repo", origin: "background", status: "completed" }),
+            ],
+            background_outputs: [
+              {
+                task_id: "task-done",
+                status: "completed",
+                title: "done",
+                output: "completed output before restart",
+                artifact_uri: "artifact://artifacts/sessions/session-001/tasks/task-done/tool-results/out.txt",
+                artifact_tail_hint:
+                  "/artifact artifact://artifacts/sessions/session-001/tasks/task-done/tool-results/out.txt tail",
+                updated_at: "2026-07-02T00:00:00Z",
+              },
+            ],
             pending_approvals: null,
             pending_user_inputs: null,
           })
@@ -608,6 +626,8 @@ describe("daemon protocol client", () => {
     expect(workbench.threads[0]?.pending_approvals[0]?.item?.tool_call_id).toBe("toolcall-001")
     expect(workbench.threads[0]?.pending_approvals[0]?.item?.tool_name).toBe("run")
     expect(workbench.active_tasks[0]?.origin).toBe("background")
+    expect(workbench.background_lost_tasks[0]?.status).toBe("lost")
+    expect(workbench.background_outputs[0]?.artifact_tail_hint).toContain("/artifact artifact://")
     expect(calls.map((call) => call.url)).toEqual([
       "http://daemon.local/v1/tasks",
       "http://daemon.local/v1/workbench?workspace=%2Frepo&limit=5",

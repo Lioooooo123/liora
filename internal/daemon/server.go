@@ -653,6 +653,23 @@ func (s *server) handleWorkbench(w http.ResponseWriter, r *http.Request) {
 		if task.Status == taskpkg.StatusQueued {
 			workbench.QueuedTasks = append(workbench.QueuedTasks, task)
 		}
+		if taskpkg.IsBackgroundOrigin(task.Origin) {
+			workbench.BackgroundTasks = append(workbench.BackgroundTasks, task)
+			switch {
+			case isBackgroundUnfinishedStatus(task.Status):
+				workbench.BackgroundUnfinishedTasks = append(workbench.BackgroundUnfinishedTasks, task)
+			case task.Status == taskpkg.StatusLost:
+				workbench.BackgroundLostTasks = append(workbench.BackgroundLostTasks, task)
+			case task.Status == taskpkg.StatusCompleted:
+				workbench.BackgroundCompletedTasks = append(workbench.BackgroundCompletedTasks, task)
+			}
+			output, err := s.backgroundTaskOutput(r.Context(), task)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			workbench.BackgroundOutputs = append(workbench.BackgroundOutputs, output)
+		}
 		if task.Status == taskpkg.StatusWaitingUser {
 			eventType, request, err := s.latestWaitingRequest(r.Context(), task.ID)
 			if err != nil {
@@ -691,9 +708,85 @@ func (s *server) handleWorkbench(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, workbench)
 }
 
+const backgroundOutputPreviewRunes = 1600
+
+func (s *server) backgroundTaskOutput(ctx context.Context, task taskpkg.Task) (taskpkg.BackgroundTaskOutput, error) {
+	events, err := s.repo.Events(ctx, task.ID, 100)
+	if err != nil {
+		return taskpkg.BackgroundTaskOutput{}, err
+	}
+	result := taskpkg.BackgroundTaskOutput{
+		TaskID:    task.ID,
+		Status:    task.Status,
+		Title:     task.Title,
+		UpdatedAt: task.UpdatedAt,
+	}
+	var lifecycleOutput string
+	for i := len(events) - 1; i >= 0; i-- {
+		var payload taskpkg.EventPayload
+		if err := json.Unmarshal([]byte(events[i].Payload), &payload); err != nil {
+			continue
+		}
+		if result.ArtifactURI == "" && events[i].Type == taskpkg.EventArtifactReference {
+			result.ArtifactURI = strings.TrimSpace(payload.Path)
+			if result.ArtifactURI != "" {
+				result.ArtifactTailHint = "/artifact " + result.ArtifactURI + " tail"
+			}
+		}
+		if result.Output == "" {
+			if output, lifecycle := backgroundOutputText(events[i].Type, payload); lifecycle {
+				lifecycleOutput = firstNonEmpty(lifecycleOutput, output)
+			} else {
+				result.Output = output
+			}
+		}
+		if result.Output != "" && result.ArtifactURI != "" {
+			break
+		}
+	}
+	result.Output = firstNonEmpty(result.Output, lifecycleOutput)
+	result.Output = truncateBackgroundOutput(result.Output)
+	return result, nil
+}
+
+func backgroundOutputText(eventType taskpkg.EventType, payload taskpkg.EventPayload) (string, bool) {
+	switch eventType {
+	case taskpkg.EventToolResult:
+		return firstNonEmpty(payload.Output, payload.Message, payload.Status), false
+	case taskpkg.EventSummary:
+		return payload.Message, false
+	case taskpkg.EventDiff:
+		return payload.Diff, false
+	case taskpkg.EventArtifactReference:
+		return firstNonEmpty(payload.Message, payload.Path), true
+	case taskpkg.EventError, taskpkg.EventCancelled, taskpkg.EventCompleted, taskpkg.EventTaskQueued:
+		return firstNonEmpty(payload.Message, payload.Reason, payload.Status), true
+	default:
+		return "", false
+	}
+}
+
+func truncateBackgroundOutput(output string) string {
+	output = strings.TrimSpace(output)
+	runes := []rune(output)
+	if len(runes) <= backgroundOutputPreviewRunes {
+		return output
+	}
+	return string(runes[:backgroundOutputPreviewRunes]) + "\n[...truncated]"
+}
+
 func isActiveStatus(status taskpkg.Status) bool {
 	switch status {
 	case taskpkg.StatusDraft, taskpkg.StatusQueued, taskpkg.StatusPlanning, taskpkg.StatusRunning, taskpkg.StatusWaitingUser, taskpkg.StatusLost, taskpkg.StatusRecovered:
+		return true
+	default:
+		return false
+	}
+}
+
+func isBackgroundUnfinishedStatus(status taskpkg.Status) bool {
+	switch status {
+	case taskpkg.StatusDraft, taskpkg.StatusQueued, taskpkg.StatusPlanning, taskpkg.StatusRunning, taskpkg.StatusWaitingUser, taskpkg.StatusRecovered:
 		return true
 	default:
 		return false

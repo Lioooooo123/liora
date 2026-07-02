@@ -1752,6 +1752,27 @@ func (s *DaemonSubmitter) showWorkbench(ctx context.Context) (string, bool, erro
 			lines = append(lines, fmt.Sprintf("- %s %s session=%s", task.ID, task.Title, emptyDash(task.SessionID)))
 		}
 	}
+	lines = append(lines, "Background unfinished:")
+	appendWorkbenchTaskList(&lines, workbench.BackgroundUnfinishedTasks)
+	lines = append(lines, "Background lost:")
+	appendWorkbenchTaskList(&lines, workbench.BackgroundLostTasks)
+	lines = append(lines, "Background completed:")
+	appendWorkbenchTaskList(&lines, workbench.BackgroundCompletedTasks)
+	lines = append(lines, "Background outputs:")
+	if len(workbench.BackgroundOutputs) == 0 {
+		lines = append(lines, "- none")
+	} else {
+		for _, output := range workbench.BackgroundOutputs {
+			preview := strings.TrimSpace(output.Output)
+			if preview == "" {
+				preview = "(no output yet)"
+			}
+			lines = append(lines, fmt.Sprintf("- %s [%s] %s", output.TaskID, output.Status, firstLine(preview)))
+			if strings.TrimSpace(output.ArtifactTailHint) != "" {
+				lines = append(lines, "  "+output.ArtifactTailHint)
+			}
+		}
+	}
 	lines = append(lines, "Recent tasks:")
 	if len(workbench.RecentTasks) == 0 {
 		lines = append(lines, "- none")
@@ -1765,6 +1786,16 @@ func (s *DaemonSubmitter) showWorkbench(ctx context.Context) (string, bool, erro
 		}
 	}
 	return strings.Join(lines, "\n"), true, nil
+}
+
+func appendWorkbenchTaskList(lines *[]string, tasks []taskpkg.Task) {
+	if len(tasks) == 0 {
+		*lines = append(*lines, "- none")
+		return
+	}
+	for _, task := range tasks {
+		*lines = append(*lines, fmt.Sprintf("- %s [%s] %s", task.ID, task.Status, task.Title))
+	}
 }
 
 func (s *DaemonSubmitter) watchTasks(ctx context.Context, args string) (string, bool, error) {

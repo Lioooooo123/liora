@@ -580,6 +580,18 @@ export const pendingApprovalSchema = z
   })
   .strict()
 
+export const backgroundTaskOutputSchema = z
+  .object({
+    task_id: z.string(),
+    status: z.string(),
+    title: z.string().optional(),
+    output: z.string().optional(),
+    artifact_uri: z.string().optional(),
+    artifact_tail_hint: z.string().optional(),
+    updated_at: z.string(),
+  })
+  .strict()
+
 export const threadWorkbenchSchema = z
   .object({
     id: z.string(),
@@ -606,6 +618,15 @@ export const workbenchSchema = z
     active_tasks: nullableTasksSchema,
     queued_tasks: nullableTasksSchema,
     recent_tasks: nullableTasksSchema,
+    background_tasks: nullableTasksSchema.optional().transform((tasks) => tasks ?? []),
+    background_unfinished_tasks: nullableTasksSchema.optional().transform((tasks) => tasks ?? []),
+    background_lost_tasks: nullableTasksSchema.optional().transform((tasks) => tasks ?? []),
+    background_completed_tasks: nullableTasksSchema.optional().transform((tasks) => tasks ?? []),
+    background_outputs: z
+      .array(backgroundTaskOutputSchema)
+      .nullable()
+      .optional()
+      .transform((outputs) => outputs ?? []),
     pending_approvals: z.array(pendingApprovalSchema).nullable().transform((items) => items ?? []),
     pending_user_inputs: z.array(pendingApprovalSchema).nullable().transform((items) => items ?? []),
   })

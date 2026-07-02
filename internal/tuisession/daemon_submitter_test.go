@@ -1062,6 +1062,81 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 	}
 }
 
+func TestDaemonSubmitterWorkbenchShowsRestartedBackgroundOutputs(t *testing.T) {
+	root := t.TempDir()
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	lost, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace:  root,
+		Prompt:     "lost background",
+		Natural:    false,
+		Origin:     taskpkg.OriginBackground,
+		Automation: taskpkg.AutomationMetadata{Kind: taskpkg.AutomationKindBackground, Risk: taskpkg.AutomationRiskSafe},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), lost.ID, taskpkg.StatusRunning); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), lost.ID, taskpkg.EventToolResult, taskpkg.EventPayload{Tool: "run", Output: "lost output before restart", Status: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace:  root,
+		Prompt:     "completed background",
+		Natural:    false,
+		Origin:     taskpkg.OriginBackground,
+		Automation: taskpkg.AutomationMetadata{Kind: taskpkg.AutomationKindBackground, Risk: taskpkg.AutomationRiskSafe},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), completed.ID, taskpkg.StatusCompleted); err != nil {
+		t.Fatal(err)
+	}
+	artifactURI := "artifact://artifacts/sessions/" + completed.SessionID + "/tasks/" + completed.ID + "/tool-results/out.txt"
+	if err := repo.AppendEvent(t.Context(), completed.ID, taskpkg.EventToolResult, taskpkg.EventPayload{Tool: "run", Output: "completed output before restart", Status: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), completed.ID, taskpkg.EventArtifactReference, taskpkg.EventPayload{Tool: "run", Path: artifactURI, Message: "completed artifact output"}); err != nil {
+		t.Fatal(err)
+	}
+	empty, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace:  root,
+		Prompt:     "empty background",
+		Natural:    false,
+		Origin:     taskpkg.OriginBackground,
+		Automation: taskpkg.AutomationMetadata{Kind: taskpkg.AutomationKindBackground, Risk: taskpkg.AutomationRiskSafe},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+
+	workbench, handled, err := submitter.HandleCommand(t.Context(), "/workbench")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Background lost:",
+		lost.ID,
+		"lost output before restart",
+		"Background completed:",
+		completed.ID,
+		"completed output before restart",
+		"/artifact " + artifactURI + " tail",
+		empty.ID,
+		"(no output yet)",
+	} {
+		if !handled || !strings.Contains(workbench, want) {
+			t.Fatalf("expected workbench to contain %q handled=%v output=%q", want, handled, workbench)
+		}
+	}
+}
+
 func TestDaemonSubmitterShowsPromptContextSourceSummary(t *testing.T) {
 	root := t.TempDir()
 	persistentStore := store.New(t.TempDir())

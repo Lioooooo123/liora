@@ -688,6 +688,46 @@ func TestClientSessionLifecycle(t *testing.T) {
 	}
 }
 
+func TestClientWorkbenchDecodesBackgroundOutputs(t *testing.T) {
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	workspace := t.TempDir()
+	background, err := repo.Create(t.Context(), task.CreateRequest{
+		Workspace:  workspace,
+		Prompt:     "completed background",
+		Natural:    false,
+		Origin:     task.OriginBackground,
+		Automation: task.AutomationMetadata{Kind: task.AutomationKindBackground, Risk: task.AutomationRiskSafe},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), background.ID, task.StatusCompleted); err != nil {
+		t.Fatal(err)
+	}
+	artifactURI := "artifact://artifacts/sessions/" + background.SessionID + "/tasks/" + background.ID + "/tool-results/out.txt"
+	if err := repo.AppendEvent(t.Context(), background.ID, task.EventToolResult, task.EventPayload{Tool: "run", Output: "client decoded background output", Status: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), background.ID, task.EventArtifactReference, task.EventPayload{Tool: "run", Path: artifactURI, Message: "artifact output"}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+
+	workbench, err := client.Workbench(t.Context(), workspace, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsTask(workbench.BackgroundTasks, background.ID) || !containsTask(workbench.BackgroundCompletedTasks, background.ID) {
+		t.Fatalf("expected background task buckets, got %#v", workbench)
+	}
+	if len(workbench.BackgroundOutputs) != 1 || workbench.BackgroundOutputs[0].TaskID != background.ID || !strings.Contains(workbench.BackgroundOutputs[0].Output, "client decoded background output") || workbench.BackgroundOutputs[0].ArtifactURI != artifactURI {
+		t.Fatalf("unexpected background outputs %#v", workbench.BackgroundOutputs)
+	}
+}
+
 func stringPtr(value string) *string {
 	return &value
 }

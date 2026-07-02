@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1068,6 +1069,183 @@ func TestServerRestartRecovery_isIdempotentAndIgnoresTerminalAndMalformedHistory
 	if terminalAfter.Status != taskpkg.StatusCompleted {
 		t.Fatalf("expected terminal task to remain completed, got %#v", terminalAfter)
 	}
+}
+
+func TestServerRestartWorkbenchListsBackgroundTasksAndOutputs(t *testing.T) {
+	workspace := t.TempDir()
+	otherWorkspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	queued := createBackgroundTaskForWorkbench(t, repo, workspace, "queued background", taskpkg.StatusQueued)
+	lost := createBackgroundTaskForWorkbench(t, repo, workspace, "running background", taskpkg.StatusRunning)
+	completed := createBackgroundTaskForWorkbench(t, repo, workspace, "completed background", taskpkg.StatusCompleted)
+	other := createBackgroundTaskForWorkbench(t, repo, otherWorkspace, "other background", taskpkg.StatusCompleted)
+	foreground, err := repo.Create(t.Context(), taskpkg.CreateRequest{Workspace: workspace, Prompt: "foreground done", Natural: true, Origin: taskpkg.OriginForeground})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), foreground.ID, taskpkg.StatusCompleted); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), queued.ID, taskpkg.EventToolResult, taskpkg.EventPayload{Tool: "run", Output: "queued output before restart", Status: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	artifactURI := "artifact://artifacts/sessions/" + completed.SessionID + "/tasks/" + completed.ID + "/tool-results/out.txt"
+	if err := repo.AppendEvent(t.Context(), completed.ID, taskpkg.EventToolResult, taskpkg.EventPayload{Tool: "run", Output: "completed output before restart", Status: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), completed.ID, taskpkg.EventArtifactReference, taskpkg.EventPayload{Tool: "run", Path: artifactURI, Message: "completed artifact output"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), lost.ID, taskpkg.EventToolResult, taskpkg.EventPayload{Tool: "run", Output: "lost output before restart", Status: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(NewServer(Config{Repository: repo}))
+	defer server.Close()
+
+	var workbench taskpkg.Workbench
+	resp, err := http.Get(server.URL + "/v1/workbench?workspace=" + url.QueryEscape(workspace) + "&limit=20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected workbench status %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&workbench); err != nil {
+		t.Fatal(err)
+	}
+	if !taskListContainsID(workbench.BackgroundTasks, queued.ID) || !taskListContainsID(workbench.BackgroundTasks, lost.ID) || !taskListContainsID(workbench.BackgroundTasks, completed.ID) {
+		t.Fatalf("expected all workspace background tasks, got %#v", workbench.BackgroundTasks)
+	}
+	if taskListContainsID(workbench.BackgroundTasks, other.ID) || taskListContainsID(workbench.BackgroundTasks, foreground.ID) {
+		t.Fatalf("background tasks leaked other workspace or foreground tasks: %#v", workbench.BackgroundTasks)
+	}
+	if !taskListContainsID(workbench.BackgroundUnfinishedTasks, queued.ID) || !taskListContainsID(workbench.BackgroundLostTasks, lost.ID) || !taskListContainsID(workbench.BackgroundCompletedTasks, completed.ID) {
+		t.Fatalf("unexpected background buckets unfinished=%#v lost=%#v completed=%#v", workbench.BackgroundUnfinishedTasks, workbench.BackgroundLostTasks, workbench.BackgroundCompletedTasks)
+	}
+	lostOutput, ok := backgroundOutputForTask(workbench.BackgroundOutputs, lost.ID)
+	if !ok || lostOutput.Status != taskpkg.StatusLost || !strings.Contains(lostOutput.Output, "lost output before restart") {
+		t.Fatalf("expected lost output summary, ok=%t output=%#v", ok, lostOutput)
+	}
+	completedOutput, ok := backgroundOutputForTask(workbench.BackgroundOutputs, completed.ID)
+	if !ok || completedOutput.ArtifactURI != artifactURI || completedOutput.ArtifactTailHint != "/artifact "+artifactURI+" tail" || !strings.Contains(completedOutput.Output, "completed output before restart") {
+		t.Fatalf("expected completed artifact output summary, ok=%t output=%#v", ok, completedOutput)
+	}
+}
+
+func TestServerRestartWorkbenchBackgroundOutputsAreScopedAndStable(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	noOutput := createBackgroundTaskForWorkbench(t, repo, workspace, "draft with no output", taskpkg.StatusDraft)
+	malformed := createBackgroundTaskForWorkbench(t, repo, workspace, "malformed output", taskpkg.StatusCompleted)
+	foreground, err := repo.Create(t.Context(), taskpkg.CreateRequest{Workspace: workspace, Prompt: "foreground", Natural: true, Origin: taskpkg.OriginForeground})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), foreground.ID, taskpkg.StatusCompleted); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO task_events (id, task_id, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?)`, "event_bad_background_output", malformed.ID, string(taskpkg.EventToolResult), "{", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+
+	first := httptest.NewServer(NewServer(Config{Repository: repo}))
+	defer first.Close()
+	limitedWorkbench := getWorkbench(t, first.URL, workspace, 1)
+	firstWorkbench := getWorkbench(t, first.URL, workspace, 10)
+	firstEvents, err := repo.Events(t.Context(), noOutput.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstCount := countRestartRecoveryPayloads(firstEvents, taskpkg.StatusDraft)
+	second := httptest.NewServer(NewServer(Config{Repository: repo}))
+	defer second.Close()
+	secondWorkbench := getWorkbench(t, second.URL, workspace, 10)
+
+	if len(limitedWorkbench.BackgroundTasks) > 1 {
+		t.Fatalf("limit should bound background task listing, got %#v", limitedWorkbench.BackgroundTasks)
+	}
+	if taskListContainsID(firstWorkbench.BackgroundTasks, foreground.ID) {
+		t.Fatalf("foreground task leaked into background listing: %#v", firstWorkbench.BackgroundTasks)
+	}
+	output, ok := backgroundOutputForTask(secondWorkbench.BackgroundOutputs, noOutput.ID)
+	if !ok || output.Output != "" || output.ArtifactURI != "" {
+		t.Fatalf("missing output should produce empty-but-present summary, ok=%t output=%#v", ok, output)
+	}
+	secondEvents, err := repo.Events(t.Context(), noOutput.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCount := countRestartRecoveryPayloads(secondEvents, taskpkg.StatusDraft)
+	if firstCount != secondCount {
+		t.Fatalf("restart recovery should stay idempotent, before=%d after=%d", firstCount, secondCount)
+	}
+}
+
+func createBackgroundTaskForWorkbench(t *testing.T, repo *taskpkg.Repository, workspace string, prompt string, status taskpkg.Status) taskpkg.Task {
+	t.Helper()
+	created, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace:  workspace,
+		Prompt:     prompt,
+		Natural:    false,
+		Origin:     taskpkg.OriginBackground,
+		Automation: taskpkg.AutomationMetadata{Kind: taskpkg.AutomationKindBackground, Risk: taskpkg.AutomationRiskSafe},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	switch status {
+	case taskpkg.StatusDraft:
+	case taskpkg.StatusQueued:
+		if err := repo.Queue(t.Context(), created.ID); err != nil {
+			t.Fatal(err)
+		}
+	default:
+		if err := repo.UpdateStatus(t.Context(), created.ID, status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	task, err := repo.Get(t.Context(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return task
+}
+
+func getWorkbench(t *testing.T, baseURL string, workspace string, limit int) taskpkg.Workbench {
+	t.Helper()
+	resp, err := http.Get(baseURL + "/v1/workbench?workspace=" + url.QueryEscape(workspace) + "&limit=" + strconv.Itoa(limit))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected workbench status %d", resp.StatusCode)
+	}
+	var workbench taskpkg.Workbench
+	if err := json.NewDecoder(resp.Body).Decode(&workbench); err != nil {
+		t.Fatal(err)
+	}
+	return workbench
+}
+
+func backgroundOutputForTask(outputs []taskpkg.BackgroundTaskOutput, taskID string) (taskpkg.BackgroundTaskOutput, bool) {
+	for _, output := range outputs {
+		if output.TaskID == taskID {
+			return output, true
+		}
+	}
+	return taskpkg.BackgroundTaskOutput{}, false
 }
 
 func TestServerSessionTerminalIsolation_keepsQueuedWaitsAndSubagentTerminalsIndependent(t *testing.T) {
