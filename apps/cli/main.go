@@ -94,6 +94,13 @@ func main() {
 		}
 		return
 	}
+	if handled, err := handleHookCommand(context.Background(), flag.Args(), *workspacePath, persistentStore, os.Stdout); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	llmClient, err := llm.NewClient(llmConfig)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
