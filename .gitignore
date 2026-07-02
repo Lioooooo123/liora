@@ -6,6 +6,7 @@ liora.db
 .superpowers/
 .omo/
 .trae/
+implementation-notes.md
 dist/
 bin/
 node_modules/
