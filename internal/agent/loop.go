@@ -59,6 +59,7 @@ type toolOutcome struct {
 	output        string
 	failureOutput string
 	isError       bool
+	replayed      bool
 }
 
 func (l *ToolLoop) Run(ctx context.Context, prompt string) (Result, error) {
@@ -134,14 +135,16 @@ func (l *ToolLoop) Run(ctx context.Context, prompt string) (Result, error) {
 				seenFailures[signature] = true
 				anyError = true
 			}
-			l.agent.record(trace.Event{
-				Tool:         outcome.call.Name,
-				Input:        toolInput(outcome.call),
-				Output:       outcome.output,
-				Status:       status,
-				ToolCallID:   outcome.call.ID,
-				ToolResultID: toolResultID(outcome.call),
-			})
+			if !outcome.replayed {
+				l.agent.record(trace.Event{
+					Tool:         outcome.call.Name,
+					Input:        toolInput(outcome.call),
+					Output:       outcome.output,
+					Status:       status,
+					ToolCallID:   outcome.call.ID,
+					ToolResultID: toolResultID(outcome.call),
+				})
+			}
 			messages = append(messages, llm.Message{
 				Role:       "tool",
 				Content:    outcome.output,
@@ -174,8 +177,9 @@ func (l *ToolLoop) checkTurnPermissions(ctx context.Context, calls []llm.ToolCal
 	}
 	for _, call := range calls {
 		err := l.agent.checker.Check(ctx, permission.Request{
-			Tool:  call.Name,
-			Input: toolInput(call),
+			Tool:       call.Name,
+			ToolCallID: call.ID,
+			Input:      toolInput(call),
 		})
 		if err != nil {
 			return Result{
@@ -230,6 +234,11 @@ func (l *ToolLoop) dispatchParallel(ctx context.Context, calls []llm.ToolCall, o
 }
 
 func (l *ToolLoop) dispatchOne(ctx context.Context, call llm.ToolCall) toolOutcome {
+	if l.agent.replay != nil {
+		if replay, ok, err := l.agent.replay(ctx, call.ID); err == nil && ok {
+			return toolOutcome{call: call, output: replay.Output, replayed: true}
+		}
+	}
 	args, err := parseToolArgs(call.Arguments)
 	if err != nil {
 		message := fmt.Sprintf("invalid arguments JSON: %v", err)

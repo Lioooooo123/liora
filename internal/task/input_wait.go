@@ -6,14 +6,22 @@ import (
 )
 
 func (r *Runner) taskPrompt(ctx context.Context, task Task) (string, error) {
+	prompt := task.UserInput
+	completed, err := r.repo.CompletedToolResults(ctx, task.ID)
+	if err != nil {
+		return "", err
+	}
+	if summary := completedToolSummary(completed); summary != "" {
+		prompt = strings.TrimSpace(prompt + "\n\n" + summary)
+	}
 	answer, ok, err := r.repo.LatestUserInput(ctx, task.ID)
 	if err != nil {
 		return "", err
 	}
 	if !ok {
-		return task.UserInput, nil
+		return prompt, nil
 	}
-	return strings.TrimSpace(task.UserInput + "\n\nUser input after the previous pause:\n" + answer), nil
+	return strings.TrimSpace(prompt + "\n\nUser input after the previous pause:\n" + answer), nil
 }
 
 func (r *Runner) waitForUserInput(ctx context.Context, taskID string, question string) error {

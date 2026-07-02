@@ -902,6 +902,16 @@ func TestRunnerContinuesAfterApproval(t *testing.T) {
 	}
 	runner := NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: ""}))
 	runner.SetPermissionPolicy(permission.Policy{Mode: permission.ModePrompt})
+	if err := runner.Run(t.Context(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	waiting, err := repo.Get(t.Context(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waiting.Status != StatusWaitingUser {
+		t.Fatalf("expected waiting before approval, got %#v", waiting)
+	}
 	if err := repo.GrantApproval(t.Context(), task.ID); err != nil {
 		t.Fatal(err)
 	}

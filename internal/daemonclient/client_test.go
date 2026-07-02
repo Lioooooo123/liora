@@ -368,7 +368,7 @@ func TestClientUsesCapabilityTokenForSensitiveAPIs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !approved.ApprovalGranted {
+	if approved.Status != task.StatusDraft || approved.ApprovalGranted {
 		t.Fatalf("expected approved task, got %#v", approved)
 	}
 }
@@ -758,7 +758,7 @@ func TestClientApprovesWaitingTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !approved.ApprovalGranted {
+	if approved.Status != task.StatusDraft || approved.ApprovalGranted {
 		t.Fatalf("expected approved task, got %#v", approved)
 	}
 }

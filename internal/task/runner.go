@@ -150,6 +150,7 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 		}
 		turnRuntime.SetSandbox(r.sandboxRun)
 		turnRuntime.SetPermissionChecker(r.permissionChecker(task))
+		turnRuntime.SetCompletedToolLookup(r.completedToolLookup(task.ID))
 		turnRuntime.SetToolOutputSink(daemonToolOutputSink{
 			root:      r.store.Root(),
 			repo:      r.repo,
@@ -202,6 +203,7 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 	recorder := newRepositoryRecorder(ctx, r, task.ID)
 	runner := agent.New(workspace, recorder)
 	runner.SetPermissionChecker(r.permissionChecker(task))
+	runner.SetCompletedToolLookup(r.completedToolLookup(task.ID))
 	runner.SetSkillReader(r.store)
 	runner.SetTodoExecutor(repositoryTodoExecutor{
 		repo:         r.repo,
@@ -222,7 +224,6 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 
 func (r *Runner) permissionChecker(task Task) permission.Checker {
 	policy := r.permission
-	policy.Approved = policy.Approved || task.ApprovalGranted
 	policy.AllowWritesInPatchMode = r.patchMode
 	return permission.CheckerFunc(func(ctx context.Context, request permission.Request) error {
 		request.Workspace = task.Workspace
@@ -238,7 +239,22 @@ func (r *Runner) permissionChecker(task Task) permission.Checker {
 			}
 			policyForRequest.Rules = permissionRulesFromStore(rules)
 		}
-		return policyForRequest.Check(ctx, request)
+		err := policyForRequest.Check(ctx, request)
+		if err == nil {
+			return nil
+		}
+		var required *permission.RequiredError
+		if !errors.As(err, &required) {
+			return err
+		}
+		approved, approvedErr := r.repo.HasApprovedApproval(ctx, task.ID, required.Request)
+		if approvedErr != nil {
+			return approvedErr
+		}
+		if approved {
+			return nil
+		}
+		return err
 	})
 }
 
@@ -512,7 +528,7 @@ func (r *Runner) waitForPermission(ctx context.Context, taskID string, request p
 	_ = r.repo.AppendEvent(ctx, taskID, EventPermissionRequest, r.eventPayloadWithModel(task, EventPayload{
 		Message:    "Approval required before continuing.",
 		Tool:       request.Tool,
-		ToolCallID: newID("toolcall"),
+		ToolCallID: firstNonEmpty(request.ToolCallID, newID("toolcall")),
 		Input:      request.Input,
 		Status:     string(StatusWaitingUser),
 		Risk:       request.Risk,

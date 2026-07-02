@@ -37,6 +37,7 @@ type Agent struct {
 	outputs   ToolOutputSink
 	todos     TodoExecutor
 	traceSeq  int
+	replay    CompletedToolLookup
 }
 
 type MCPExecutor interface {
@@ -54,6 +55,12 @@ type SkillReader interface {
 type ToolOutputSink interface {
 	PersistToolOutput(ctx context.Context, call llm.ToolCall, output string) (string, error)
 }
+
+type CompletedToolResult struct {
+	Output string
+}
+
+type CompletedToolLookup func(ctx context.Context, toolCallID string) (CompletedToolResult, bool, error)
 
 type Todo struct {
 	ID           string `json:"id,omitempty"`
@@ -97,6 +104,10 @@ func (a *Agent) SetTodoExecutor(executor TodoExecutor) {
 	a.todos = executor
 }
 
+func (a *Agent) SetCompletedToolLookup(lookup CompletedToolLookup) {
+	a.replay = lookup
+}
+
 func (a *Agent) Run(ctx context.Context, prompt string) (Result, error) {
 	steps := parseSteps(prompt)
 	if len(steps) == 0 {
@@ -104,13 +115,20 @@ func (a *Agent) Run(ctx context.Context, prompt string) (Result, error) {
 	}
 
 	var latestDiff string
+	baseTraceSeq := a.traceSeq
 	for i, step := range steps {
 		select {
 		case <-ctx.Done():
 			return Result{Status: StatusFailed}, ctx.Err()
 		default:
 		}
-		if err := a.checkPermission(ctx, step); err != nil {
+		stepTraceSeq := baseTraceSeq + i + 1
+		toolCallID, toolResultID := fallbackToolIDs(stepTraceSeq)
+		if a.completed(ctx, toolCallID) {
+			a.rememberTraceSeq(stepTraceSeq)
+			continue
+		}
+		if err := a.checkPermission(ctx, step, toolCallID); err != nil {
 			return Result{
 				Status:  StatusWaitingUser,
 				Summary: fmt.Sprintf("waiting for approval at step %d/%d: %s", i+1, len(steps), step.Raw),
@@ -126,7 +144,6 @@ func (a *Agent) Run(ctx context.Context, prompt string) (Result, error) {
 			status = trace.StatusError
 			output = err.Error() + "\n" + output
 		}
-		toolCallID, toolResultID := a.nextFallbackToolIDs()
 		a.record(trace.Event{
 			Tool:         step.Tool,
 			Input:        strings.Join(step.Args, " "),
@@ -135,6 +152,7 @@ func (a *Agent) Run(ctx context.Context, prompt string) (Result, error) {
 			ToolCallID:   toolCallID,
 			ToolResultID: toolResultID,
 		})
+		a.rememberTraceSeq(stepTraceSeq)
 		if err != nil {
 			return Result{
 				Status:  StatusFailed,
@@ -158,14 +176,23 @@ func (a *Agent) Run(ctx context.Context, prompt string) (Result, error) {
 	}, nil
 }
 
-func (a *Agent) checkPermission(ctx context.Context, step Step) error {
+func (a *Agent) checkPermission(ctx context.Context, step Step, toolCallID string) error {
 	if a.checker == nil {
 		return nil
 	}
 	return a.checker.Check(ctx, permission.Request{
-		Tool:  step.Tool,
-		Input: strings.Join(step.Args, " "),
+		Tool:       step.Tool,
+		ToolCallID: toolCallID,
+		Input:      strings.Join(step.Args, " "),
 	})
+}
+
+func (a *Agent) completed(ctx context.Context, toolCallID string) bool {
+	if a.replay == nil {
+		return false
+	}
+	_, ok, err := a.replay(ctx, toolCallID)
+	return err == nil && ok
 }
 
 func (a *Agent) execute(ctx context.Context, step Step) (output string, diff string, err error) {
@@ -401,7 +428,17 @@ func (a *Agent) execute(ctx context.Context, step Step) (output string, diff str
 
 func (a *Agent) nextFallbackToolIDs() (string, string) {
 	a.traceSeq++
-	callID := fmt.Sprintf("fallback-step-%d", a.traceSeq)
+	return fallbackToolIDs(a.traceSeq)
+}
+
+func (a *Agent) rememberTraceSeq(seq int) {
+	if seq > a.traceSeq {
+		a.traceSeq = seq
+	}
+}
+
+func fallbackToolIDs(step int) (string, string) {
+	callID := fmt.Sprintf("fallback-step-%d", step)
 	return callID, callID + "-result"
 }
 

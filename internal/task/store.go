@@ -1693,7 +1693,7 @@ func (r *Repository) GrantApproval(ctx context.Context, id string, decidedBy ...
 	defer tx.Rollback()
 	_, err = tx.ExecContext(ctx, `
 		UPDATE tasks
-		SET approval_granted = 1, status = ?, updated_at = ?, completed_at = NULL
+		SET status = ?, updated_at = ?, completed_at = NULL
 		WHERE id = ?
 	`, string(StatusDraft), formatTime(now), id)
 	if err != nil {

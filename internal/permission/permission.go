@@ -18,6 +18,7 @@ const (
 
 type Request struct {
 	Tool          string `json:"tool"`
+	ToolCallID    string `json:"tool_call_id,omitempty"`
 	Input         string `json:"input"`
 	Risk          string `json:"risk"`
 	Reason        string `json:"reason"`
@@ -102,6 +103,7 @@ func (p Policy) Check(_ context.Context, request Request) error {
 	}
 	classified.Workspace = strings.TrimSpace(request.Workspace)
 	classified.SessionID = strings.TrimSpace(request.SessionID)
+	classified.ToolCallID = strings.TrimSpace(request.ToolCallID)
 	if rule, ok := p.bestMatchingRule(classified); ok {
 		if strings.TrimSpace(rule.Reason) != "" {
 			classified.Reason = strings.TrimSpace(rule.Reason)

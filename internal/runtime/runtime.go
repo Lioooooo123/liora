@@ -29,6 +29,7 @@ type Runtime struct {
 	checker   permission.Checker
 	outputs   agent.ToolOutputSink
 	todos     agent.TodoExecutor
+	replay    agent.CompletedToolLookup
 }
 
 type SubmitOptions struct {
@@ -67,6 +68,10 @@ func (r *Runtime) SetToolOutputSink(sink agent.ToolOutputSink) {
 
 func (r *Runtime) SetTodoExecutor(executor agent.TodoExecutor) {
 	r.todos = executor
+}
+
+func (r *Runtime) SetCompletedToolLookup(lookup agent.CompletedToolLookup) {
+	r.replay = lookup
 }
 
 func (r *Runtime) Submit(ctx context.Context, input string) (tui.TurnResult, error) {
@@ -199,6 +204,9 @@ func (r *Runtime) newAgent(recorder trace.Recorder) *agent.Agent {
 	}
 	if r.checker != nil {
 		runner.SetPermissionChecker(r.checker)
+	}
+	if r.replay != nil {
+		runner.SetCompletedToolLookup(r.replay)
 	}
 	runner.SetSkillReader(r.store)
 	if manager, err := r.mcpManager(); err == nil && manager != nil {
