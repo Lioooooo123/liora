@@ -144,6 +144,7 @@ func (f fakeStreamingSubmitter) Submit(_ context.Context, input string) (TurnRes
 
 func (f fakeStreamingSubmitter) SubmitStream(_ context.Context, input string, onEvent func(StreamUpdate)) (TurnResult, error) {
 	for _, update := range []StreamUpdate{
+		streamUpdate("task.created", eventPayload{Message: input}),
 		streamUpdate("task.plan_ready", eventPayload{Steps: "list ."}),
 		streamUpdate("tool.result", eventPayload{Tool: "list", Input: ".", Output: "README.md\n", Status: string(trace.StatusOK)}),
 		streamUpdate("task.summary", eventPayload{Message: "completed 1 step"}),
@@ -168,7 +169,7 @@ func TestInteractiveLoopStreamsTaskEvents(t *testing.T) {
 			t.Fatalf("expected streamed output to contain %q, got:\n%s", want, rendered)
 		}
 	}
-	for _, avoid := range []string{"Task - started", "Plan", "- list .", "Tools", "README.md", "Status", "tool.result"} {
+	for _, avoid := range []string{"Task - started", "Plan", "- list .", "Tools", "README.md", "Status", "Event", "task.created", "tool.result"} {
 		if strings.Contains(rendered, avoid) {
 			t.Fatalf("stream output should hide internal %q, got:\n%s", avoid, rendered)
 		}
@@ -177,11 +178,12 @@ func TestInteractiveLoopStreamsTaskEvents(t *testing.T) {
 
 func TestRenderStreamUpdateHidesInternalProgress(t *testing.T) {
 	var out strings.Builder
+	RenderStreamUpdate(&out, streamUpdate("task.created", eventPayload{Message: "hi"}))
 	RenderStreamUpdate(&out, streamUpdate("task.planning", eventPayload{Message: "Planning task"}))
 	RenderStreamUpdate(&out, streamUpdate("tool.call", eventPayload{Tool: "list", Input: "."}))
 
 	rendered := out.String()
-	for _, avoid := range []string{"Status - Planning task", "Tool - list .", "│ Status", "│ Tool"} {
+	for _, avoid := range []string{"task.created", "Event", "Status - Planning task", "Tool - list .", "│ Status", "│ Tool"} {
 		if strings.Contains(rendered, avoid) {
 			t.Fatalf("expected progress output to hide %q, got:\n%s", avoid, rendered)
 		}

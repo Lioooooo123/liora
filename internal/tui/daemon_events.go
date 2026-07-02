@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	daemonEventTaskCreated        = "task.created"
 	daemonEventPlanning           = "task.planning"
 	daemonEventSandboxRun         = "sandbox.run"
 	daemonEventSandboxWorkspace   = "sandbox.workspace"
@@ -66,7 +67,7 @@ func FormatDaemonEventUpdate(update StreamUpdate) DaemonEventSection {
 	}
 	eventType := update.Type
 	switch eventType {
-	case daemonEventPlanning, daemonEventSandboxRun, daemonEventSandboxWorkspace, daemonEventPlanReady, daemonEventReplanning, daemonEventToolCall:
+	case daemonEventTaskCreated, daemonEventPlanning, daemonEventSandboxRun, daemonEventSandboxWorkspace, daemonEventPlanReady, daemonEventReplanning, daemonEventToolCall:
 		return DaemonEventSection{}
 	case daemonEventToolResult:
 		if payload.Status != "" && payload.Status != string(trace.StatusOK) {
