@@ -55,15 +55,13 @@ func newServer(config Config) *server {
 		background: normalizeBackgroundLimits(config.Background),
 		foreground: normalizeForegroundLimits(config.Foreground),
 	}
-	if s.repo != nil {
-		_, _ = s.repo.MarkLostBackgroundTasks(context.Background(), "daemon restarted without a running handle")
-		_, _ = s.repo.ExplainRestartState(context.Background(), "daemon restarted without a running handle")
-	}
+	s.recoverRestartState()
 	if s.runner != nil && s.store != nil {
 		s.runner.SetStore(s.store)
 	}
 	if s.runner != nil {
 		s.runner.SetTaskControl(s)
+		s.startRecoveredQueues()
 	}
 	return s
 }
