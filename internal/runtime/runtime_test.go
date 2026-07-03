@@ -215,7 +215,7 @@ func TestRuntimeListsBuiltinToolsCommand(t *testing.T) {
 	if !handled {
 		t.Fatal("expected /tools to be handled")
 	}
-	for _, want := range []string{"read <path>", "document <path>", "skill <name>", "run <shell command>", "mcp <server>", "read_only", "shell"} {
+	for _, want := range []string{"read <path>", "document <path>", "skill <name>", "run <shell command>", "mcp <server>", "read_only", "shell", "access=read:path(path)", "access=write:path(path)", "access=exclusive:workspace"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected /tools output to contain %q, got:\n%s", want, out)
 		}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Lioooooo123/liora/internal/agent"
+	toolcap "github.com/Lioooooo123/liora/internal/capabilities"
 	"github.com/Lioooooo123/liora/internal/daemonclient"
 	"github.com/Lioooooo123/liora/internal/store"
 	taskpkg "github.com/Lioooooo123/liora/internal/task"
@@ -836,11 +837,7 @@ func (s *DaemonSubmitter) showTools(ctx context.Context) (string, bool, error) {
 	if len(capabilities.Tools) > 0 {
 		lines = append(lines, "Built-in tools")
 		for _, tool := range capabilities.Tools {
-			line := "- " + tool.Usage + " [" + string(tool.Kind) + "]"
-			if strings.TrimSpace(tool.Description) != "" {
-				line += " - " + tool.Description
-			}
-			lines = append(lines, line)
+			lines = append(lines, "- "+toolcap.HumanToolLine(tool))
 		}
 	}
 	if len(capabilities.MCPTools) > 0 {

@@ -162,7 +162,7 @@ func TestDaemonSubmitterShowsDaemonCapabilitiesWithMCPTools(t *testing.T) {
 	if !handled {
 		t.Fatal("expected /tools to be handled by daemon submitter")
 	}
-	for _, want := range []string{"Built-in tools", "read <path>", "MCP tools", "mcp fake echo <json arguments>", "Echo text"} {
+	for _, want := range []string{"Built-in tools", "read <path>", "access=read:path(path)", "access=write:path(path)", "access=exclusive:workspace", "MCP tools", "mcp fake echo <json arguments>", "Echo text"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected /tools output to contain %q, got:\n%s", want, output)
 		}

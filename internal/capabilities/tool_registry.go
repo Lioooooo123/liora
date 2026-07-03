@@ -47,9 +47,48 @@ func PlannerToolList() string {
 func HumanToolList() string {
 	var lines []string
 	for _, tool := range BuiltinTools() {
-		lines = append(lines, "- "+tool.Usage+" ["+string(tool.Kind)+"] - "+tool.Description)
+		lines = append(lines, "- "+HumanToolLine(tool))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func HumanToolLine(tool ToolSpec) string {
+	line := tool.Usage + " [" + string(tool.Kind) + "]"
+	if tool.Access != nil {
+		line += " " + HumanToolAccess(*tool.Access)
+	}
+	if strings.TrimSpace(tool.Description) != "" {
+		line += " - " + tool.Description
+	}
+	return line
+}
+
+func HumanToolAccess(access ToolAccessSpec) string {
+	parts := []string{"access=" + string(access.Mode) + ":" + humanToolAccessResource(access)}
+	if strings.TrimSpace(access.Default) != "" {
+		parts = append(parts, "default="+access.Default)
+	}
+	parts = append(parts, "concurrency="+humanToolConcurrency(access.Mode))
+	return strings.Join(parts, " ")
+}
+
+func humanToolAccessResource(access ToolAccessSpec) string {
+	resource := string(access.Resource)
+	if strings.TrimSpace(access.Argument) != "" {
+		return resource + "(" + access.Argument + ")"
+	}
+	return resource
+}
+
+func humanToolConcurrency(mode ToolAccessMode) string {
+	switch mode {
+	case ToolAccessRead:
+		return "shared-read"
+	case ToolAccessWrite:
+		return "serialized-on-overlap"
+	default:
+		return "exclusive"
+	}
 }
 
 func ToolSchemas() []ToolSpec {

@@ -19,10 +19,13 @@ func TestBuiltinToolsExposePlannerAndHumanViews(t *testing.T) {
 		}
 	}
 	human := HumanToolList()
-	for _, want := range []string{"read_only", "write", "shell", "external", "PDF/DOCX", "精确文本替换", "编译、测试", "明确需要已配置 MCP server"} {
+	for _, want := range []string{"read_only", "write", "shell", "external", "PDF/DOCX", "精确文本替换", "编译、测试", "明确需要已配置 MCP server", "access=read:path(path)", "access=write:path(path)", "access=exclusive:workspace"} {
 		if !strings.Contains(human, want) {
 			t.Fatalf("expected human list to contain %q, got:\n%s", want, human)
 		}
+	}
+	if strings.Contains(planner, "access=") {
+		t.Fatalf("planner list should stay prompt-compact and omit access descriptors, got:\n%s", planner)
 	}
 }
 
