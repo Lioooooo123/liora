@@ -138,12 +138,15 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 	if r.patchMode {
 		mode = sandbox.WorkspaceModeCopy
 	}
-	session, err := sandbox.PrepareWorkspace(task.Workspace, mode)
+	if mode == sandbox.WorkspaceModeCopy {
+		_ = r.repo.AppendEvent(ctx, task.ID, EventSandboxWorkspace, r.eventPayloadWithModel(task, EventPayload{Message: "workspace mode: copy preparing"}))
+	}
+	session, err := sandbox.PrepareWorkspaceWithContext(ctx, task.Workspace, mode)
 	if err != nil {
 		return runtimeResult{}, err
 	}
 	defer session.Cleanup()
-	_ = r.repo.AppendEvent(ctx, task.ID, EventSandboxWorkspace, r.eventPayloadWithModel(task, EventPayload{Message: "workspace mode: " + string(session.Mode)}))
+	_ = r.repo.AppendEvent(ctx, task.ID, EventSandboxWorkspace, r.eventPayloadWithModel(task, EventPayload{Message: "workspace mode: " + string(session.Mode) + " ready"}))
 	if task.Natural {
 		planner, err := r.plannerForTask(task)
 		if err != nil {

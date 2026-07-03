@@ -1,6 +1,8 @@
 package sandbox
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,6 +18,14 @@ func TestPrepareWorkspaceCopyModeCopiesAndCleansTaskWorkspace(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(source, "node_modules", "pkg", "ignored.txt"), []byte("skip\n"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	for _, dir := range []string{"dist", "build", "target", ".next", ".venv", "__pycache__"} {
+		if err := os.MkdirAll(filepath.Join(source, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(source, dir, "ignored.txt"), []byte("skip\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	session, err := PrepareWorkspace(source, WorkspaceModeCopy)
@@ -33,6 +43,11 @@ func TestPrepareWorkspaceCopyModeCopiesAndCleansTaskWorkspace(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(session.Root, "node_modules")); !os.IsNotExist(err) {
 		t.Fatalf("expected node_modules to be skipped, stat err: %v", err)
+	}
+	for _, dir := range []string{"dist", "build", "target", ".next", ".venv", "__pycache__"} {
+		if _, err := os.Stat(filepath.Join(session.Root, dir)); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be skipped, stat err: %v", dir, err)
+		}
 	}
 
 	session.Cleanup()
@@ -53,5 +68,22 @@ func TestPrepareWorkspaceDirectModeUsesSource(t *testing.T) {
 	session.Cleanup()
 	if _, err := os.Stat(source); err != nil {
 		t.Fatalf("direct cleanup should not remove source: %v", err)
+	}
+}
+
+func TestPrepareWorkspaceCopyModeHonorsCancelledContext(t *testing.T) {
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "notes.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	session, err := PrepareWorkspaceWithContext(ctx, source, WorkspaceModeCopy)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got session=%#v err=%v", session, err)
+	}
+	if session.Root != "" {
+		t.Fatalf("cancelled preflight should not allocate a temp workspace, got %#v", session)
 	}
 }
