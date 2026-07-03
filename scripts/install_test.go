@@ -2,6 +2,8 @@ package scripts_test
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -67,6 +69,86 @@ func TestPackageReleaseScriptBuildsInstallableArchive(t *testing.T) {
 	}
 }
 
+func TestNextReleaseVersionScriptIncrementsLatestSemverTag(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required")
+	}
+	script, err := filepath.Abs("next-release-version.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.name", "Test User")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("first\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "tag", "v0.1.1")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("second\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "commit", "-am", "change")
+
+	output := runCommand(t, repo, script)
+	if got := strings.TrimSpace(output); got != "v0.1.2" {
+		t.Fatalf("expected next version v0.1.2, got %q", got)
+	}
+}
+
+func TestNextReleaseVersionScriptReturnsHeadTagForRerun(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required")
+	}
+	script, err := filepath.Abs("next-release-version.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.name", "Test User")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("first\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "tag", "v0.2.0")
+
+	output := runCommand(t, repo, script)
+	if got := strings.TrimSpace(output); got != "v0.2.0" {
+		t.Fatalf("expected existing HEAD tag v0.2.0, got %q", got)
+	}
+}
+
+func TestMainReleaseWorkflowPublishesVersionedUpdateRelease(t *testing.T) {
+	data, err := os.ReadFile("../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		`branches:`,
+		`- main`,
+		`permissions:`,
+		`contents: write`,
+		`runs-on: macos-14`,
+		`fetch-depth: 0`,
+		`./scripts/next-release-version.sh`,
+		`LIORA_VERSION="${{ steps.version.outputs.version }}" GOOS=darwin GOARCH=arm64 ./scripts/package-release.sh`,
+		`./scripts/release-smoke.sh "${{ steps.version.outputs.archive }}"`,
+		`git tag -a "$VERSION"`,
+		`gh release create "$VERSION"`,
+		`--latest`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected release workflow to contain %q, got:\n%s", want, content)
+		}
+	}
+}
+
 func TestReleaseSmokeScriptInstallsArchive(t *testing.T) {
 	data, err := os.ReadFile("release-smoke.sh")
 	if err != nil {
@@ -78,6 +160,24 @@ func TestReleaseSmokeScriptInstallsArchive(t *testing.T) {
 			t.Fatalf("expected release smoke script to contain %q, got:\n%s", want, content)
 		}
 	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	gitArgs := append([]string{"-c", "gc.auto=0", "-c", "maintenance.auto=false"}, args...)
+	runCommand(t, dir, "git", gitArgs...)
+}
+
+func runCommand(t *testing.T, dir string, name string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %s failed: %v\n%s", name, strings.Join(args, " "), err, string(output))
+	}
+	return string(output)
 }
 
 func TestNPMLazySmokeScriptExercisesGitHubPackageLazyBuild(t *testing.T) {

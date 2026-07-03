@@ -132,6 +132,12 @@ liora
 
 ## 打包给别人试用
 
+合进 `main` 的代码会由 GitHub Actions 自动递增 patch 版本、创建 GitHub Release，并上传 `darwin_arm64` 安装包。用户安装过后可以直接运行：
+
+```sh
+liora update
+```
+
 构建可分发 tarball：
 
 ```sh

@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release-darwin-arm64:
+    name: Release darwin arm64
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve release version
+        id: version
+        run: |
+          version="$(./scripts/next-release-version.sh)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "archive=dist/liora_${version}_darwin_arm64.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Verify native update target
+        run: |
+          test "$(go env GOOS)" = "darwin"
+          test "$(go env GOARCH)" = "arm64"
+
+      - name: Test release path
+        run: go test ./scripts ./internal/tui ./internal/tuisession ./internal/daemonclient ./apps/cli
+
+      - name: Build release package
+        run: LIORA_VERSION="${{ steps.version.outputs.version }}" GOOS=darwin GOARCH=arm64 ./scripts/package-release.sh
+
+      - name: Smoke release package
+        run: ./scripts/release-smoke.sh "${{ steps.version.outputs.archive }}"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCHIVE: ${{ steps.version.outputs.archive }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if ! git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+            git tag -a "$VERSION" -m "Liora $VERSION"
+            git push origin "$VERSION"
+          fi
+
+          assets=(
+            "$ARCHIVE"
+            "$ARCHIVE.sha256"
+            "$ARCHIVE.provenance.json"
+            "$ARCHIVE.sbom.json"
+            "$ARCHIVE.manifest-review.json"
+          )
+
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" "${assets[@]}" --clobber
+            gh release edit "$VERSION" --latest
+          else
+            gh release create "$VERSION" "${assets[@]}" \
+              --target "$GITHUB_SHA" \
+              --title "Liora $VERSION" \
+              --notes "Automated release for $GITHUB_SHA." \
+              --latest
+          fi

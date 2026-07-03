@@ -2,7 +2,26 @@
 
 Liora v0.1 先以 macOS 本地 tarball 分发。包内包含一个可执行的 `liora` 二进制、安装脚本和必要文档，适合发给其他人直接试用。
 
+## 自动发版
+
+默认发版路径是合入 `main`。每次 `main` 收到新 commit 后，`.github/workflows/release.yml` 会：
+
+1. 用 `scripts/next-release-version.sh` 读取最新 `vMAJOR.MINOR.PATCH` tag，并自动递增 patch 版本。
+2. 在 GitHub macOS arm64 runner 上构建 `liora_<version>_darwin_arm64.tar.gz`。
+3. 运行 `scripts/release-smoke.sh`，确认安装包、`-doctor`、本地 `liora update --from` 和任意 workspace 启动路径可用。
+4. 给当前 commit 打 tag，创建或更新 GitHub Release，并把该 release 标记为 latest。
+
+因此用户侧升级路径是：
+
+```sh
+liora update
+```
+
+只要 latest release 里有当前平台对应的 tarball，更新器会下载、校验 `.sha256` 并替换当前 `liora` 可执行文件。
+
 ## 构建发布包
+
+本地构建只用于试包或应急发版。正式对外版本优先走 `main` 自动发版。
 
 ```sh
 LIORA_VERSION=v0.1.0 ./scripts/package-release.sh
@@ -140,4 +159,4 @@ liora update --check
 LIORA_VERSION=v0.1.0 ./scripts/package-release.sh
 ```
 
-不要用裸 commit hash 当正式对外版本。开发包可以继续使用 `git describe --always --dirty` 生成的临时版本。
+不要用裸 commit hash 当正式对外版本。开发包可以继续使用 `git describe --always --dirty` 生成的临时版本；正常发版由 `main` workflow 自动决定下一个版本号。
