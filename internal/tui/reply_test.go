@@ -15,7 +15,7 @@ func TestRenderStreamUpdateShowsAssistantReply_whenDiffIsReady(t *testing.T) {
 	RenderStreamUpdate(&out, streamUpdate("task.diff", eventPayload{Diff: "--- a/hello.py\n+++ b/hello.py\n+print('Hello, World!')"}))
 
 	// Then
-	rendered := out.String()
+	rendered := terminalPlainText(out.String())
 	for _, want := range []string{"Assistant", "已准备好变更", "1 个文件", "hello.py", "+1 -0", "还没有写入真实工作区", "/apply", "/diff"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected rendered output to contain %q, got:\n%s", want, rendered)
@@ -41,7 +41,7 @@ func TestRenderTurnShowsAssistantReply_whenDiffIsReady(t *testing.T) {
 	}}})
 
 	// Then
-	rendered := out.String()
+	rendered := terminalPlainText(out.String())
 	for _, want := range []string{"Assistant", "已准备好变更", "/apply"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected rendered output to contain %q, got:\n%s", want, rendered)

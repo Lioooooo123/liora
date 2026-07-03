@@ -82,3 +82,29 @@ func TestProgramFinalizesAssistantDeltaWithSummary_whenSummaryFormattingDiffers(
 		}
 	}
 }
+
+func TestProgramRendersAssistantMarkdown_whenSummaryIsMarkdown(t *testing.T) {
+	// Given
+	model := newModel(context.Background(), Config{Workspace: "/tmp/project"}, fakeStreamingSubmitter{})
+	model.resize(96, 24)
+
+	// When
+	_, _ = model.Update(streamUpdateMsg{
+		update: streamUpdate("task.summary", eventPayload{
+			Message: "## Result\n\n- **Rendered** markdown\n\n```sh\ngo test ./internal/tui\n```",
+		}),
+	})
+	transcript := terminalPlainText(model.body.String())
+
+	// Then
+	for _, want := range []string{"Assistant", "Result", "Rendered", "go test ./internal/tui"} {
+		if !strings.Contains(transcript, want) {
+			t.Fatalf("expected markdown-rendered transcript to contain %q, got:\n%s", want, transcript)
+		}
+	}
+	for _, avoid := range []string{"## Result", "**Rendered**", "```sh", "```"} {
+		if strings.Contains(transcript, avoid) {
+			t.Fatalf("assistant transcript should not expose raw markdown marker %q, got:\n%s", avoid, transcript)
+		}
+	}
+}
