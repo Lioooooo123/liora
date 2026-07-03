@@ -30,7 +30,7 @@ LIORA_VERSION=v0.1.0 GOOS=darwin GOARCH=arm64 ./scripts/package-release.sh
 ./scripts/release-smoke.sh dist/liora_v0.1.0_darwin_arm64.tar.gz
 ```
 
-这个 smoke 会先运行 supply-chain audit，验证 checksum、provenance、依赖清单和 MCP/hook manifest 审查报告，再解包到临时目录，运行包内 `install.sh`，最后执行安装后的 `liora -version`。
+这个 smoke 会先运行 supply-chain audit，验证 checksum、provenance、依赖清单和 MCP/hook manifest 审查报告，再解包到临时目录，运行包内 `install.sh`，执行安装后的 `liora -version`，并用安装后的二进制跑一遍 `liora update --from <archive>`。
 
 也可以单独运行 supply-chain audit：
 
@@ -111,3 +111,33 @@ docs/v0.1-exit-audit.md
 ```
 
 `install.sh` 不会写入 API key。LLM 配置仍由用户自己放到 `~/.config/liora/.env`，或通过环境变量设置。
+
+## 更新体验
+
+安装后的用户入口对齐 Claude Code 的日常体验：
+
+```sh
+liora update
+```
+
+默认会读取 GitHub latest release metadata，选择当前平台的 `liora_<version>_<goos>_<goarch>.tar.gz`。如果 release asset 旁边存在同名 `.sha256`，更新前会先校验再替换当前 `liora` 可执行文件。
+
+本地或内测包可以直接指定 tarball：
+
+```sh
+liora update --from dist/liora_v0.1.0_darwin_arm64.tar.gz
+```
+
+只检查最新版本、不安装：
+
+```sh
+liora update --check
+```
+
+正式对外版本必须在发版时显式注入：
+
+```sh
+LIORA_VERSION=v0.1.0 ./scripts/package-release.sh
+```
+
+不要用裸 commit hash 当正式对外版本。开发包可以继续使用 `git describe --always --dirty` 生成的临时版本。

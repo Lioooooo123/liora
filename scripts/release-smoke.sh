@@ -46,6 +46,9 @@ LIORA_INSTALL_DIR="$INSTALL_DIR" "$PACKAGE_DIR/install.sh" >/tmp/liora-release-i
 LIORA_HOME="$WORK_DIR/home" "$INSTALL_DIR/liora" -doctor >"$WORK_DIR/doctor.log"
 grep -q 'Liora doctor' "$WORK_DIR/doctor.log"
 grep -q 'database: ok' "$WORK_DIR/doctor.log"
+UPDATE_INSTALL_DIR="$WORK_DIR/update-bin"
+"$INSTALL_DIR/liora" update --from "$ARCHIVE" --install-dir "$UPDATE_INSTALL_DIR" >"$WORK_DIR/update.log"
+"$UPDATE_INSTALL_DIR/liora" -version | grep -q 'liora '
 
 SMOKE_WORKSPACE="$WORK_DIR/arbitrary-workspace"
 mkdir -p "$SMOKE_WORKSPACE"

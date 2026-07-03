@@ -99,6 +99,12 @@ npm install -g github:Lioooooo123/liora
 liora
 ```
 
+后续升级直接运行：
+
+```sh
+liora update
+```
+
 如果只想使用本地源码安装：
 
 ```sh
@@ -138,7 +144,7 @@ LIORA_VERSION=v0.1.0 ./scripts/package-release.sh
 ./scripts/release-smoke.sh dist/liora_v0.1.0_$(go env GOOS)_$(go env GOARCH).tar.gz
 ```
 
-更多说明见 [Release Packaging](docs/release.md)。
+这个 smoke 会覆盖安装后的 `liora update --from <archive>`。更多说明见 [Release Packaging](docs/release.md)。
 
 ## 脚本模式
 

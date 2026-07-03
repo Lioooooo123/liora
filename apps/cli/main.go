@@ -63,6 +63,13 @@ func main() {
 		fmt.Println("liora " + version)
 		return
 	}
+	if handled, err := handleUpdateCommand(context.Background(), flag.Args(), version, os.Stdout, os.Stderr); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	steps := *prompt
 	if steps == "" && flag.NArg() > 0 {
