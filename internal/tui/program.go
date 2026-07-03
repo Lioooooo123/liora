@@ -109,6 +109,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c":
+			if m.running {
+				m.clearCompletions()
+				if cmd := m.submitLine("/cancel"); cmd != nil {
+					return m, cmd
+				}
+			}
 			m.quitting = true
 			return m, tea.Quit
 		case "enter":
@@ -124,8 +130,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.applyCompletion() {
 				return m, nil
 			}
-		case "esc":
-			m.clearCompletions()
+		case "esc", "escape":
+			if len(m.completions) > 0 {
+				m.clearCompletions()
+				return m, nil
+			}
+			if m.running {
+				if cmd := m.submitLine("/cancel"); cmd != nil {
+					return m, cmd
+				}
+			}
 			return m, nil
 		}
 	case streamUpdateMsg:

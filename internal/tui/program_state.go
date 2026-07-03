@@ -1,10 +1,6 @@
 package tui
 
-import (
-	"strings"
-
-	tea "charm.land/bubbletea/v2"
-)
+import tea "charm.land/bubbletea/v2"
 
 func (m *model) submitPending() tea.Cmd {
 	if len(m.pending) == 0 {
@@ -52,14 +48,5 @@ func (m *model) noteStreamUpdate(update StreamUpdate) {
 }
 
 func isControlCommandDuringRun(line string) bool {
-	command := strings.Fields(strings.TrimSpace(line))
-	if len(command) == 0 {
-		return false
-	}
-	switch command[0] {
-	case "/cancel", "/approvals", "/approve", "/deny", "/diff", "/todo", "/tail", "/timeline", "/workbench", "/watch":
-		return true
-	default:
-		return false
-	}
+	return commandCanRunDuringTurn(line)
 }

@@ -26,7 +26,7 @@ func (m *model) refreshCompletions() {
 			dynamic = items
 		}
 	}
-	m.completions = mergeCompletions(line, builtin, dynamic)
+	m.completions = mergeCompletions(line, dynamic, builtin)
 }
 
 func (m *model) clearCompletions() {
