@@ -122,6 +122,13 @@ echo "[10/14] doctor binary smoke"
   cat "$AUDIT_TMP/doctor.txt"
 )
 
+echo "[10/14] diagnostics smoke"
+(
+  cd "$ROOT"
+  DIAGNOSTICS_WORKSPACE="${LIORA_AUDIT_DIAGNOSTICS_WORKSPACE:-$AUDIT_TMP/diagnostics-workspace}"
+  GOTOOLCHAIN="$GO_TOOLCHAIN" ./scripts/diagnostics-smoke.sh "$DIAGNOSTICS_WORKSPACE"
+)
+
 echo "[11/14] daemon smoke"
 (
   cd "$ROOT"

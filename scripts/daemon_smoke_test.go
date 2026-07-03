@@ -32,6 +32,35 @@ func TestTUISmokeScriptCoversDaemonBackedTUI(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsSmokeScriptCoversVisibleProviderAndToolDiagnostics(t *testing.T) {
+	data, err := os.ReadFile("diagnostics-smoke.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		`TMP_DIR="$(mktemp -d)"`,
+		`rm -rf "$TMP_DIR"`,
+		`LIORA_HOME="$TMP_DIR/home"`,
+		`LIORA_LLM_PROFILES`,
+		`-doctor`,
+		`profile_catalog: configured`,
+		`capability.native_tool_use: true`,
+		`capability.streaming: true`,
+		`credential.api_key: configured redacted=true`,
+		`/tools`,
+		`/config`,
+		`access=read:path(path)`,
+		`access=write:path(path)`,
+		`access=exclusive:workspace`,
+		`diagnostics smoke ok`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected diagnostics smoke script to contain %q, got:\n%s", want, content)
+		}
+	}
+}
+
 func TestCodingEvalScriptCoversTaskQualityBaseline(t *testing.T) {
 	data, err := os.ReadFile("coding-eval.sh")
 	if err != nil {
@@ -83,6 +112,23 @@ func TestLioraAuditRunsEndToEndSmokeAndEvalGates(t *testing.T) {
 		"./scripts/npm-lazy-smoke.sh",
 		"./scripts/local-install-smoke.sh",
 		"package=$ARCHIVE_PATH",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected 1.0 audit script to contain %q, got:\n%s", want, content)
+		}
+	}
+}
+
+func TestLioraAuditRunsDiagnosticsSmokeGate(t *testing.T) {
+	data, err := os.ReadFile("liora-1.0-audit.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"diagnostics smoke",
+		"LIORA_AUDIT_DIAGNOSTICS_WORKSPACE",
+		"./scripts/diagnostics-smoke.sh",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected 1.0 audit script to contain %q, got:\n%s", want, content)
