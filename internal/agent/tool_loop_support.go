@@ -41,15 +41,6 @@ func loopToolSchemas() []llm.ToolSchema {
 	return schemas
 }
 
-func isReadOnlyTool(name string) bool {
-	for _, spec := range capabilities.BuiltinTools() {
-		if spec.Name == name {
-			return spec.Kind == capabilities.ToolReadOnly
-		}
-	}
-	return false
-}
-
 func renderToolCalls(calls []llm.ToolCall) string {
 	lines := make([]string, 0, len(calls))
 	for _, call := range calls {

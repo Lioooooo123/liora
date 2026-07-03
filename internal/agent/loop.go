@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/Lioooooo123/liora/internal/llm"
 	"github.com/Lioooooo123/liora/internal/permission"
@@ -204,45 +203,12 @@ func (l *ToolLoop) checkTurnPermissions(ctx context.Context, calls []llm.ToolCal
 	return Result{}, nil
 }
 
-// dispatch runs read-only tools in concurrent batches (cap 10) while keeping
-// write/shell/external tools serial, preserving the original call order in the
-// returned outcomes.
 func (l *ToolLoop) dispatch(ctx context.Context, calls []llm.ToolCall) []toolOutcome {
 	outcomes := make([]toolOutcome, len(calls))
-	i := 0
-	for i < len(calls) {
-		if !isReadOnlyTool(calls[i].Name) {
-			outcomes[i] = l.dispatchOne(ctx, calls[i])
-			i++
-			continue
-		}
-		j := i
-		for j < len(calls) && isReadOnlyTool(calls[j].Name) {
-			j++
-		}
-		l.dispatchParallel(ctx, calls[i:j], outcomes[i:j])
-		i = j
+	for _, batch := range scheduleToolBatches(calls) {
+		l.dispatchBatch(ctx, batch, outcomes)
 	}
 	return outcomes
-}
-
-func (l *ToolLoop) dispatchParallel(ctx context.Context, calls []llm.ToolCall, out []toolOutcome) {
-	if len(calls) == 1 {
-		out[0] = l.dispatchOne(ctx, calls[0])
-		return
-	}
-	sem := make(chan struct{}, maxReadOnlyConcurrency)
-	var wg sync.WaitGroup
-	for k := range calls {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(k int) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			out[k] = l.dispatchOne(ctx, calls[k])
-		}(k)
-	}
-	wg.Wait()
 }
 
 func (l *ToolLoop) dispatchOne(ctx context.Context, call llm.ToolCall) toolOutcome {

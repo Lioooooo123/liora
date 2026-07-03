@@ -156,3 +156,39 @@ func TestCapabilityMCPIsSingleExternalTool(t *testing.T) {
 		t.Fatalf("expected mcp schema properties, got %#v", mcp.InputSchema["properties"])
 	}
 }
+
+func TestBuiltinToolsExposeAccessDescriptors(t *testing.T) {
+	byName := map[string]ToolSpec{}
+	for _, spec := range ToolSchemas() {
+		byName[spec.Name] = spec
+	}
+
+	assertAccess(t, byName["read"], ToolAccessRead, ToolAccessPath, "path", "")
+	assertAccess(t, byName["list"], ToolAccessRead, ToolAccessPath, "path", ".")
+	assertAccess(t, byName["search"], ToolAccessRead, ToolAccessWorkspace, "", "")
+	assertAccess(t, byName["write"], ToolAccessWrite, ToolAccessPath, "path", "")
+	assertAccess(t, byName["todo_write"], ToolAccessWrite, ToolAccessTodo, "", "")
+	assertAccess(t, byName["Task"], ToolAccessExclusive, ToolAccessWorkspace, "", "")
+	assertAccess(t, byName["TaskOutput"], ToolAccessRead, ToolAccessTask, "task_id", "")
+
+	access, ok := ToolAccessFor("READ")
+	if !ok {
+		t.Fatal("expected access descriptor lookup to be case-insensitive")
+	}
+	if access.Mode != ToolAccessRead || access.Resource != ToolAccessPath || access.Argument != "path" {
+		t.Fatalf("unexpected read access descriptor %#v", access)
+	}
+}
+
+func assertAccess(t *testing.T, spec ToolSpec, mode ToolAccessMode, resource ToolAccessResource, argument string, fallback string) {
+	t.Helper()
+	if spec.Name == "" {
+		t.Fatal("missing tool spec")
+	}
+	if spec.Access == nil {
+		t.Fatalf("expected %s to expose access descriptor", spec.Name)
+	}
+	if spec.Access.Mode != mode || spec.Access.Resource != resource || spec.Access.Argument != argument || spec.Access.Default != fallback {
+		t.Fatalf("unexpected access for %s: %#v", spec.Name, spec.Access)
+	}
+}

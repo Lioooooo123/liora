@@ -237,9 +237,17 @@ Liora 的 TUI 方向是对的：Go 原生 Bubble Tea、line renderer 作 smoke/f
 
 ### P1：Kimi-style tool access scheduler
 
-- 给 Liora tool schema 增加 access descriptor：file read/search/write/readwrite、shell/external/all。
-- Scheduler 按 resource conflict 并发，结果保持 provider order。
-- 权限与 hook 仍在执行前 fail-closed。
+本轮已完成第一切片：
+
+- ToolLoop 内部新增 resource-aware scheduler，按 path/workspace/todo/task/skill/exclusive 资源访问切 batch。
+- `capabilities.ToolSpec` 已暴露 access descriptor，scheduler 从 capability catalog 读取同一份声明，避免工具分类在 agent 内重复硬编码。
+- 不冲突的 read/write 可同批执行；同路径读写、workspace search/diff 与任意 write、任意两个 write、shell/MCP/Task/TaskStop 都保持串行。
+- outcomes、trace 和 tool result message 仍按 provider order 回灌；权限检查仍在执行前 fail-closed。
+
+仍需补齐：
+
+- 把 access descriptor 接入 `/tools`、doctor 或 TUI diagnostics，让用户能解释并发边界。
+- 给 hook 与 approval 生命周期增加 prepare/authorize/finalize 阶段，避免后续 streaming executor 复用时缺少可观测边界。
 
 ### P1：Provider metadata catalog
 

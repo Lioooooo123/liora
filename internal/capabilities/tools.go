@@ -1,10 +1,5 @@
 package capabilities
 
-import (
-	"sort"
-	"strings"
-)
-
 type ToolKind string
 
 const (
@@ -15,11 +10,12 @@ const (
 )
 
 type ToolSpec struct {
-	Name        string         `json:"name"`
-	Usage       string         `json:"usage"`
-	Description string         `json:"description"`
-	Kind        ToolKind       `json:"kind"`
-	InputSchema map[string]any `json:"input_schema,omitempty"`
+	Name        string          `json:"name"`
+	Usage       string          `json:"usage"`
+	Description string          `json:"description"`
+	Kind        ToolKind        `json:"kind"`
+	Access      *ToolAccessSpec `json:"access,omitempty"`
+	InputSchema map[string]any  `json:"input_schema,omitempty"`
 }
 
 type MCPToolSpec struct {
@@ -163,56 +159,6 @@ var builtinTools = []ToolSpec{
 			"tool":      stringProp("要调用的 MCP 工具名称。"),
 			"arguments": objectProp("传给 MCP 工具的参数对象。"),
 		}, []string{"server", "tool"})},
-}
-
-func BuiltinTools() []ToolSpec {
-	tools := append([]ToolSpec(nil), builtinTools...)
-	sort.SliceStable(tools, func(i, j int) bool {
-		return tools[i].Name < tools[j].Name
-	})
-	return tools
-}
-
-func HasBuiltinTool(name string) bool {
-	name = strings.ToLower(strings.TrimSpace(name))
-	for _, tool := range builtinTools {
-		if strings.EqualFold(tool.Name, name) {
-			return true
-		}
-	}
-	return false
-}
-
-func PlannerToolList() string {
-	var lines []string
-	for _, tool := range builtinTools {
-		lines = append(lines, "- "+tool.Usage)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func HumanToolList() string {
-	var lines []string
-	for _, tool := range BuiltinTools() {
-		lines = append(lines, "- "+tool.Usage+" ["+string(tool.Kind)+"] - "+tool.Description)
-	}
-	return strings.Join(lines, "\n")
-}
-
-// ToolSchemas returns builtin tools that carry a JSON Schema, sorted by name,
-// for constructing native structured tool-call requests.
-func ToolSchemas() []ToolSpec {
-	var specs []ToolSpec
-	for _, tool := range builtinTools {
-		if tool.InputSchema == nil {
-			continue
-		}
-		specs = append(specs, tool)
-	}
-	sort.SliceStable(specs, func(i, j int) bool {
-		return specs[i].Name < specs[j].Name
-	})
-	return specs
 }
 
 type props map[string]map[string]any
