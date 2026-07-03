@@ -142,6 +142,7 @@ func fetchReleaseMetadata(ctx context.Context, client *http.Client, metadataURL 
 		return release, fmt.Errorf("create update metadata request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "liora-update")
 	resp, err := client.Do(req)
 	if err != nil {
 		return release, fmt.Errorf("fetch update metadata: %w", err)
@@ -193,6 +194,7 @@ func downloadFile(ctx context.Context, client *http.Client, url string, destinat
 	if err != nil {
 		return fmt.Errorf("create download request: %w", err)
 	}
+	req.Header.Set("User-Agent", "liora-update")
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("download update asset: %w", err)

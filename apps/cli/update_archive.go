@@ -21,6 +21,7 @@ func verifyRemoteChecksum(ctx context.Context, client *http.Client, checksumURL 
 	if err != nil {
 		return fmt.Errorf("create checksum request: %w", err)
 	}
+	req.Header.Set("User-Agent", "liora-update")
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("download checksum: %w", err)
