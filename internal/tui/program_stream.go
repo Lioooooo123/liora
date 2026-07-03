@@ -37,9 +37,8 @@ func (m *model) appendStreamUpdate(update StreamUpdate) bool {
 	if update.Type == daemonEventAssistantDelta {
 		return m.appendAssistantDelta(section.Body)
 	}
-	if update.Type == daemonEventSummary && m.assistantDeltaBlock >= 0 && strings.TrimSpace(section.Body) == strings.TrimSpace(m.assistantDeltaText.String()) {
-		m.clearAssistantDeltaStream()
-		return false
+	if update.Type == daemonEventSummary && m.assistantDeltaBlock >= 0 {
+		return m.finalizeAssistantDelta(section.Body)
 	}
 	m.clearAssistantDeltaStream()
 	return m.appendSection(section.Title, section.Body)
@@ -66,6 +65,23 @@ func (m *model) assistantDeltaRenderBlock() transcriptBlock {
 	return func(w io.Writer, width int) {
 		renderSectionWithWidth(w, "Assistant", text, width)
 	}
+}
+
+func (m *model) finalizeAssistantDelta(summary string) bool {
+	if strings.TrimSpace(summary) == "" {
+		m.clearAssistantDeltaStream()
+		return false
+	}
+	if m.assistantDeltaBlock < 0 || m.assistantDeltaBlock >= len(m.blocks) {
+		m.clearAssistantDeltaStream()
+		return m.appendSection("Assistant", summary)
+	}
+	m.assistantDeltaText.Reset()
+	m.assistantDeltaText.WriteString(summary)
+	m.blocks[m.assistantDeltaBlock] = m.assistantDeltaRenderBlock()
+	m.refresh()
+	m.clearAssistantDeltaStream()
+	return true
 }
 
 func (m *model) clearAssistantDeltaStream() {
