@@ -146,6 +146,13 @@ func (f fakeStreamingSubmitter) SubmitStream(_ context.Context, input string, on
 	for _, update := range []StreamUpdate{
 		streamUpdate("task.created", eventPayload{Message: input}),
 		streamUpdate("task.plan_ready", eventPayload{Steps: "list ."}),
+		streamUpdate("prompt_context.snapshot", eventPayload{
+			Message:       "Prompt context snapshot",
+			Output:        "Prompt context session-001\nHash: sha256:abc123",
+			Target:        "sha256:abc123",
+			TokenEstimate: 12,
+			TokenBudget:   4096,
+		}),
 		streamUpdate("tool.result", eventPayload{Tool: "list", Input: ".", Output: "README.md\n", Status: string(trace.StatusOK)}),
 		streamUpdate("task.summary", eventPayload{Message: "completed 1 step"}),
 		streamUpdate("task.completed", eventPayload{Status: "completed"}),
@@ -169,7 +176,7 @@ func TestInteractiveLoopStreamsTaskEvents(t *testing.T) {
 			t.Fatalf("expected streamed output to contain %q, got:\n%s", want, rendered)
 		}
 	}
-	for _, avoid := range []string{"Task - started", "Plan", "- list .", "Tools", "README.md", "Status", "Event", "task.created", "tool.result"} {
+	for _, avoid := range []string{"Task - started", "Plan", "- list .", "Tools", "README.md", "Status", "Event", "task.created", "tool.result", "prompt_context.snapshot", "Prompt context snapshot"} {
 		if strings.Contains(rendered, avoid) {
 			t.Fatalf("stream output should hide internal %q, got:\n%s", avoid, rendered)
 		}
@@ -181,12 +188,35 @@ func TestRenderStreamUpdateHidesInternalProgress(t *testing.T) {
 	RenderStreamUpdate(&out, streamUpdate("task.created", eventPayload{Message: "hi"}))
 	RenderStreamUpdate(&out, streamUpdate("task.planning", eventPayload{Message: "Planning task"}))
 	RenderStreamUpdate(&out, streamUpdate("tool.call", eventPayload{Tool: "list", Input: "."}))
+	RenderStreamUpdate(&out, streamUpdate("prompt_context.snapshot", eventPayload{Message: "Prompt context snapshot"}))
 
 	rendered := out.String()
-	for _, avoid := range []string{"task.created", "Event", "Status - Planning task", "Tool - list .", "│ Status", "│ Tool"} {
+	for _, avoid := range []string{"task.created", "Event", "Status - Planning task", "Tool - list .", "│ Status", "│ Tool", "prompt_context.snapshot", "Prompt context snapshot"} {
 		if strings.Contains(rendered, avoid) {
 			t.Fatalf("expected progress output to hide %q, got:\n%s", avoid, rendered)
 		}
+	}
+}
+
+func TestRenderStreamUpdateHidesPromptContextSnapshotEvenWhenMalformed(t *testing.T) {
+	var out strings.Builder
+	RenderStreamUpdate(&out, StreamUpdate{Type: "prompt_context.snapshot", PayloadJSON: "{"})
+
+	if rendered := out.String(); rendered != "" {
+		t.Fatalf("prompt context snapshot should stay hidden in chat, got:\n%s", rendered)
+	}
+}
+
+func TestRenderStreamUpdateShowsUserInputRequestAsAssistantQuestion(t *testing.T) {
+	var out strings.Builder
+	RenderStreamUpdate(&out, streamUpdate("user_input.requested", eventPayload{Message: "你想继续哪一项？"}))
+
+	rendered := out.String()
+	if !strings.Contains(rendered, "Assistant") || !strings.Contains(rendered, "你想继续哪一项？") {
+		t.Fatalf("expected user input request to render as assistant question, got:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "Event") || strings.Contains(rendered, "user_input.requested") {
+		t.Fatalf("user input request should not expose event identity, got:\n%s", rendered)
 	}
 }
 

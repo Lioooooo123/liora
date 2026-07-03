@@ -10,6 +10,7 @@ import (
 
 const (
 	daemonEventTaskCreated        = "task.created"
+	daemonEventTaskQueued         = "task.queued"
 	daemonEventPlanning           = "task.planning"
 	daemonEventSandboxRun         = "sandbox.run"
 	daemonEventSandboxWorkspace   = "sandbox.workspace"
@@ -18,12 +19,22 @@ const (
 	daemonEventToolCall           = "tool.call"
 	daemonEventToolResult         = "tool.result"
 	daemonEventTodoUpdated        = "todo.updated"
+	daemonEventTranscriptEntry    = "transcript.entry"
 	daemonEventArtifactReference  = "artifact.reference"
+	daemonEventCompactBoundary    = "compact.boundary"
+	daemonEventPromptContext      = "prompt_context.snapshot"
 	daemonEventSummary            = "task.summary"
 	daemonEventDiff               = "task.diff"
+	daemonEventPatchApply         = "task.patch_applied"
 	daemonEventPermissionRequest  = "permission.requested"
 	daemonEventPermissionApproved = "permission.approved"
 	daemonEventPermissionDenied   = "permission.denied"
+	daemonEventHookRun            = "hook.run"
+	daemonEventScheduleTriggered  = "schedule.triggered"
+	daemonEventSubagentStarted    = "subagent.started"
+	daemonEventSubagentCompleted  = "subagent.completed"
+	daemonEventUserInputRequest   = "user_input.requested"
+	daemonEventUserInputReceived  = "user_input.received"
 	daemonEventCompleted          = "task.completed"
 	daemonEventCancelled          = "task.cancelled"
 	daemonEventError              = "task.error"
@@ -61,6 +72,9 @@ type DaemonEventSection struct {
 }
 
 func FormatDaemonEventUpdate(update StreamUpdate) DaemonEventSection {
+	if isDaemonEventHiddenFromChat(update.Type) {
+		return DaemonEventSection{}
+	}
 	payload, err := DecodeDaemonEventPayload(update.PayloadJSON)
 	if err != nil {
 		return DaemonEventSection{Title: "Event", Body: fmt.Sprintf("%s: malformed payload", update.Type), Visible: true}
@@ -97,6 +111,10 @@ func FormatDaemonEventUpdate(update StreamUpdate) DaemonEventSection {
 		return DaemonEventSection{Title: "Approval", Body: "approved", Visible: true}
 	case daemonEventPermissionDenied:
 		return DaemonEventSection{Title: "Approval", Body: "denied", Visible: true}
+	case daemonEventUserInputRequest:
+		if strings.TrimSpace(payload.Message) != "" {
+			return DaemonEventSection{Title: "Assistant", Body: payload.Message, Visible: true}
+		}
 	case daemonEventCompleted:
 		return DaemonEventSection{}
 	case daemonEventCancelled:
@@ -111,6 +129,32 @@ func FormatDaemonEventUpdate(update StreamUpdate) DaemonEventSection {
 		return DaemonEventSection{Title: "Event", Body: daemonEventLine(eventType, payload), Visible: true}
 	}
 	return DaemonEventSection{}
+}
+
+func isDaemonEventHiddenFromChat(eventType string) bool {
+	switch eventType {
+	case daemonEventTaskCreated,
+		daemonEventTaskQueued,
+		daemonEventPlanning,
+		daemonEventSandboxRun,
+		daemonEventSandboxWorkspace,
+		daemonEventPlanReady,
+		daemonEventReplanning,
+		daemonEventToolCall,
+		daemonEventTranscriptEntry,
+		daemonEventArtifactReference,
+		daemonEventCompactBoundary,
+		daemonEventPromptContext,
+		daemonEventPatchApply,
+		daemonEventHookRun,
+		daemonEventScheduleTriggered,
+		daemonEventSubagentStarted,
+		daemonEventSubagentCompleted,
+		daemonEventUserInputReceived:
+		return true
+	default:
+		return false
+	}
 }
 
 func FormatDaemonEventReplay(eventType string, payloadJSON string) string {
