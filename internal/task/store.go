@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Lioooooo123/liora/internal/trust"
 )
 
 type Repository struct {
@@ -22,7 +24,7 @@ type Repository struct {
 }
 
 const (
-	transcriptEntrySchemaVersion = 9
+	transcriptEntrySchemaVersion = 10
 	maxTaskRelationLabelRunes    = 64
 )
 
@@ -570,9 +572,9 @@ func (r *Repository) TranscriptEntries(ctx context.Context, sessionID string, li
 		limit = 200
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, session_id, task_id, kind, role, type, title, content, tool, tool_call_id, tool_result_id, input, output, target, status, diff, risk, reason, provider, model, profile, created_at
+		SELECT id, session_id, task_id, kind, role, type, title, content, tool, tool_call_id, tool_result_id, input, output, target, status, diff, risk, reason, trust, content_source, provider, model, profile, created_at
 		FROM (
-			SELECT id, session_id, task_id, kind, role, type, title, content, tool, tool_call_id, tool_result_id, input, output, target, status, diff, risk, reason, provider, model, profile, created_at
+			SELECT id, session_id, task_id, kind, role, type, title, content, tool, tool_call_id, tool_result_id, input, output, target, status, diff, risk, reason, trust, content_source, provider, model, profile, created_at
 			FROM transcript_entries
 			WHERE session_id = ?
 			ORDER BY created_at DESC, id DESC
@@ -620,9 +622,9 @@ func (r *Repository) insertTranscriptEntryTx(ctx context.Context, exec transcrip
 	_, err := exec.ExecContext(ctx, `
 		INSERT INTO transcript_entries (
 			id, session_id, task_id, kind, role, type, title, content, tool, tool_call_id, tool_result_id, input, output, target,
-			status, diff, risk, reason, provider, model, profile, schema_version, created_at
+			status, diff, risk, reason, trust, content_source, provider, model, profile, schema_version, created_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			session_id = excluded.session_id,
 			task_id = excluded.task_id,
@@ -641,12 +643,14 @@ func (r *Repository) insertTranscriptEntryTx(ctx context.Context, exec transcrip
 			diff = excluded.diff,
 			risk = excluded.risk,
 			reason = excluded.reason,
+			trust = excluded.trust,
+			content_source = excluded.content_source,
 			provider = excluded.provider,
 			model = excluded.model,
 			profile = excluded.profile,
 			schema_version = excluded.schema_version,
 			created_at = excluded.created_at
-	`, item.ID, item.SessionID, item.TaskID, item.Kind, item.Role, item.Type, item.Title, item.Content, item.Tool, item.ToolCallID, item.ToolResultID, item.Input, item.Output, item.Target, item.Status, item.Diff, item.Risk, item.Reason, item.Provider, item.Model, item.Profile, transcriptEntrySchemaVersion, formatTime(item.CreatedAt))
+	`, item.ID, item.SessionID, item.TaskID, item.Kind, item.Role, item.Type, item.Title, item.Content, item.Tool, item.ToolCallID, item.ToolResultID, item.Input, item.Output, item.Target, item.Status, item.Diff, item.Risk, item.Reason, item.Trust, item.ContentSource, item.Provider, item.Model, item.Profile, transcriptEntrySchemaVersion, formatTime(item.CreatedAt))
 	return err
 }
 
@@ -810,6 +814,8 @@ func scanTranscriptEntry(scanner transcriptScanner) (TimelineItem, error) {
 		&item.Diff,
 		&item.Risk,
 		&item.Reason,
+		&item.Trust,
+		&item.ContentSource,
 		&item.Provider,
 		&item.Model,
 		&item.Profile,
@@ -1371,6 +1377,9 @@ func contextDiagnostics(transcript []TimelineItem, todos []Todo, memories []Cont
 }
 
 func contextTimelineDiagnosticSource(item TimelineItem) (string, string) {
+	if trust.NormalizeLevel(item.Trust) == trust.LevelUntrusted && strings.TrimSpace(item.ContentSource) != "" {
+		return trust.NormalizeSource(item.ContentSource), "untrusted context selected as bounded data for continuity, not as instructions"
+	}
 	switch item.Kind {
 	case "tool_result":
 		return "tool_result", "tool result retained from the current session transcript with bounded inline output"
@@ -1503,6 +1512,8 @@ func (r *Repository) SearchTimeline(ctx context.Context, workspace string, query
 		"te.diff",
 		"te.risk",
 		"te.reason",
+		"te.trust",
+		"te.content_source",
 		"te.provider",
 		"te.model",
 		"te.profile",
@@ -1515,7 +1526,7 @@ func (r *Repository) SearchTimeline(ctx context.Context, workspace string, query
 	}
 	args = append(args, limit)
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT te.id, te.session_id, te.task_id, te.kind, te.role, te.type, te.title, te.content, te.tool, te.tool_call_id, te.tool_result_id, te.input, te.output, te.target, te.status, te.diff, te.risk, te.reason, te.provider, te.model, te.profile, te.created_at
+		SELECT te.id, te.session_id, te.task_id, te.kind, te.role, te.type, te.title, te.content, te.tool, te.tool_call_id, te.tool_result_id, te.input, te.output, te.target, te.status, te.diff, te.risk, te.reason, te.trust, te.content_source, te.provider, te.model, te.profile, te.created_at
 		FROM transcript_entries te
 		JOIN sessions s ON s.id = te.session_id
 		WHERE (? = '' OR s.workspace = ?)
@@ -1581,15 +1592,17 @@ func timelineItemFromEvent(sessionID string, task Task, event Event) (TimelineIt
 		return TimelineItem{}, false
 	}
 	item := TimelineItem{
-		ID:        event.ID,
-		SessionID: sessionID,
-		TaskID:    task.ID,
-		Type:      string(event.Type),
-		Title:     task.Title,
-		Provider:  payload.Provider,
-		Model:     payload.Model,
-		Profile:   payload.Profile,
-		CreatedAt: event.CreatedAt,
+		ID:            event.ID,
+		SessionID:     sessionID,
+		TaskID:        task.ID,
+		Type:          string(event.Type),
+		Title:         task.Title,
+		Provider:      payload.Provider,
+		Model:         payload.Model,
+		Profile:       payload.Profile,
+		Trust:         payload.Trust,
+		ContentSource: payload.ContentSource,
+		CreatedAt:     event.CreatedAt,
 	}
 	switch event.Type {
 	case EventSummary:

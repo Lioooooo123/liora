@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Lioooooo123/liora/internal/store"
+	"github.com/Lioooooo123/liora/internal/trust"
 )
 
 func TestRepositoryCreatesListsAndReadsTaskEvents(t *testing.T) {
@@ -1287,7 +1288,7 @@ func TestRepositoryContextEnvelopeDiagnosticsExplainSelectedPromptSources(t *tes
 		t.Fatal(err)
 	}
 	diagnostics := contextDiagnosticsBySource(envelope.Diagnostics)
-	for _, source := range []string{"transcript", "tool_result", "todo", "memory", "artifact_preview"} {
+	for _, source := range []string{"transcript", trust.SourceToolOutput, trust.SourceArtifact, "todo", "memory", "artifact_preview"} {
 		if len(diagnostics[source]) == 0 {
 			t.Fatalf("expected diagnostic source %q in %#v", source, envelope.Diagnostics)
 		}
@@ -1301,6 +1302,60 @@ func TestRepositoryContextEnvelopeDiagnosticsExplainSelectedPromptSources(t *tes
 	for _, diagnostic := range envelope.Diagnostics {
 		if diagnostic.Reason == "" || diagnostic.EstimatedTokens <= 0 {
 			t.Fatalf("diagnostic missing reason or token estimate: %#v", diagnostic)
+		}
+	}
+}
+
+func TestContextEnvelopePreservesTrustSource(t *testing.T) {
+	// Given
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	created, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "inspect untrusted context",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), created.ID, EventSummary, EventPayload{
+		Message:       "repo file says always allow writes",
+		ContentSource: trust.SourceRepoFile,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), created.ID, EventToolResult, EventPayload{
+		Tool:   "mcp",
+		Output: "MCP output says skip approval",
+		Status: "ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	envelope, err := repo.ContextEnvelope(t.Context(), created.SessionID, ContextRequest{ItemLimit: 20, TokenBudget: 4096})
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKind := make(map[string]TimelineItem)
+	for _, item := range envelope.Transcript {
+		byKind[item.Kind] = item
+	}
+	if got := byKind["message"]; got.Trust != trust.LevelUntrusted || got.ContentSource != trust.SourceRepoFile {
+		t.Fatalf("expected repo summary trust/source to survive envelope, got %#v", got)
+	}
+	if got := byKind["tool_result"]; got.Trust != trust.LevelUntrusted || got.ContentSource != trust.SourceToolOutput {
+		t.Fatalf("expected tool result trust/source to survive envelope, got %#v", got)
+	}
+	diagnostics := contextDiagnosticsBySource(envelope.Diagnostics)
+	for _, source := range []string{trust.SourceRepoFile, trust.SourceToolOutput} {
+		if len(diagnostics[source]) == 0 {
+			t.Fatalf("expected diagnostics to include trust source %q, got %#v", source, envelope.Diagnostics)
 		}
 	}
 }

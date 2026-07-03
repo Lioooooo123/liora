@@ -379,28 +379,30 @@ type Message struct {
 }
 
 type TimelineItem struct {
-	ID           string    `json:"id"`
-	SessionID    string    `json:"session_id"`
-	TaskID       string    `json:"task_id,omitempty"`
-	Kind         string    `json:"kind"`
-	Role         string    `json:"role,omitempty"`
-	Type         string    `json:"type,omitempty"`
-	Title        string    `json:"title,omitempty"`
-	Content      string    `json:"content,omitempty"`
-	Tool         string    `json:"tool,omitempty"`
-	ToolCallID   string    `json:"tool_call_id,omitempty"`
-	ToolResultID string    `json:"tool_result_id,omitempty"`
-	Input        string    `json:"input,omitempty"`
-	Output       string    `json:"output,omitempty"`
-	Target       string    `json:"target,omitempty"`
-	Status       string    `json:"status,omitempty"`
-	Diff         string    `json:"diff,omitempty"`
-	Risk         string    `json:"risk,omitempty"`
-	Reason       string    `json:"reason,omitempty"`
-	Provider     string    `json:"provider,omitempty"`
-	Model        string    `json:"model,omitempty"`
-	Profile      string    `json:"profile,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID            string    `json:"id"`
+	SessionID     string    `json:"session_id"`
+	TaskID        string    `json:"task_id,omitempty"`
+	Kind          string    `json:"kind"`
+	Role          string    `json:"role,omitempty"`
+	Type          string    `json:"type,omitempty"`
+	Title         string    `json:"title,omitempty"`
+	Content       string    `json:"content,omitempty"`
+	Tool          string    `json:"tool,omitempty"`
+	ToolCallID    string    `json:"tool_call_id,omitempty"`
+	ToolResultID  string    `json:"tool_result_id,omitempty"`
+	Input         string    `json:"input,omitempty"`
+	Output        string    `json:"output,omitempty"`
+	Target        string    `json:"target,omitempty"`
+	Status        string    `json:"status,omitempty"`
+	Diff          string    `json:"diff,omitempty"`
+	Risk          string    `json:"risk,omitempty"`
+	Reason        string    `json:"reason,omitempty"`
+	Trust         string    `json:"trust,omitempty"`
+	ContentSource string    `json:"content_source,omitempty"`
+	Provider      string    `json:"provider,omitempty"`
+	Model         string    `json:"model,omitempty"`
+	Profile       string    `json:"profile,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type CreateSessionRequest struct {
