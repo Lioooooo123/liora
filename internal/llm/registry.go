@@ -7,6 +7,7 @@ import (
 
 type Registry struct {
 	defaults Config
+	profiles ProviderProfileCatalog
 }
 
 func NewRegistry(defaults Config) (*Registry, error) {
@@ -14,7 +15,11 @@ func NewRegistry(defaults Config) (*Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Registry{defaults: resolved}, nil
+	profiles, err := LoadProviderProfileCatalogFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	return &Registry{defaults: resolved, profiles: profiles}, nil
 }
 
 func (r *Registry) DefaultConfig() (Config, bool) {
@@ -27,6 +32,9 @@ func (r *Registry) DefaultConfig() (Config, bool) {
 func (r *Registry) Resolve(request Config) (Config, error) {
 	if r == nil {
 		return ResolveConfig(request)
+	}
+	if profile, ok := r.matchingProfile(request); ok {
+		request = applyProviderProfile(request, profile)
 	}
 	config := r.defaults
 	requestProvider := NormalizeProvider(request.Provider)
@@ -69,6 +77,41 @@ func (r *Registry) Resolve(request Config) (Config, error) {
 	}
 	config.TraceLabels = mergeTraceLabels(config.TraceLabels, request.TraceLabels)
 	return ResolveConfig(config)
+}
+
+func (r *Registry) matchingProfile(request Config) (ProviderProfile, bool) {
+	profile, ok := r.profiles.MatchProfile(request.Profile)
+	if !ok {
+		return ProviderProfile{}, false
+	}
+	requestProvider := NormalizeProvider(request.Provider)
+	if requestProvider != "" && requestProvider != profile.Provider {
+		return ProviderProfile{}, false
+	}
+	requestModel := strings.TrimSpace(request.Model)
+	if requestModel != "" && requestModel != profile.Model {
+		return ProviderProfile{}, false
+	}
+	return profile, true
+}
+
+func applyProviderProfile(request Config, profile ProviderProfile) Config {
+	if strings.TrimSpace(request.Provider) == "" {
+		request.Provider = profile.Provider
+	}
+	if strings.TrimSpace(request.Model) == "" {
+		request.Model = profile.Model
+	}
+	if strings.TrimSpace(request.BaseURL) == "" {
+		request.BaseURL = profile.BaseURL
+	}
+	if strings.TrimSpace(request.APIKey) == "" {
+		request.APIKey = profile.APIKey
+	}
+	if strings.TrimSpace(profile.Profile) != "" {
+		request.Profile = profile.Profile
+	}
+	return request
 }
 
 func (r *Registry) Planner(request Config) (*Planner, Config, error) {

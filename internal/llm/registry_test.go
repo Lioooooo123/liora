@@ -49,6 +49,77 @@ func TestRegistryResolvesPerRequestProviderConfig(t *testing.T) {
 	}
 }
 
+func TestRegistryUsesProfileCatalogSecretWhenRequestMatchesProfile(t *testing.T) {
+	// Given
+	t.Setenv(ProviderProfilesEnvVar, `{
+		"cheap": {
+			"provider": "deepseek",
+			"model": "deepseek-chat",
+			"base_url": "https://proxy.example.test/v1",
+			"api_key": "cheap-secret",
+			"profile": "cheap"
+		}
+	}`)
+	registry, err := NewRegistry(Config{
+		Provider: ProviderOpenAIChat,
+		APIKey:   "default-key",
+		Model:    "default-model",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	config, err := registry.Resolve(Config{
+		Provider: ProviderDeepSeek,
+		Model:    "deepseek-chat",
+		Profile:  "cheap",
+	})
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.APIKey != "cheap-secret" || config.BaseURL != "https://proxy.example.test/v1" || config.Provider != ProviderDeepSeek || config.Model != "deepseek-chat" || config.Profile != "cheap" {
+		t.Fatalf("expected catalog profile to supply secret and endpoint, got %#v", config)
+	}
+}
+
+func TestRegistryUsesProfileCatalogSecretWhenRequestMatchesProfileLabel(t *testing.T) {
+	// Given
+	t.Setenv(ProviderProfilesEnvVar, `{
+		"cheap": {
+			"provider": "deepseek",
+			"model": "deepseek-chat",
+			"api_key": "cheap-secret",
+			"profile": "budget"
+		}
+	}`)
+	registry, err := NewRegistry(Config{
+		Provider: ProviderOpenAIChat,
+		APIKey:   "default-key",
+		Model:    "default-model",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	config, err := registry.Resolve(Config{
+		Provider: ProviderDeepSeek,
+		Model:    "deepseek-chat",
+		Profile:  "budget",
+	})
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.APIKey != "cheap-secret" || config.Profile != "budget" {
+		t.Fatalf("expected profile label to resolve catalog secret, got %#v", config)
+	}
+}
+
 func TestRegistryRejectsUnsupportedProvider(t *testing.T) {
 	registry, err := NewRegistry(Config{Provider: ProviderOpenAIChat, APIKey: "key", Model: "model"})
 	if err != nil {
