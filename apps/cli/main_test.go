@@ -293,6 +293,8 @@ func cleanLLMEnv(t *testing.T, extra ...string) []string {
 		"OPENAI_BASE_URL":    true,
 		"OPENAI_API_KEY":     true,
 		"OPENAI_MODEL":       true,
+		"GOCACHE":            true,
+		"GOMODCACHE":         true,
 	}
 	env := make([]string, 0, len(os.Environ())+len(extra))
 	for _, entry := range os.Environ() {
@@ -303,7 +305,18 @@ func cleanLLMEnv(t *testing.T, extra ...string) []string {
 		env = append(env, entry)
 	}
 	env = append(env, "HOME="+t.TempDir())
+	env = append(env, "GOCACHE="+sharedGoCacheDir(t, "build"))
+	env = append(env, "GOMODCACHE="+sharedGoCacheDir(t, "mod"))
 	return append(env, extra...)
+}
+
+func sharedGoCacheDir(t *testing.T, name string) string {
+	t.Helper()
+	dir := filepath.Join(os.TempDir(), "liora-test-go-cache", name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func TestCLINaturalModeUsesLLMPlan(t *testing.T) {
