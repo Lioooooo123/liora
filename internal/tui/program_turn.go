@@ -37,6 +37,7 @@ func (m *model) submitLine(line string) tea.Cmd {
 	m.appendUserMessage(line)
 	m.running = true
 	m.turnVisible = false
+	m.turnErrorVisible = false
 	m.clearAssistantDeltaStream()
 	m.lastStatus = "working"
 	m.nextAction = "/cancel to stop"

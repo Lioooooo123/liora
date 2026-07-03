@@ -58,6 +58,7 @@ type model struct {
 	lastStatus          string
 	nextAction          string
 	turnVisible         bool
+	turnErrorVisible    bool
 	assistantDeltaText  strings.Builder
 	assistantDeltaBlock int
 
@@ -154,7 +155,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.doneCh = nil
 		if msg.err != nil {
 			m.lastStatus = "error"
-			m.appendSection("Error", msg.err.Error())
+			if !m.turnErrorVisible {
+				m.appendSection("Error", msg.err.Error())
+			}
 		} else if !m.turnVisible {
 			m.appendSection("Assistant", "Completed.")
 		}

@@ -34,6 +34,9 @@ func (m *model) appendStreamUpdate(update StreamUpdate) bool {
 	if !section.Visible {
 		return false
 	}
+	if section.Title == "Error" {
+		m.turnErrorVisible = true
+	}
 	if update.Type == daemonEventAssistantDelta {
 		return m.appendAssistantDelta(section.Body)
 	}
