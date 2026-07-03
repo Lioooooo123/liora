@@ -1,6 +1,7 @@
 package task
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -120,5 +121,68 @@ func TestTaskPromptWrapsUntrustedContext(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected task prompt to contain %q, got:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestTaskPromptRecordsPromptContextSnapshot(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	first, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "inspect prior context",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), first.ID, EventSummary, EventPayload{Message: "prior assistant context"}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		SessionID: first.SessionID,
+		Prompt:    "continue with actual context",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(repo, nil)
+
+	prompt, err := runner.taskPrompt(t.Context(), second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "prior assistant context") {
+		t.Fatalf("expected prompt to include prior context, got:\n%s", prompt)
+	}
+	events, err := repo.Events(t.Context(), second.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot EventPayload
+	for _, event := range events {
+		if event.Type != EventPromptContextSnapshot {
+			continue
+		}
+		if err := json.Unmarshal([]byte(event.Payload), &snapshot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if snapshot.Message != "Prompt context snapshot" {
+		t.Fatalf("expected prompt context snapshot event, got events=%#v payload=%#v", eventTypes(events), snapshot)
+	}
+	for _, want := range []string{"Prompt context ", "Hash: ", "Sources:", "transcript: selected="} {
+		if !strings.Contains(snapshot.Output, want) {
+			t.Fatalf("expected snapshot output to contain %q, got:\n%s", want, snapshot.Output)
+		}
+	}
+	if snapshot.TokenBudget != taskPromptContextTokenBudget || snapshot.TokenEstimate == 0 || snapshot.SourceItemCount == 0 || snapshot.Target == "" {
+		t.Fatalf("snapshot should persist budget, estimate, source count, and hash, got %#v", snapshot)
 	}
 }

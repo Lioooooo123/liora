@@ -2,6 +2,7 @@ package tuisession
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -1034,12 +1035,62 @@ func (s *DaemonSubmitter) showPromptContext(ctx context.Context, args string) (s
 	if !ok {
 		return "No current daemon session.", true, nil
 	}
+	if promptContextLastRequested(args) {
+		output, err := s.showLastPromptContextSnapshot(ctx, sessionID)
+		return output, true, err
+	}
 	request := parseContextRequest(args)
 	envelope, err := s.client.SessionContext(ctx, sessionID, request)
 	if err != nil {
 		return "", true, err
 	}
 	return formatPromptContextSummary(envelope), true, nil
+}
+
+func promptContextLastRequested(args string) bool {
+	for _, field := range strings.Fields(args) {
+		if field == "--last" {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *DaemonSubmitter) showLastPromptContextSnapshot(ctx context.Context, sessionID string) (string, error) {
+	tasks, err := s.client.SessionTasks(ctx, sessionID, 1)
+	if err != nil {
+		return "", err
+	}
+	if len(tasks) == 0 {
+		return "No tasks found for current daemon session.", nil
+	}
+	task := tasks[0]
+	events, err := s.client.Events(ctx, task.ID)
+	if err != nil {
+		return "", err
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type != taskpkg.EventPromptContextSnapshot {
+			continue
+		}
+		var payload taskpkg.EventPayload
+		if err := json.Unmarshal([]byte(events[i].Payload), &payload); err != nil {
+			return "", err
+		}
+		output := strings.TrimSpace(payload.Output)
+		if output == "" {
+			output = strings.TrimSpace(payload.Message)
+		}
+		lines := []string{fmt.Sprintf("Actual prompt context snapshot for %s", task.ID)}
+		if strings.TrimSpace(payload.Target) != "" && !strings.Contains(output, payload.Target) {
+			lines = append(lines, "Hash: "+strings.TrimSpace(payload.Target))
+		}
+		if strings.TrimSpace(output) != "" {
+			lines = append(lines, output)
+		}
+		return strings.Join(lines, "\n"), nil
+	}
+	return fmt.Sprintf("No prompt context snapshot recorded for %s.", task.ID), nil
 }
 
 func formatPromptContextSummary(envelope taskpkg.ContextEnvelope) string {

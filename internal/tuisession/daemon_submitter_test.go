@@ -1356,9 +1356,10 @@ func TestDaemonSubmitterShowsPromptContextSourceSummary(t *testing.T) {
 		"artifact_preview: selected=",
 		"Diagnostics:",
 		"transcript id=",
-		"tool_result id=",
+		"tool_output id=",
 		"todo id=todo-prompt-context kind=pending tokens=",
 		"memory id=" + memory.ID + " kind=preference tokens=",
+		"artifact id=",
 		"artifact_preview id=artifact://prompt-context/result.txt kind=artifact_preview tokens=",
 		"reason=enabled unexpired memory matched the current workspace",
 	} {
@@ -1376,6 +1377,49 @@ func TestDaemonSubmitterShowsPromptContextSourceSummary(t *testing.T) {
 	}
 	if !handled || !strings.Contains(aliasOutput, "Prompt context "+created.SessionID) || !strings.Contains(aliasOutput, "Diagnostics:") {
 		t.Fatalf("expected /context sources alias to show prompt context summary handled=%v output=%q", handled, aliasOutput)
+	}
+}
+
+func TestDaemonSubmitterPromptContextLastShowsActualSnapshot(t *testing.T) {
+	root := t.TempDir()
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
+	defer server.Close()
+	submitter := newTestSubmitter(t, server.URL, root, true)
+	created, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: root,
+		Prompt:    "snapshot source",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), created.ID, taskpkg.EventPromptContextSnapshot, taskpkg.EventPayload{
+		Message:         "Prompt context snapshot",
+		Output:          "Prompt context " + created.SessionID + "\nHash: sha256:abc123\nSources:\n- transcript: selected=1/1 tokens=12 truncated=false",
+		Target:          "sha256:abc123",
+		TokenBudget:     4096,
+		TokenEstimate:   12,
+		SourceItemCount: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	submitter.rememberSession(created.SessionID)
+
+	output, handled, err := submitter.HandleCommand(t.Context(), "/prompt-context --last")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Actual prompt context snapshot for " + created.ID,
+		"Prompt context " + created.SessionID,
+		"Hash: sha256:abc123",
+		"transcript: selected=1/1",
+	} {
+		if !handled || !strings.Contains(output, want) {
+			t.Fatalf("expected /prompt-context --last output to contain %q handled=%v output=%q", want, handled, output)
+		}
 	}
 }
 

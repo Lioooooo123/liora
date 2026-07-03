@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strings"
 
@@ -34,23 +35,26 @@ func (r *Runner) taskPrompt(ctx context.Context, task Task) (string, error) {
 }
 
 func (r *Runner) withSessionContext(ctx context.Context, task Task, prompt string) (string, error) {
-	contextPrompt, err := r.sessionContextPrompt(ctx, task)
+	contextPrompt, envelope, err := r.sessionContextPrompt(ctx, task)
 	if err != nil {
 		return "", err
 	}
 	if contextPrompt == "" {
 		return prompt, nil
 	}
+	if err := r.recordPromptContextSnapshot(ctx, task, envelope, contextPrompt); err != nil {
+		return "", err
+	}
 	return strings.TrimSpace(contextPrompt + "\n\nCurrent user request:\n" + prompt), nil
 }
 
-func (r *Runner) sessionContextPrompt(ctx context.Context, task Task) (string, error) {
+func (r *Runner) sessionContextPrompt(ctx context.Context, task Task) (string, ContextEnvelope, error) {
 	envelope, err := r.repo.ContextEnvelope(ctx, task.SessionID, ContextRequest{
 		ItemLimit:   taskPromptContextItemLimit,
 		TokenBudget: taskPromptContextTokenBudget,
 	})
 	if err != nil {
-		return "", err
+		return "", ContextEnvelope{}, err
 	}
 	var builder strings.Builder
 	appendContextLine(&builder, "Session context (bounded, read-only; current task omitted):")
@@ -63,9 +67,50 @@ func (r *Runner) sessionContextPrompt(ctx context.Context, task Task) (string, e
 	appendMemoryContext(&builder, envelope.Memories)
 	appendArtifactContext(&builder, envelope.ArtifactRefs)
 	if builder.String() == "Session context (bounded, read-only; current task omitted):\n" {
-		return "", nil
+		return "", envelope, nil
 	}
-	return strings.TrimSpace(builder.String()), nil
+	return strings.TrimSpace(builder.String()), envelope, nil
+}
+
+func (r *Runner) recordPromptContextSnapshot(ctx context.Context, task Task, envelope ContextEnvelope, contextPrompt string) error {
+	hash := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(contextPrompt)))
+	return r.repo.AppendEvent(ctx, task.ID, EventPromptContextSnapshot, r.eventPayloadWithModel(task, EventPayload{
+		Message:         "Prompt context snapshot",
+		Output:          formatPromptContextSnapshot(envelope, hash),
+		Target:          hash,
+		TokenBudget:     envelope.Budget.MaxTokens,
+		TokenEstimate:   envelope.Budget.EstimatedTokens,
+		SourceItemCount: promptContextSelectedItems(envelope),
+	}))
+}
+
+func formatPromptContextSnapshot(envelope ContextEnvelope, hash string) string {
+	lines := []string{
+		fmt.Sprintf("Prompt context %s", envelope.Session.ID),
+		"Hash: " + hash,
+		fmt.Sprintf("Budget: %d/%d estimated tokens, %d item limit, truncated=%t", envelope.Budget.EstimatedTokens, envelope.Budget.MaxTokens, envelope.Budget.ItemLimit, envelope.Budget.Truncated),
+	}
+	if len(envelope.Pack.Sources) == 0 {
+		lines = append(lines, "Sources: none")
+	} else {
+		lines = append(lines, "Sources:")
+		for _, source := range envelope.Pack.Sources {
+			name := strings.TrimSpace(source.Name)
+			if name == "" {
+				name = "unknown"
+			}
+			lines = append(lines, fmt.Sprintf("- %s: selected=%d/%d tokens=%d truncated=%t", name, source.Selected, source.Available, source.EstimatedTokens, source.Truncated))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func promptContextSelectedItems(envelope ContextEnvelope) int {
+	var count int
+	for _, source := range envelope.Pack.Sources {
+		count += source.Selected
+	}
+	return count
 }
 
 func appendCompactBoundaries(builder *strings.Builder, boundaries []ContextCompactBoundary) {
