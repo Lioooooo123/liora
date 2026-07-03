@@ -69,6 +69,7 @@ type streamingLoop struct {
 	running      bool
 	turnDone     <-chan turnOutcome
 	streamEvents <-chan StreamUpdate
+	renderer     *lineStreamRenderer
 }
 
 func (a *App) runStreaming(ctx context.Context, input io.Reader, output io.Writer, streamer StreamingSubmitter) error {
@@ -109,9 +110,10 @@ func (a *App) runStreaming(ctx context.Context, input io.Reader, output io.Write
 			loop.turnDone = nil
 			if loop.streamEvents != nil {
 				for event := range loop.streamEvents {
-					RenderStreamUpdate(output, event)
+					loop.renderStreamUpdate(event)
 				}
 			}
+			loop.flushStream()
 			loop.streamEvents = nil
 			if result.err != nil {
 				fmt.Fprintf(output, "Error: %v\n", result.err)
@@ -121,7 +123,7 @@ func (a *App) runStreaming(ctx context.Context, input io.Reader, output io.Write
 			}
 		case event, ok := <-loop.streamEvents:
 			if ok {
-				RenderStreamUpdate(output, event)
+				loop.renderStreamUpdate(event)
 			}
 		case scanned := <-lines:
 			if !scanned.ok {
@@ -209,6 +211,7 @@ func (l *streamingLoop) startTurn(input string) {
 	l.running = true
 	l.turnDone = done
 	l.streamEvents = updates
+	l.renderer = newLineStreamRenderer(l.output)
 	go func() {
 		_, err := l.streamer.SubmitStream(l.ctx, input, func(update StreamUpdate) {
 			updates <- update
@@ -225,9 +228,11 @@ func isRunningCommand(line string) bool {
 
 func (a *App) runTurn(ctx context.Context, input string, output io.Writer) error {
 	if streamer, ok := a.submitter.(StreamingSubmitter); ok {
+		renderer := newLineStreamRenderer(output)
 		_, err := streamer.SubmitStream(ctx, input, func(update StreamUpdate) {
-			RenderStreamUpdate(output, update)
+			renderer.Render(update)
 		})
+		renderer.Flush()
 		return err
 	}
 	result, err := a.submitter.Submit(ctx, input)
