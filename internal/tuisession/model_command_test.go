@@ -17,7 +17,7 @@ func TestDaemonSubmitterModelProfilesListsAndSelectsConfiguredCatalog(t *testing
 		"cheap": {
 			"provider": "deepseek",
 			"model": "deepseek-chat",
-			"base_url": "https://proxy.example.test/v1/",
+			"base_url": "https:\/\/user:pass@proxy.example.test/v1?token=query-secret#fragment-secret",
 			"api_key": "cheap-secret",
 			"profile": "cheap"
 		},
@@ -75,7 +75,7 @@ func TestDaemonSubmitterModelProfilesListsAndSelectsConfiguredCatalog(t *testing
 			t.Fatalf("expected /model profiles output to contain %q handled=%v output=%q", want, handled, profiles)
 		}
 	}
-	for _, secret := range []string{"cheap-secret", "strong-secret"} {
+	for _, secret := range []string{"cheap-secret", "strong-secret", "user", "pass", "query-secret", "fragment-secret"} {
 		if strings.Contains(profiles, secret) {
 			t.Fatalf("expected /model profiles to redact %q, got %q", secret, profiles)
 		}
@@ -93,11 +93,16 @@ func TestDaemonSubmitterModelProfilesListsAndSelectsConfiguredCatalog(t *testing
 			t.Fatalf("expected catalog set output to contain %q handled=%v output=%q", want, handled, updated)
 		}
 	}
+	for _, secret := range []string{"user", "pass", "query-secret", "fragment-secret"} {
+		if strings.Contains(updated, secret) {
+			t.Fatalf("expected catalog set output to redact %q, got %q", secret, updated)
+		}
+	}
 	config, err := client.GetThreadModelConfig(t.Context(), thread.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Provider != "deepseek" || config.Model != "deepseek-chat" || config.BaseURL != "https://proxy.example.test/v1" || config.Profile != "cheap" {
+	if config.Provider != "deepseek" || config.Model != "deepseek-chat" || config.BaseURL != "https://user:pass@proxy.example.test/v1?token=query-secret#fragment-secret" || config.Profile != "cheap" {
 		t.Fatalf("unexpected persisted catalog model config %#v", config)
 	}
 }

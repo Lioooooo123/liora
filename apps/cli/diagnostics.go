@@ -21,24 +21,54 @@ type diagnosticsReport struct {
 }
 
 type diagnosticsMetadata struct {
-	Workspace           string   `json:"workspace"`
-	Provider            string   `json:"provider"`
-	Model               string   `json:"model"`
-	Profile             string   `json:"profile,omitempty"`
-	BaseURL             string   `json:"base_url,omitempty"`
-	APIKey              string   `json:"api_key"`
-	DaemonAuth          string   `json:"daemon_auth,omitempty"`
-	Sandbox             string   `json:"sandbox,omitempty"`
-	PatchMode           bool     `json:"patch_mode"`
-	PermissionMode      string   `json:"permission_mode,omitempty"`
-	NetworkDefault      string   `json:"network_default,omitempty"`
-	NetworkAllowlist    []string `json:"network_allowlist,omitempty"`
-	MCPServerCount      int      `json:"mcp_server_count"`
-	ScheduleTotal       int      `json:"schedule_total"`
-	ScheduleEnabled     int      `json:"schedule_enabled"`
-	HookTotal           int      `json:"hook_total"`
-	HookEnabled         int      `json:"hook_enabled"`
-	RawPayloadsExported bool     `json:"raw_payloads_exported"`
+	Workspace           string                      `json:"workspace"`
+	Provider            string                      `json:"provider"`
+	Model               string                      `json:"model"`
+	Profile             string                      `json:"profile,omitempty"`
+	BaseURL             string                      `json:"base_url,omitempty"`
+	APIKey              string                      `json:"api_key"`
+	Capability          diagnosticsCapabilityStatus `json:"capability"`
+	ProfileCatalog      diagnosticsProfileCatalog   `json:"profile_catalog"`
+	DaemonAuth          string                      `json:"daemon_auth,omitempty"`
+	Sandbox             string                      `json:"sandbox,omitempty"`
+	PatchMode           bool                        `json:"patch_mode"`
+	PermissionMode      string                      `json:"permission_mode,omitempty"`
+	NetworkDefault      string                      `json:"network_default,omitempty"`
+	NetworkAllowlist    []string                    `json:"network_allowlist,omitempty"`
+	MCPServerCount      int                         `json:"mcp_server_count"`
+	ScheduleTotal       int                         `json:"schedule_total"`
+	ScheduleEnabled     int                         `json:"schedule_enabled"`
+	HookTotal           int                         `json:"hook_total"`
+	HookEnabled         int                         `json:"hook_enabled"`
+	RawPayloadsExported bool                        `json:"raw_payloads_exported"`
+}
+
+type diagnosticsCapabilityStatus struct {
+	NativeToolUse   bool `json:"native_tool_use"`
+	Streaming       bool `json:"streaming"`
+	Vision          bool `json:"vision"`
+	LongContext     bool `json:"long_context"`
+	JSONSchema      bool `json:"json_schema"`
+	MaxOutputTokens int  `json:"max_output_tokens"`
+}
+
+type diagnosticsProfileCatalog struct {
+	State    string                       `json:"state"`
+	Count    int                          `json:"count"`
+	Names    []string                     `json:"names,omitempty"`
+	Profiles []diagnosticsProviderProfile `json:"profiles,omitempty"`
+	Error    string                       `json:"error,omitempty"`
+}
+
+type diagnosticsProviderProfile struct {
+	Name          string `json:"name"`
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	Profile       string `json:"profile,omitempty"`
+	BaseURL       string `json:"base_url,omitempty"`
+	APIKey        string `json:"api_key"`
+	NativeToolUse bool   `json:"native_tool_use"`
+	Streaming     bool   `json:"streaming"`
 }
 
 type diagnosticsSchemaStatus struct {
@@ -108,6 +138,8 @@ func buildDiagnosticsReport(config llm.Config, reportContext doctorReportContext
 		Profile:             emptyOmit(resolved.Profile),
 		BaseURL:             redactDiagnosticURL(resolved.BaseURL),
 		APIKey:              credentialState(resolved.APIKey),
+		Capability:          diagnosticsCapabilityFrom(resolved.Capability),
+		ProfileCatalog:      diagnosticsProviderProfileCatalog(),
 		RawPayloadsExported: false,
 	}
 	if reportContext.Runtime != nil {
@@ -157,6 +189,51 @@ func buildDiagnosticsReport(config llm.Config, reportContext doctorReportContext
 			Note:            "raw payloads, transcripts, tool output, logs, credential values, cookies, API keys, and PII are omitted",
 		},
 	}, nil
+}
+
+func diagnosticsCapabilityFrom(capability llm.ModelCapability) diagnosticsCapabilityStatus {
+	return diagnosticsCapabilityStatus{
+		NativeToolUse:   capability.NativeToolUse,
+		Streaming:       capability.Streaming,
+		Vision:          capability.Vision,
+		LongContext:     capability.LongContext,
+		JSONSchema:      capability.JSONSchema,
+		MaxOutputTokens: capability.MaxOutputTokens,
+	}
+}
+
+func diagnosticsProviderProfileCatalog() diagnosticsProfileCatalog {
+	catalog, err := llm.LoadProviderProfileCatalogFromEnv()
+	if err != nil {
+		return diagnosticsProfileCatalog{State: "invalid", Error: sanitizeDiagnosticError(err)}
+	}
+	names := catalog.Names()
+	if len(names) == 0 {
+		return diagnosticsProfileCatalog{State: "none", Count: 0}
+	}
+	result := diagnosticsProfileCatalog{
+		State: "configured",
+		Count: len(names),
+		Names: names,
+	}
+	for _, name := range names {
+		profile, ok := catalog.Lookup(name)
+		if !ok {
+			continue
+		}
+		capability := llm.ProviderCapability(profile.Provider, profile.Model)
+		result.Profiles = append(result.Profiles, diagnosticsProviderProfile{
+			Name:          name,
+			Provider:      profile.Provider,
+			Model:         profile.Model,
+			Profile:       emptyOmit(profile.Profile),
+			BaseURL:       emptyOmit(redactDiagnosticURL(profile.BaseURL)),
+			APIKey:        credentialState(profile.APIKey),
+			NativeToolUse: capability.NativeToolUse,
+			Streaming:     capability.Streaming,
+		})
+	}
+	return result
 }
 
 func diagnosticsSchemaFromReport(report *store.SchemaReport) diagnosticsSchemaStatus {

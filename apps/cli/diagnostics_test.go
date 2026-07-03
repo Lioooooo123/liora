@@ -11,6 +11,15 @@ import (
 )
 
 func TestDiagnosticsReportExportsOnlyRedactedMetadataAndSummaries(t *testing.T) {
+	t.Setenv(llm.ProviderProfilesEnvVar, `{
+		"cheap": {
+			"provider": "deepseek",
+			"model": "deepseek-chat",
+			"base_url": "https:\/\/user:pass@proxy.example.test/v1?token=query-secret#fragment-secret",
+			"api_key": "cheap-secret",
+			"profile": "budget"
+		}
+	}`)
 	persistentStore := store.New(t.TempDir())
 	if err := persistentStore.SaveMCPConfig(store.MCPConfig{Servers: map[string]store.MCPServerConfig{
 		"secret-server": {
@@ -68,6 +77,10 @@ func TestDiagnosticsReportExportsOnlyRedactedMetadataAndSummaries(t *testing.T) 
 	for _, want := range []string{
 		`"workspace":"configured"`,
 		`"api_key":"configured:redacted"`,
+		`"native_tool_use":true`,
+		`"streaming":true`,
+		`"profile_catalog":{"state":"configured","count":1,"names":["cheap"]`,
+		`"base_url":"https://proxy.example.test/v1"`,
 		`"raw_payloads_exported":false`,
 		`"mcp_server_count":1`,
 		`"schedule_total":1`,
@@ -83,6 +96,7 @@ func TestDiagnosticsReportExportsOnlyRedactedMetadataAndSummaries(t *testing.T) 
 	}
 	for _, forbidden := range []string{
 		"doctor-secret",
+		"cheap-secret",
 		"mcp-secret-arg",
 		"mcp-secret-env",
 		"secret-server",
@@ -94,6 +108,7 @@ func TestDiagnosticsReportExportsOnlyRedactedMetadataAndSummaries(t *testing.T) 
 		"secret-token",
 		"query-secret",
 		"fragment-secret",
+		"user:pass",
 		"/Users/ada/private-repo",
 	} {
 		if strings.Contains(rendered, forbidden) {

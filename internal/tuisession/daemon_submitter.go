@@ -1606,7 +1606,7 @@ func formatThreadModelDetails(config *store.ThreadModelConfig) []string {
 		lines = append(lines, "Profile: "+config.Profile)
 	}
 	if strings.TrimSpace(config.BaseURL) != "" {
-		lines = append(lines, "Base URL: "+config.BaseURL)
+		lines = append(lines, "Base URL: "+redactModelBaseURL(config.BaseURL))
 	}
 	if strings.TrimSpace(config.InheritedFromThreadID) != "" {
 		lines = append(lines, "Inherits: "+config.InheritedFromThreadID)
@@ -1626,7 +1626,7 @@ func formatThreadModelSuffix(provider string, model string, baseURL string, prof
 		parts = append(parts, "profile="+profile)
 	}
 	if strings.TrimSpace(baseURL) != "" {
-		parts = append(parts, "base_url="+baseURL)
+		parts = append(parts, "base_url="+redactModelBaseURL(baseURL))
 	}
 	if len(parts) == 0 {
 		return ""

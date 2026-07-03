@@ -3,6 +3,7 @@ package tuisession
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/Lioooooo123/liora/internal/llm"
@@ -148,7 +149,7 @@ func formatProviderProfile(profile llm.ProviderProfile) string {
 		parts = append(parts, "profile="+profile.Profile)
 	}
 	if strings.TrimSpace(profile.BaseURL) != "" {
-		parts = append(parts, "base_url="+profile.BaseURL)
+		parts = append(parts, "base_url="+redactModelBaseURL(profile.BaseURL))
 	}
 	if strings.TrimSpace(profile.APIKey) != "" {
 		parts = append(parts, "api_key=***")
@@ -162,4 +163,19 @@ func modelUsage() string {
 
 func modelSetUsage() string {
 	return "Usage: /model set <profile> | /model set <provider> <model> [profile]"
+}
+
+func redactModelBaseURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "configured"
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }

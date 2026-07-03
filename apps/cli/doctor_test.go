@@ -173,6 +173,57 @@ func TestDoctorReportIncludesProviderCapabilityAndThreadOverrides(t *testing.T) 
 	}
 }
 
+func TestDoctorReportIncludesProviderProfileCatalog(t *testing.T) {
+	t.Setenv(llm.ProviderProfilesEnvVar, `{
+		"cheap": {
+			"provider": "deepseek",
+			"model": "deepseek-chat",
+			"base_url": "https:\/\/user:pass@proxy.example.test/v1?token=query-secret#fragment-secret",
+			"api_key": "cheap-secret",
+			"profile": "budget"
+		},
+		"strong": {
+			"provider": "anthropic",
+			"model": "claude-sonnet-4",
+			"api_key": "strong-secret"
+		}
+	}`)
+
+	report, err := doctorReport(llm.Config{Provider: "openai-chat", APIKey: "doctor-secret", Model: "gpt-5"}, doctorReportContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"profile_catalog: configured profiles=2 names=cheap,strong",
+		"profile_catalog.cheap: deepseek/deepseek-chat profile=budget base_url=https://proxy.example.test/v1 api_key=configured:redacted native_tool_use=true streaming=true",
+		"profile_catalog.strong: anthropic/claude-sonnet-4 profile=strong base_url=- api_key=configured:redacted native_tool_use=true streaming=true",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("expected doctor report to contain %q, got:\n%s", want, report)
+		}
+	}
+	for _, secret := range []string{"doctor-secret", "cheap-secret", "strong-secret", "user", "pass", "query-secret", "fragment-secret"} {
+		if strings.Contains(report, secret) {
+			t.Fatalf("doctor report leaked %q:\n%s", secret, report)
+		}
+	}
+}
+
+func TestDoctorReportReportsMalformedProviderProfileCatalogSafely(t *testing.T) {
+	t.Setenv(llm.ProviderProfilesEnvVar, `{"bad":{"provider":"deepseek","api_key":"bad-secret"}}`)
+
+	report, err := doctorReport(llm.Config{Provider: "gemini", Model: "gemini-test"}, doctorReportContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report, "profile_catalog: invalid") {
+		t.Fatalf("expected invalid profile catalog status, got:\n%s", report)
+	}
+	if strings.Contains(report, "bad-secret") {
+		t.Fatalf("doctor report leaked catalog secret:\n%s", report)
+	}
+}
+
 func TestDoctorReportIncludesRuntimeMCPAndAutomationStatus(t *testing.T) {
 	persistentStore := store.New(t.TempDir())
 	disabled := false

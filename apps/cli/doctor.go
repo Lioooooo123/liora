@@ -78,6 +78,7 @@ func doctorReport(config llm.Config, reportContext doctorReportContext) (string,
 		"tools: "+toolsStatus,
 	)
 	lines = append(lines, renderModelCapability(capability)...)
+	lines = append(lines, renderProviderProfileCatalog()...)
 	lines = append(lines, renderRuntimeStatus(reportContext)...)
 	lines = append(lines, renderMCPStatus(reportContext)...)
 	lines = append(lines, renderAutomationStatus(reportContext)...)
@@ -97,6 +98,36 @@ func renderModelCapability(capability llm.ModelCapability) []string {
 		fmt.Sprintf("capability.json_schema: %t", capability.JSONSchema),
 		fmt.Sprintf("capability.max_output_tokens: %d", capability.MaxOutputTokens),
 	}
+}
+
+func renderProviderProfileCatalog() []string {
+	catalog, err := llm.LoadProviderProfileCatalogFromEnv()
+	if err != nil {
+		return []string{"profile_catalog: invalid error=" + sanitizeDiagnosticError(err)}
+	}
+	names := catalog.Names()
+	if len(names) == 0 {
+		return []string{"profile_catalog: none profiles=0"}
+	}
+	lines := []string{fmt.Sprintf("profile_catalog: configured profiles=%d names=%s", len(names), strings.Join(names, ","))}
+	for _, name := range names {
+		profile, ok := catalog.Lookup(name)
+		if !ok {
+			continue
+		}
+		capability := llm.ProviderCapability(profile.Provider, profile.Model)
+		lines = append(lines, fmt.Sprintf("profile_catalog.%s: %s/%s profile=%s base_url=%s api_key=%s native_tool_use=%t streaming=%t",
+			name,
+			profile.Provider,
+			profile.Model,
+			emptyDiagnosticValue(profile.Profile),
+			emptyDiagnosticValue(redactDiagnosticURL(profile.BaseURL)),
+			credentialState(profile.APIKey),
+			capability.NativeToolUse,
+			capability.Streaming,
+		))
+	}
+	return lines
 }
 
 func renderRuntimeStatus(reportContext doctorReportContext) []string {
@@ -362,4 +393,15 @@ func emptyDiagnosticValue(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func sanitizeDiagnosticError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ReplaceAll(err.Error(), "\n", " ")
+	if len(message) > 160 {
+		return message[:157] + "..."
+	}
+	return message
 }
