@@ -73,9 +73,8 @@ func renderSectionWithWidth(output io.Writer, title string, body string, width i
 	if width > 2 {
 		bodyWidth = width - 2
 	}
-	var renderedMarkdown bool
-	body, renderedMarkdown = renderSectionMarkdown(title, body, bodyWidth)
-	if bodyWidth > 0 && !renderedMarkdown {
+	body, _ = renderSectionMarkdown(title, body, bodyWidth)
+	if bodyWidth > 0 {
 		body = wrapSectionBody(body, bodyWidth)
 	}
 	fmt.Fprintln(output, "\n"+renderPanel(title, strings.Split(indentBody(body), "\n")))
