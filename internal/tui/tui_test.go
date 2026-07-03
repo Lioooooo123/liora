@@ -257,6 +257,31 @@ func TestDaemonEventFormattersShareSemantics(t *testing.T) {
 	}
 }
 
+func TestDaemonEventFormattersShowToolLifecycleOutsideChat(t *testing.T) {
+	payload := `{"tool":"read","phase":"execute","tool_call_id":"read_1","input":"README.md","status":"running","access_mode":"read","access_resource":"path","access_argument":"README.md","batch_id":"batch-1","batch_size":2}`
+	update := StreamUpdate{Type: "tool.lifecycle", PayloadJSON: payload}
+
+	section := FormatDaemonEventUpdate(update)
+	if section.Visible {
+		t.Fatalf("tool lifecycle should stay hidden from chat transcript, got %#v", section)
+	}
+
+	replay := FormatDaemonEventReplay(update.Type, update.PayloadJSON)
+	tail := strings.Join(FormatDaemonEventTail(update.Type, update.PayloadJSON), "\n")
+	watch := FormatDaemonEventWatch("task-001", update.Type, update.PayloadJSON)
+	for name, got := range map[string]string{
+		"replay": replay,
+		"tail":   tail,
+		"watch":  watch,
+	} {
+		for _, want := range []string{"tool.lifecycle[execute]", "read README.md", "access=read:path(README.md)", "batch=batch-1/2"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%s formatter lost lifecycle detail %q: %q", name, want, got)
+			}
+		}
+	}
+}
+
 func TestDaemonEventFormattersHandleMalformedAndUnknownEvents(t *testing.T) {
 	malformed := StreamUpdate{Type: "custom.event", PayloadJSON: "{"}
 

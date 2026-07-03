@@ -47,3 +47,44 @@ func TestEventCatalogCompatibilityRejectsRemovedEvent(t *testing.T) {
 		t.Fatalf("expected missing event error, got %v", err)
 	}
 }
+
+func TestEventCatalogDefinesToolLifecycle(t *testing.T) {
+	definition, ok := EventDefinitionFor(EventToolLifecycle)
+	if !ok {
+		t.Fatalf("expected %s in event catalog", EventToolLifecycle)
+	}
+	if definition.Family != EventFamilyTool {
+		t.Fatalf("expected %s family %q, got %q", EventToolLifecycle, EventFamilyTool, definition.Family)
+	}
+	if err := ValidateEvent(EventToolLifecycle, EventPayload{
+		Tool:           "read",
+		Phase:          "prepare",
+		ToolCallID:     "call_1",
+		AccessMode:     "read",
+		AccessResource: "path",
+		AccessArgument: "README.md",
+		BatchID:        "batch-1",
+		BatchSize:      2,
+	}); err != nil {
+		t.Fatalf("expected valid tool lifecycle event: %v", err)
+	}
+}
+
+func TestEventCatalogRejectsMalformedToolLifecycle(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload EventPayload
+		want    string
+	}{
+		{name: "missing tool", payload: EventPayload{Phase: "prepare"}, want: "payload.tool"},
+		{name: "missing phase", payload: EventPayload{Tool: "read"}, want: "payload.phase"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateEvent(EventToolLifecycle, tc.payload)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+}

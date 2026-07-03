@@ -18,6 +18,7 @@ const (
 	daemonEventReplanning         = "task.replanning"
 	daemonEventToolCall           = "tool.call"
 	daemonEventToolResult         = "tool.result"
+	daemonEventToolLifecycle      = "tool.lifecycle"
 	daemonEventTodoUpdated        = "todo.updated"
 	daemonEventTranscriptEntry    = "transcript.entry"
 	daemonEventArtifactReference  = "artifact.reference"
@@ -42,28 +43,39 @@ const (
 )
 
 type eventPayload struct {
-	ID            string `json:"id,omitempty"`
-	Message       string `json:"message,omitempty"`
-	Action        string `json:"action,omitempty"`
-	Target        string `json:"target,omitempty"`
-	Path          string `json:"path,omitempty"`
-	Tool          string `json:"tool,omitempty"`
-	Input         string `json:"input,omitempty"`
-	Output        string `json:"output,omitempty"`
-	Status        string `json:"status,omitempty"`
-	Steps         string `json:"steps,omitempty"`
-	Diff          string `json:"diff,omitempty"`
-	Risk          string `json:"risk,omitempty"`
-	Reason        string `json:"reason,omitempty"`
-	Origin        string `json:"origin,omitempty"`
-	Kind          string `json:"kind,omitempty"`
-	Source        string `json:"source,omitempty"`
-	Trigger       string `json:"trigger,omitempty"`
-	ParentTaskID  string `json:"parent_task_id,omitempty"`
-	SourceTaskID  string `json:"source_task_id,omitempty"`
-	Priority      string `json:"priority,omitempty"`
-	TokenEstimate int    `json:"token_estimate,omitempty"`
-	TokenBudget   int    `json:"token_budget,omitempty"`
+	ID             string `json:"id,omitempty"`
+	Message        string `json:"message,omitempty"`
+	Action         string `json:"action,omitempty"`
+	Target         string `json:"target,omitempty"`
+	Path           string `json:"path,omitempty"`
+	Tool           string `json:"tool,omitempty"`
+	ToolCallID     string `json:"tool_call_id,omitempty"`
+	ToolResultID   string `json:"tool_result_id,omitempty"`
+	Phase          string `json:"phase,omitempty"`
+	Input          string `json:"input,omitempty"`
+	Output         string `json:"output,omitempty"`
+	OutputPath     string `json:"output_path,omitempty"`
+	Status         string `json:"status,omitempty"`
+	Steps          string `json:"steps,omitempty"`
+	Diff           string `json:"diff,omitempty"`
+	Risk           string `json:"risk,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+	Origin         string `json:"origin,omitempty"`
+	Kind           string `json:"kind,omitempty"`
+	Source         string `json:"source,omitempty"`
+	Trigger        string `json:"trigger,omitempty"`
+	ParentTaskID   string `json:"parent_task_id,omitempty"`
+	SourceTaskID   string `json:"source_task_id,omitempty"`
+	Priority       string `json:"priority,omitempty"`
+	BatchID        string `json:"batch_id,omitempty"`
+	BatchSize      int    `json:"batch_size,omitempty"`
+	AccessMode     string `json:"access_mode,omitempty"`
+	AccessResource string `json:"access_resource,omitempty"`
+	AccessArgument string `json:"access_argument,omitempty"`
+	DurationMS     int64  `json:"duration_ms,omitempty"`
+	Truncated      bool   `json:"truncated,omitempty"`
+	TokenEstimate  int    `json:"token_estimate,omitempty"`
+	TokenBudget    int    `json:"token_budget,omitempty"`
 }
 
 type DaemonEventSection struct {
@@ -73,6 +85,16 @@ type DaemonEventSection struct {
 }
 
 func FormatDaemonEventUpdate(update StreamUpdate) DaemonEventSection {
+	if update.Type == daemonEventToolLifecycle {
+		payload, err := DecodeDaemonEventPayload(update.PayloadJSON)
+		if err != nil {
+			return DaemonEventSection{Title: "Event", Body: fmt.Sprintf("%s: malformed payload", update.Type), Visible: true}
+		}
+		if isLifecycleErrorStatus(payload.Status) {
+			return DaemonEventSection{Title: "Error", Body: formatToolLifecycleEvent(payload), Visible: true}
+		}
+		return DaemonEventSection{}
+	}
 	if isDaemonEventHiddenFromChat(update.Type) {
 		return DaemonEventSection{}
 	}
@@ -146,6 +168,7 @@ func isDaemonEventHiddenFromChat(eventType string) bool {
 		daemonEventPlanReady,
 		daemonEventReplanning,
 		daemonEventToolCall,
+		daemonEventToolLifecycle,
 		daemonEventTranscriptEntry,
 		daemonEventArtifactReference,
 		daemonEventCompactBoundary,
@@ -209,6 +232,8 @@ func daemonEventReplay(eventType string, payload eventPayload) string {
 			status = "[" + status + "] "
 		}
 		return strings.TrimSpace(string(eventType) + ": " + status + payload.Tool + " " + payload.Input + " " + daemonFirstLine(payload.Output))
+	case daemonEventToolLifecycle:
+		return formatToolLifecycleEvent(payload)
 	case daemonEventTodoUpdated:
 		return strings.TrimSpace(string(eventType) + ": " + formatTodoEvent(payload))
 	case daemonEventAssistantDelta:
@@ -241,6 +266,8 @@ func daemonEventTail(eventType string, payload eventPayload) []string {
 		}
 		lines := []string{strings.TrimSpace(header + " [" + status + "]: " + payload.Tool + " " + payload.Input)}
 		return append(lines, daemonIndentLines(payload.Output)...)
+	case daemonEventToolLifecycle:
+		return []string{formatToolLifecycleEvent(payload)}
 	case daemonEventTodoUpdated:
 		return daemonAppendPrefixedLines(header, formatTodoEvent(payload))
 	case daemonEventArtifactReference:
@@ -279,6 +306,8 @@ func daemonEventWatch(taskID string, eventType string, payload eventPayload) str
 			status = string(trace.StatusOK)
 		}
 		return strings.TrimSpace(prefix + "[" + status + "]: " + payload.Tool + " " + payload.Input + " " + daemonFirstLine(payload.Output))
+	case daemonEventToolLifecycle:
+		return strings.TrimSpace(prefix + " " + formatToolLifecycleEvent(payload))
 	case daemonEventTodoUpdated:
 		return strings.TrimSpace(prefix + ": " + formatTodoEvent(payload))
 	case daemonEventAssistantDelta, daemonEventSummary:
@@ -312,6 +341,71 @@ func formatTodoEvent(payload eventPayload) string {
 		}
 	}
 	return strings.Join(fields, " ")
+}
+
+func formatToolLifecycleEvent(payload eventPayload) string {
+	phase := strings.TrimSpace(payload.Phase)
+	if phase == "" {
+		phase = "unknown"
+	}
+	parts := []string{fmt.Sprintf("tool.lifecycle[%s]:", phase)}
+	if strings.TrimSpace(payload.Tool) != "" {
+		parts = append(parts, strings.TrimSpace(payload.Tool))
+	}
+	if strings.TrimSpace(payload.Input) != "" {
+		parts = append(parts, strings.TrimSpace(payload.Input))
+	}
+	if access := formatToolLifecycleAccess(payload); access != "" {
+		parts = append(parts, "access="+access)
+	}
+	if strings.TrimSpace(payload.BatchID) != "" {
+		batch := strings.TrimSpace(payload.BatchID)
+		if payload.BatchSize > 0 {
+			batch = fmt.Sprintf("%s/%d", batch, payload.BatchSize)
+		}
+		parts = append(parts, "batch="+batch)
+	}
+	if strings.TrimSpace(payload.Status) != "" {
+		parts = append(parts, "status="+strings.TrimSpace(payload.Status))
+	}
+	if payload.Truncated {
+		parts = append(parts, "truncated=true")
+	}
+	if strings.TrimSpace(payload.OutputPath) != "" {
+		parts = append(parts, "output_path="+strings.TrimSpace(payload.OutputPath))
+	}
+	if payload.DurationMS > 0 {
+		parts = append(parts, fmt.Sprintf("duration_ms=%d", payload.DurationMS))
+	}
+	return strings.Join(parts, " ")
+}
+
+func formatToolLifecycleAccess(payload eventPayload) string {
+	mode := strings.TrimSpace(payload.AccessMode)
+	resource := strings.TrimSpace(payload.AccessResource)
+	if mode == "" && resource == "" {
+		return ""
+	}
+	if mode == "" {
+		mode = "unknown"
+	}
+	if resource == "" {
+		return mode
+	}
+	argument := strings.TrimSpace(payload.AccessArgument)
+	if argument == "" {
+		return mode + ":" + resource
+	}
+	return fmt.Sprintf("%s:%s(%s)", mode, resource, argument)
+}
+
+func isLifecycleErrorStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "error", "failed", "failure":
+		return true
+	default:
+		return false
+	}
 }
 
 func daemonEventLine(eventType string, payload eventPayload) string {

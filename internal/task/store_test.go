@@ -317,6 +317,7 @@ func TestRepositoryRejectsUnknownOrMalformedFirstClassEvents(t *testing.T) {
 		{name: "blank task", taskID: "", eventType: EventSummary, payload: EventPayload{Message: "ok"}, want: "task id is required"},
 		{name: "unknown type", taskID: created.ID, eventType: EventType("custom.shadow"), payload: EventPayload{Message: "ok"}, want: "unknown event type"},
 		{name: "tool missing name", taskID: created.ID, eventType: EventToolResult, payload: EventPayload{Output: "ok"}, want: "payload.tool"},
+		{name: "lifecycle missing phase", taskID: created.ID, eventType: EventToolLifecycle, payload: EventPayload{Tool: "read"}, want: "payload.phase"},
 		{name: "first class missing narrative", taskID: created.ID, eventType: EventHookRun, payload: EventPayload{}, want: "requires payload.message"},
 		{name: "compact missing narrative", taskID: created.ID, eventType: EventCompactBoundary, payload: EventPayload{}, want: "requires payload.message"},
 	}
@@ -427,6 +428,7 @@ func TestRepositoryMaterializesTranscriptEntriesForFirstClassTimelineKinds(t *te
 		eventType EventType
 		payload   EventPayload
 	}{
+		{EventToolLifecycle, EventPayload{Tool: "shell", Phase: "prepare", ToolCallID: "call-materialized-1", Input: "go test", AccessMode: "read", AccessResource: "path", AccessArgument: "README.md", BatchID: "batch-1", BatchSize: 1, Status: "pending"}},
 		{EventDiff, EventPayload{Diff: "diff --git a/file b/file"}},
 		{EventPermissionRequest, EventPayload{Tool: "shell", Message: "approval needed", Status: string(StatusWaitingUser), Risk: "write", Reason: "edits workspace"}},
 		{EventHookRun, EventPayload{Action: "PostToolUse", Message: "hook ok", Status: "ok"}},
@@ -473,12 +475,12 @@ func TestRepositoryMaterializesTranscriptEntriesForFirstClassTimelineKinds(t *te
 	if toolCall.ToolCallID != "call-materialized-1" || toolResult.ToolCallID != toolCall.ToolCallID || toolResult.ToolResultID != "call-materialized-1-result" {
 		t.Fatalf("expected materialized tool pair ids to survive transcript projection, call=%#v result=%#v", toolCall, toolResult)
 	}
-	for _, want := range []string{"tool_call", "tool_result", "todo", "diff", "approval", "hook", "schedule", "compact_boundary"} {
+	for _, want := range []string{"tool_lifecycle", "tool_call", "tool_result", "todo", "diff", "approval", "hook", "schedule", "compact_boundary"} {
 		if !kinds[want] {
 			t.Fatalf("expected materialized transcript kind %q in %#v", want, entries)
 		}
 	}
-	for _, want := range []string{"go test", "ok", "write transcript test", "diff --git", "approval needed", "hook ok", "nightly audit", "compacted for restart"} {
+	for _, want := range []string{"tool.lifecycle[prepare]", "access=read:path(README.md)", "batch=batch-1/1", "go test", "ok", "write transcript test", "diff --git", "approval needed", "hook ok", "nightly audit", "compacted for restart"} {
 		if !strings.Contains(combined.String(), want) {
 			t.Fatalf("expected materialized content %q in %#v", want, entries)
 		}

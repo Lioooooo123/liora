@@ -1241,6 +1241,12 @@ func formatTimelineItem(item taskpkg.TimelineItem) string {
 			status = "ok"
 		}
 		return strings.TrimSpace("tool.result[" + status + "]" + modelSuffix + ": " + item.Tool + " " + item.Input + " " + firstLine(item.Output))
+	case "tool_lifecycle":
+		phase := item.Status
+		if phase == "" {
+			phase = "unknown"
+		}
+		return strings.TrimSpace("tool.lifecycle[" + phase + "]" + modelSuffix + ": " + item.Tool + " " + item.Input + " " + firstLine(item.Content))
 	case "diff":
 		return "diff: " + firstLine(item.Diff)
 	case "approval":
@@ -1279,6 +1285,13 @@ func formatTranscriptItem(item taskpkg.TimelineItem) []string {
 		}
 		lines := []string{strings.TrimSpace("Tool result [" + status + "]" + modelSuffix + taskSuffix + ": " + item.Tool + " " + item.Input)}
 		return append(lines, indentLines(item.Output)...)
+	case "tool_lifecycle":
+		phase := item.Status
+		if phase == "" {
+			phase = "unknown"
+		}
+		header := strings.TrimSpace("Tool lifecycle [" + phase + "]" + modelSuffix + taskSuffix + ": " + item.Tool + " " + item.Input)
+		return appendPrefixedLines(header, item.Content)
 	case "diff":
 		lines := []string{"Diff" + taskSuffix}
 		return append(lines, previewLines(item.Diff, 80)...)

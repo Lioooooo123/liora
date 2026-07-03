@@ -1714,6 +1714,17 @@ func timelineItemFromEvent(sessionID string, task Task, event Event) (TimelineIt
 		item.Input = payload.Input
 		item.Output = payload.Output
 		item.Status = payload.Status
+	case EventToolLifecycle:
+		item.Kind = "tool_lifecycle"
+		item.Tool = payload.Tool
+		item.ToolCallID = payload.ToolCallID
+		item.ToolResultID = payload.ToolResultID
+		item.Input = payload.Input
+		item.Output = payload.Output
+		item.Target = payload.OutputPath
+		item.Status = payload.Phase
+		item.Content = formatToolLifecycleContent(payload)
+		item.Reason = payload.Reason
 	case EventTodoUpdated:
 		item.Kind = "todo"
 		item.Status = payload.Status
@@ -1773,6 +1784,62 @@ func timelineItemFromEvent(sessionID string, task Task, event Event) (TimelineIt
 		return TimelineItem{}, false
 	}
 	return item, true
+}
+
+func formatToolLifecycleContent(payload EventPayload) string {
+	phase := strings.TrimSpace(payload.Phase)
+	if phase == "" {
+		phase = "unknown"
+	}
+	parts := []string{fmt.Sprintf("tool.lifecycle[%s]:", phase)}
+	if strings.TrimSpace(payload.Tool) != "" {
+		parts = append(parts, strings.TrimSpace(payload.Tool))
+	}
+	if strings.TrimSpace(payload.Input) != "" {
+		parts = append(parts, strings.TrimSpace(payload.Input))
+	}
+	if access := formatToolLifecycleAccess(payload); access != "" {
+		parts = append(parts, "access="+access)
+	}
+	if strings.TrimSpace(payload.BatchID) != "" {
+		batch := strings.TrimSpace(payload.BatchID)
+		if payload.BatchSize > 0 {
+			batch = fmt.Sprintf("%s/%d", batch, payload.BatchSize)
+		}
+		parts = append(parts, "batch="+batch)
+	}
+	if strings.TrimSpace(payload.Status) != "" {
+		parts = append(parts, "status="+strings.TrimSpace(payload.Status))
+	}
+	if payload.Truncated {
+		parts = append(parts, "truncated=true")
+	}
+	if strings.TrimSpace(payload.OutputPath) != "" {
+		parts = append(parts, "output_path="+strings.TrimSpace(payload.OutputPath))
+	}
+	if payload.DurationMS > 0 {
+		parts = append(parts, fmt.Sprintf("duration_ms=%d", payload.DurationMS))
+	}
+	return strings.Join(parts, " ")
+}
+
+func formatToolLifecycleAccess(payload EventPayload) string {
+	mode := strings.TrimSpace(payload.AccessMode)
+	resource := strings.TrimSpace(payload.AccessResource)
+	if mode == "" && resource == "" {
+		return ""
+	}
+	if mode == "" {
+		mode = "unknown"
+	}
+	if resource == "" {
+		return mode
+	}
+	argument := strings.TrimSpace(payload.AccessArgument)
+	if argument == "" {
+		return mode + ":" + resource
+	}
+	return fmt.Sprintf("%s:%s(%s)", mode, resource, argument)
 }
 
 func (r *Repository) AppendMessage(ctx context.Context, sessionID string, role string, content string, taskID string) (Message, error) {

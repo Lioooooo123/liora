@@ -47,6 +47,7 @@ var eventDefinitions = []EventDefinition{
 	eventDefinition(EventReplanning, EventFamilyTask),
 	eventDefinition(EventToolCall, EventFamilyTool),
 	eventDefinition(EventToolResult, EventFamilyTool),
+	eventDefinition(EventToolLifecycle, EventFamilyTool),
 	eventDefinition(EventTodoUpdated, EventFamilyTodo),
 	eventDefinition(EventTranscriptEntry, EventFamilyTranscript),
 	eventDefinition(EventArtifactReference, EventFamilyArtifact),
@@ -80,6 +81,7 @@ var requiredEventTypes = []EventType{
 	EventReplanning,
 	EventToolCall,
 	EventToolResult,
+	EventToolLifecycle,
 	EventTodoUpdated,
 	EventTranscriptEntry,
 	EventArtifactReference,
@@ -196,6 +198,13 @@ func ValidateEvent(eventType EventType, payload EventPayload) error {
 	case EventToolCall, EventToolResult:
 		if strings.TrimSpace(payload.Tool) == "" {
 			return fmt.Errorf("%s requires payload.tool", eventType)
+		}
+	case EventToolLifecycle:
+		if strings.TrimSpace(payload.Tool) == "" {
+			return fmt.Errorf("%s requires payload.tool", eventType)
+		}
+		if strings.TrimSpace(payload.Phase) == "" {
+			return fmt.Errorf("%s requires payload.phase", eventType)
 		}
 	case EventTodoUpdated, EventTranscriptEntry, EventArtifactReference, EventCompactBoundary, EventPromptContextSnapshot, EventAssistantDelta, EventHookRun, EventScheduleTriggered, EventSubagentStarted, EventSubagentCompleted:
 		if !hasEventNarrative(payload) {

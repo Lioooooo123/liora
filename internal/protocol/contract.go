@@ -171,6 +171,8 @@ func sampleEventPayload(eventType task.EventType) task.EventPayload {
 		return task.EventPayload{Tool: "read", ToolCallID: "catalog-call-1", Input: "README.md"}
 	case task.EventToolResult:
 		return task.EventPayload{Tool: "read", ToolCallID: "catalog-call-1", ToolResultID: "catalog-call-1-result", Input: "README.md", Output: "Liora", Status: "ok"}
+	case task.EventToolLifecycle:
+		return task.EventPayload{Tool: "read", Phase: "execute", ToolCallID: "catalog-call-1", ToolResultID: "catalog-call-1-result", Input: "README.md", Status: "running", AccessMode: "read", AccessResource: "path", AccessArgument: "README.md", BatchID: "batch-1", BatchSize: 1}
 	case task.EventTodoUpdated:
 		return task.EventPayload{ID: "todo-001", Action: "complete", Target: "tests", Message: "write tests", ParentTaskID: "task-001"}
 	case task.EventTranscriptEntry:

@@ -161,6 +161,7 @@ const (
 	EventReplanning            EventType = "task.replanning"
 	EventToolCall              EventType = "tool.call"
 	EventToolResult            EventType = "tool.result"
+	EventToolLifecycle         EventType = "tool.lifecycle"
 	EventTodoUpdated           EventType = "todo.updated"
 	EventTranscriptEntry       EventType = "transcript.entry"
 	EventArtifactReference     EventType = "artifact.reference"
@@ -511,8 +512,10 @@ type EventPayload struct {
 	Tool            string `json:"tool,omitempty"`
 	ToolCallID      string `json:"tool_call_id,omitempty"`
 	ToolResultID    string `json:"tool_result_id,omitempty"`
+	Phase           string `json:"phase,omitempty"`
 	Input           string `json:"input,omitempty"`
 	Output          string `json:"output,omitempty"`
+	OutputPath      string `json:"output_path,omitempty"`
 	Status          string `json:"status,omitempty"`
 	Steps           string `json:"steps,omitempty"`
 	Diff            string `json:"diff,omitempty"`
@@ -541,6 +544,13 @@ type EventPayload struct {
 	SourceEndID     string `json:"source_end_id,omitempty"`
 	SourceItemCount int    `json:"source_item_count,omitempty"`
 	Priority        string `json:"priority,omitempty"`
+	BatchID         string `json:"batch_id,omitempty"`
+	BatchSize       int    `json:"batch_size,omitempty"`
+	AccessMode      string `json:"access_mode,omitempty"`
+	AccessResource  string `json:"access_resource,omitempty"`
+	AccessArgument  string `json:"access_argument,omitempty"`
+	DurationMS      int64  `json:"duration_ms,omitempty"`
+	Truncated       bool   `json:"truncated,omitempty"`
 	Provider        string `json:"provider,omitempty"`
 	Model           string `json:"model,omitempty"`
 	Profile         string `json:"profile,omitempty"`

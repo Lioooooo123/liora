@@ -181,9 +181,29 @@ describe("daemon event fixture parser", () => {
     })
   })
 
-  it("accepts first-class todo, transcript, hook, schedule, and subagent payload fields", () => {
+  it("accepts first-class tool lifecycle, todo, transcript, hook, schedule, and subagent payload fields", () => {
     const fixtureObject = readFixtureObject()
     fixtureObject["single_task_stream"] = [
+      {
+        event: "tool.lifecycle",
+        id: "0",
+        data: {
+          tool: "read",
+          tool_call_id: "catalog-call-1",
+          tool_result_id: "catalog-call-1-result",
+          phase: "execute",
+          input: "README.md",
+          status: "running",
+          batch_id: "batch-1",
+          batch_size: 2,
+          access_mode: "read",
+          access_resource: "path",
+          access_argument: "README.md",
+          duration_ms: 15,
+          truncated: true,
+          output_path: ".liora/tool-results/read.txt",
+        },
+      },
       {
         event: "todo.updated",
         id: "1",
@@ -243,14 +263,17 @@ describe("daemon event fixture parser", () => {
     const view = reduceDaemonEventFixture(fixture, "task-001")
 
     expect(view.tasks[0]?.events.map((event) => event.event)).toEqual([
+      "tool.lifecycle",
       "todo.updated",
       "hook.run",
       "schedule.triggered",
       "subagent.started",
       "transcript.entry",
     ])
-    expect(view.tasks[0]?.events[0]?.data.parent_task_id).toBe("task-001")
-    expect(view.tasks[0]?.events[1]?.data.action).toBe("PreToolUse")
+    expect(view.tasks[0]?.events[0]?.data.phase).toBe("execute")
+    expect(view.tasks[0]?.events[0]?.data.access_argument).toBe("README.md")
+    expect(view.tasks[0]?.events[1]?.data.parent_task_id).toBe("task-001")
+    expect(view.tasks[0]?.events[2]?.data.action).toBe("PreToolUse")
   })
 
   it("accepts context artifact and compact boundary payload fields", () => {

@@ -169,6 +169,25 @@ func TestDaemonSubmitterShowsDaemonCapabilitiesWithMCPTools(t *testing.T) {
 	}
 }
 
+func TestDaemonSubmitterFormatsToolLifecycleTimelineItems(t *testing.T) {
+	item := taskpkg.TimelineItem{
+		Kind:    "tool_lifecycle",
+		Tool:    "read",
+		Input:   "README.md",
+		Status:  "execute",
+		Content: "tool.lifecycle[execute]: read README.md access=read:path(README.md) batch=batch-1/2",
+	}
+
+	timeline := formatTimelineItem(item)
+	if !strings.Contains(timeline, "tool.lifecycle[execute]: read README.md") || !strings.Contains(timeline, "access=read:path(README.md)") || strings.Contains(timeline, "tool_lifecycle") {
+		t.Fatalf("unexpected lifecycle timeline format %q", timeline)
+	}
+	transcript := strings.Join(formatTranscriptItem(item), "\n")
+	if !strings.Contains(transcript, "Tool lifecycle [execute]: read README.md") || !strings.Contains(transcript, "access=read:path(README.md)") || strings.Contains(transcript, "tool_lifecycle") {
+		t.Fatalf("unexpected lifecycle transcript format %q", transcript)
+	}
+}
+
 func TestDaemonSubmitterHandlesMemoryThroughDaemon(t *testing.T) {
 	root := t.TempDir()
 	persistentStore := store.New(t.TempDir())

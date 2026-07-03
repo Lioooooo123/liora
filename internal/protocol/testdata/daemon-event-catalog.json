@@ -60,6 +60,22 @@
       }
     },
     {
+      "event": "tool.lifecycle",
+      "data": {
+        "tool": "read",
+        "tool_call_id": "catalog-call-1",
+        "tool_result_id": "catalog-call-1-result",
+        "phase": "execute",
+        "input": "README.md",
+        "status": "running",
+        "batch_id": "batch-1",
+        "batch_size": 1,
+        "access_mode": "read",
+        "access_resource": "path",
+        "access_argument": "README.md"
+      }
+    },
+    {
       "event": "todo.updated",
       "data": {
         "id": "todo-001",
