@@ -23,6 +23,11 @@ type fakeGenerator struct {
 	responses []string
 }
 
+type fakeStreamingToolGenerator struct {
+	completion llm.Completion
+	deltas     []string
+}
+
 type fakeSandboxExecutor struct {
 	command string
 }
@@ -39,6 +44,27 @@ func (f *fakeGenerator) Generate(_ context.Context, _ []llm.Message) (string, er
 		return response, nil
 	}
 	return f.response, nil
+}
+
+func (f *fakeStreamingToolGenerator) Generate(_ context.Context, _ []llm.Message) (string, error) {
+	return f.completion.Content, nil
+}
+
+func (f *fakeStreamingToolGenerator) GenerateWithTools(_ context.Context, _ []llm.Message, _ []llm.ToolSchema) (llm.Completion, error) {
+	return f.completion, nil
+}
+
+func (f *fakeStreamingToolGenerator) GenerateWithToolsStream(_ context.Context, _ []llm.Message, _ []llm.ToolSchema, onDelta llm.DeltaHandler) (llm.Completion, error) {
+	for _, delta := range f.deltas {
+		if err := onDelta(delta); err != nil {
+			return llm.Completion{}, err
+		}
+	}
+	return f.completion, nil
+}
+
+func (f *fakeStreamingToolGenerator) SupportsTools() bool {
+	return true
 }
 
 func (f *fakeSandboxExecutor) Run(_ context.Context, _ string, command string) (tools.ShellResult, error) {
@@ -63,6 +89,56 @@ func (e *blockingSecondCommandExecutor) Run(ctx context.Context, _ string, comma
 		return tools.ShellResult{ExitCode: -1}, ctx.Err()
 	case <-e.release:
 		return tools.ShellResult{Stdout: "second ok\n", ExitCode: 0}, nil
+	}
+}
+
+func TestRunnerPersistsAssistantDeltaEventsFromStreamingToolLoop(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	task, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "say hi",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	generator := &fakeStreamingToolGenerator{
+		completion: llm.Completion{Content: "hello"},
+		deltas:     []string{"he", "llo"},
+	}
+	runner := NewRunner(repo, llm.NewPlanner(generator))
+	if err := runner.Run(t.Context(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := repo.Events(t.Context(), task.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deltaText strings.Builder
+	var sawDeltaBeforeSummary bool
+	for _, event := range events {
+		if event.Type == EventSummary && deltaText.Len() > 0 {
+			sawDeltaBeforeSummary = true
+		}
+		if event.Type != EventAssistantDelta {
+			continue
+		}
+		var payload EventPayload
+		if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+			t.Fatal(err)
+		}
+		deltaText.WriteString(payload.Message)
+	}
+	if deltaText.String() != "hello" || !sawDeltaBeforeSummary {
+		t.Fatalf("expected assistant deltas before final summary, deltas=%q events=%#v", deltaText.String(), eventTypes(events))
 	}
 }
 

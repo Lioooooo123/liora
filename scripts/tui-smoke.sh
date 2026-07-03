@@ -46,7 +46,8 @@ class Handler(BaseHTTPRequestHandler):
                 user_text = m.get("content") or ""
                 break
         self.send_response(200)
-        self.send_header("Content-Type", "application/json")
+        stream = bool(payload.get("stream"))
+        self.send_header("Content-Type", "text/event-stream" if stream else "application/json")
         self.end_headers()
         if has_tool_result:
             message = {"role": "assistant", "content": "Done."}
@@ -60,7 +61,23 @@ class Handler(BaseHTTPRequestHandler):
                 "content": "",
                 "tool_calls": [{"id": "call_1", "type": "function", "function": func}],
             }
-        self.wfile.write(json.dumps({"choices": [{"message": message}]}).encode())
+        if not stream:
+            self.wfile.write(json.dumps({"choices": [{"message": message}]}).encode())
+            return
+        if has_tool_result:
+            for part in ["Do", "ne."]:
+                self.wfile.write(("data: " + json.dumps({"choices": [{"delta": {"content": part}}]}) + "\n\n").encode())
+            self.wfile.write(b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n')
+        else:
+            call = message["tool_calls"][0]
+            name = call["function"]["name"]
+            args = call["function"]["arguments"]
+            self.wfile.write(("data: " + json.dumps({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": call["id"], "function": {"name": name}}]}}]}) + "\n\n").encode())
+            mid = max(1, len(args) // 2)
+            for part in [args[:mid], args[mid:]]:
+                self.wfile.write(("data: " + json.dumps({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": part}}]}}]}) + "\n\n").encode())
+            self.wfile.write(b'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n')
+        self.wfile.write(b"data: [DONE]\n\n")
 
     def log_message(self, *_):
         pass

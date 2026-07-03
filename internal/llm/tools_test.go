@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -94,6 +95,51 @@ func TestGenerateWithToolsSerializesToolResultMessages(t *testing.T) {
 	toolMessage := messages[2].(map[string]any)
 	if toolMessage["role"] != "tool" || toolMessage["tool_call_id"] != "call_1" || toolMessage["content"] != "README.md" {
 		t.Fatalf("unexpected tool message %#v", toolMessage)
+	}
+}
+
+func TestGenerateWithToolsStreamsOpenAIToolCalls(t *testing.T) {
+	var gotRequest map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotRequest); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		chunks := []string{
+			`{"choices":[{"delta":{"content":"looking "}}]}`,
+			`{"choices":[{"delta":{"content":"now"}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"li"}}]}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"st","arguments":"{\"pa"}}]}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":\".\"}"}}]},"finish_reason":"tool_calls"}]}`,
+		}
+		for _, chunk := range chunks {
+			_, _ = w.Write([]byte("data: " + chunk + "\n\n"))
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewOpenAICompatibleClient(Config{BaseURL: server.URL, APIKey: "test-key", Model: "test-model"})
+	var deltas []string
+	completion, err := client.GenerateWithToolsStream(t.Context(), []Message{{Role: "user", Content: "list"}}, []ToolSchema{{Name: "list", Description: "list", Parameters: map[string]any{"type": "object"}}}, func(delta string) error {
+		deltas = append(deltas, delta)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRequest["stream"] != true {
+		t.Fatalf("expected stream request, got %#v", gotRequest)
+	}
+	if completion.Content != "looking now" || strings.Join(deltas, "") != "looking now" {
+		t.Fatalf("unexpected streamed content=%q deltas=%#v", completion.Content, deltas)
+	}
+	if len(completion.ToolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %#v", completion.ToolCalls)
+	}
+	call := completion.ToolCalls[0]
+	if call.ID != "call_1" || call.Name != "list" || call.Arguments != `{"path":"."}` || completion.FinishReason != "tool_calls" {
+		t.Fatalf("unexpected streamed tool call completion %#v", completion)
 	}
 }
 

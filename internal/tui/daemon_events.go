@@ -23,6 +23,7 @@ const (
 	daemonEventArtifactReference  = "artifact.reference"
 	daemonEventCompactBoundary    = "compact.boundary"
 	daemonEventPromptContext      = "prompt_context.snapshot"
+	daemonEventAssistantDelta     = "assistant.delta"
 	daemonEventSummary            = "task.summary"
 	daemonEventDiff               = "task.diff"
 	daemonEventPatchApply         = "task.patch_applied"
@@ -89,6 +90,10 @@ func FormatDaemonEventUpdate(update StreamUpdate) DaemonEventSection {
 		}
 	case daemonEventTodoUpdated:
 		return DaemonEventSection{Title: "Todo", Body: formatTodoEvent(payload), Visible: true}
+	case daemonEventAssistantDelta:
+		if strings.TrimSpace(payload.Message) != "" {
+			return DaemonEventSection{Title: "Assistant", Body: payload.Message, Visible: true}
+		}
 	case daemonEventSummary:
 		if strings.TrimSpace(payload.Message) != "" {
 			return DaemonEventSection{Title: "Assistant", Body: payload.Message, Visible: true}
@@ -206,6 +211,8 @@ func daemonEventReplay(eventType string, payload eventPayload) string {
 		return strings.TrimSpace(string(eventType) + ": " + status + payload.Tool + " " + payload.Input + " " + daemonFirstLine(payload.Output))
 	case daemonEventTodoUpdated:
 		return strings.TrimSpace(string(eventType) + ": " + formatTodoEvent(payload))
+	case daemonEventAssistantDelta:
+		return string(eventType) + ": " + payload.Message
 	case daemonEventSummary:
 		return string(eventType) + ": " + payload.Message
 	case daemonEventDiff:
@@ -246,7 +253,7 @@ func daemonEventTail(eventType string, payload eventPayload) []string {
 			lines = append(lines, "  use /artifact "+payload.Path+" tail to read the stored output tail")
 		}
 		return lines
-	case daemonEventSummary:
+	case daemonEventAssistantDelta, daemonEventSummary:
 		return daemonAppendPrefixedLines(header, payload.Message)
 	case daemonEventDiff:
 		return daemonAppendPrefixedLines(header, payload.Diff)
@@ -274,7 +281,7 @@ func daemonEventWatch(taskID string, eventType string, payload eventPayload) str
 		return strings.TrimSpace(prefix + "[" + status + "]: " + payload.Tool + " " + payload.Input + " " + daemonFirstLine(payload.Output))
 	case daemonEventTodoUpdated:
 		return strings.TrimSpace(prefix + ": " + formatTodoEvent(payload))
-	case daemonEventSummary:
+	case daemonEventAssistantDelta, daemonEventSummary:
 		return prefix + ": " + daemonFirstLine(payload.Message)
 	case daemonEventDiff:
 		return prefix + ": " + daemonFirstLine(payload.Diff)

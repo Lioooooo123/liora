@@ -154,6 +154,7 @@ func (f fakeStreamingSubmitter) SubmitStream(_ context.Context, input string, on
 			TokenBudget:   4096,
 		}),
 		streamUpdate("tool.result", eventPayload{Tool: "list", Input: ".", Output: "README.md\n", Status: string(trace.StatusOK)}),
+		streamUpdate("assistant.delta", eventPayload{Message: "completed "}),
 		streamUpdate("task.summary", eventPayload{Message: "completed 1 step"}),
 		streamUpdate("task.completed", eventPayload{Status: "completed"}),
 	} {
@@ -180,6 +181,19 @@ func TestInteractiveLoopStreamsTaskEvents(t *testing.T) {
 		if strings.Contains(rendered, avoid) {
 			t.Fatalf("stream output should hide internal %q, got:\n%s", avoid, rendered)
 		}
+	}
+}
+
+func TestRenderStreamUpdateShowsAssistantDelta(t *testing.T) {
+	var out strings.Builder
+	RenderStreamUpdate(&out, streamUpdate("assistant.delta", eventPayload{Message: "正在处理"}))
+
+	rendered := out.String()
+	if !strings.Contains(rendered, "Assistant") || !strings.Contains(rendered, "正在处理") {
+		t.Fatalf("expected assistant delta to render as assistant text, got:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "Event") || strings.Contains(rendered, "assistant.delta") {
+		t.Fatalf("assistant delta should not expose event identity, got:\n%s", rendered)
 	}
 }
 

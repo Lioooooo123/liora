@@ -40,6 +40,10 @@ type ToolCaller interface {
 	GenerateWithTools(ctx context.Context, messages []Message, tools []ToolSchema) (Completion, error)
 }
 
+type ToolStreamCaller interface {
+	GenerateWithToolsStream(ctx context.Context, messages []Message, tools []ToolSchema, onDelta DeltaHandler) (Completion, error)
+}
+
 func (c *Client) GenerateWithTools(ctx context.Context, messages []Message, tools []ToolSchema) (Completion, error) {
 	if strings.TrimSpace(c.config.APIKey) == "" {
 		return Completion{}, fmt.Errorf("LLM API key is required")
@@ -56,6 +60,30 @@ func (c *Client) GenerateWithTools(ctx context.Context, messages []Message, tool
 		return Completion{}, ErrToolsUnsupported
 	default:
 		return Completion{}, fmt.Errorf("unsupported LLM provider %q", c.config.Provider)
+	}
+}
+
+func (c *Client) GenerateWithToolsStream(ctx context.Context, messages []Message, tools []ToolSchema, onDelta DeltaHandler) (Completion, error) {
+	if strings.TrimSpace(c.config.APIKey) == "" {
+		return Completion{}, fmt.Errorf("LLM API key is required")
+	}
+	if strings.TrimSpace(c.config.Model) == "" {
+		return Completion{}, fmt.Errorf("LLM model is required")
+	}
+	switch NormalizeProvider(c.config.Provider) {
+	case ProviderOpenAIChat, ProviderDeepSeek:
+		return c.generateOpenAIChatToolsStream(ctx, messages, tools, onDelta)
+	default:
+		completion, err := c.GenerateWithTools(ctx, messages, tools)
+		if err != nil {
+			return Completion{}, err
+		}
+		if strings.TrimSpace(completion.Content) != "" && onDelta != nil {
+			if err := onDelta(completion.Content); err != nil {
+				return Completion{}, err
+			}
+		}
+		return completion, nil
 	}
 }
 

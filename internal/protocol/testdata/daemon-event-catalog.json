@@ -105,6 +105,12 @@
       }
     },
     {
+      "event": "assistant.delta",
+      "data": {
+        "message": "streamed delta"
+      }
+    },
+    {
       "event": "task.summary",
       "data": {
         "message": "background summary"

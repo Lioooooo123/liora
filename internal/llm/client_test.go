@@ -56,6 +56,39 @@ func TestOpenAIChatClientGeneratesText(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatClientStreamsText(t *testing.T) {
+	var gotRequest map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotRequest); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewOpenAICompatibleClient(Config{BaseURL: server.URL, APIKey: "test-key", Model: "test-model"})
+	var deltas []string
+	text, err := client.GenerateStream(t.Context(), []Message{{Role: "user", Content: "hello"}}, func(delta string) error {
+		deltas = append(deltas, delta)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRequest["stream"] != true {
+		t.Fatalf("expected stream request, got %#v", gotRequest)
+	}
+	if text != "hello" || strings.Join(deltas, "") != "hello" || len(deltas) != 2 {
+		t.Fatalf("unexpected stream text=%q deltas=%#v", text, deltas)
+	}
+}
+
 func TestOpenAIResponsesClientGeneratesText(t *testing.T) {
 	var gotRequest map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

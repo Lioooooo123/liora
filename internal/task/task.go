@@ -166,6 +166,7 @@ const (
 	EventArtifactReference     EventType = "artifact.reference"
 	EventCompactBoundary       EventType = "compact.boundary"
 	EventPromptContextSnapshot EventType = "prompt_context.snapshot"
+	EventAssistantDelta        EventType = "assistant.delta"
 	EventSummary               EventType = "task.summary"
 	EventDiff                  EventType = "task.diff"
 	EventSandboxRun            EventType = "sandbox.run"

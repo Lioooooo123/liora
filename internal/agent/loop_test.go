@@ -34,6 +34,20 @@ func (f *fakeToolCaller) GenerateWithTools(_ context.Context, messages []llm.Mes
 	return completion, nil
 }
 
+type fakeStreamingToolCaller struct {
+	fakeToolCaller
+	deltas []string
+}
+
+func (f *fakeStreamingToolCaller) GenerateWithToolsStream(ctx context.Context, messages []llm.Message, schemas []llm.ToolSchema, onDelta llm.DeltaHandler) (llm.Completion, error) {
+	for _, delta := range f.deltas {
+		if err := onDelta(delta); err != nil {
+			return llm.Completion{}, err
+		}
+	}
+	return f.GenerateWithTools(ctx, messages, schemas)
+}
+
 func newLoopAgent(t *testing.T, root string) *Agent {
 	t.Helper()
 	workspace, err := tools.NewWorkspace(root)
@@ -41,6 +55,27 @@ func newLoopAgent(t *testing.T, root string) *Agent {
 		t.Fatal(err)
 	}
 	return New(workspace, trace.NewMemoryRecorder())
+}
+
+func TestToolLoopStreamsAssistantDeltas(t *testing.T) {
+	root := t.TempDir()
+	a := newLoopAgent(t, root)
+	caller := &fakeStreamingToolCaller{
+		fakeToolCaller: fakeToolCaller{completions: []llm.Completion{{Content: "hello"}}},
+		deltas:         []string{"he", "llo"},
+	}
+	var got []string
+	loop := NewToolLoop(a, caller, LoopOptions{OnAssistantDelta: func(delta string) error {
+		got = append(got, delta)
+		return nil
+	}})
+	result, err := loop.Run(t.Context(), "say hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary != "hello" || strings.Join(got, "") != "hello" {
+		t.Fatalf("unexpected result=%#v deltas=%#v", result, got)
+	}
 }
 
 func TestToolLoopRunsObserveActUntilNoToolCalls(t *testing.T) {

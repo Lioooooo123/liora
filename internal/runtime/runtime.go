@@ -34,9 +34,10 @@ type Runtime struct {
 }
 
 type SubmitOptions struct {
-	Recorder trace.Recorder
-	OnPlan   func(steps string)
-	OnReplan func(attempt int, reason string)
+	Recorder         trace.Recorder
+	OnPlan           func(steps string)
+	OnReplan         func(attempt int, reason string)
+	OnAssistantDelta llm.DeltaHandler
 }
 
 func New(workspacePath string, planner *llm.Planner, stores ...*store.Store) (*Runtime, error) {
@@ -186,7 +187,8 @@ func (r *Runtime) runToolLoop(ctx context.Context, input string, caller llm.Tool
 				options.OnPlan(steps)
 			}
 		},
-		OnReplan: options.OnReplan,
+		OnReplan:         options.OnReplan,
+		OnAssistantDelta: options.OnAssistantDelta,
 	})
 	result, err := loop.Run(ctx, input)
 	return tui.TurnResult{

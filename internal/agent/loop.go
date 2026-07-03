@@ -27,14 +27,16 @@ type ToolLoop struct {
 	maxTurns  int
 	onPlan    func(steps string)
 	onReplan  func(attempt int, reason string)
+	onDelta   llm.DeltaHandler
 }
 
 // LoopOptions configures a ToolLoop run. The callbacks mirror the planner path
 // so the task runner keeps emitting the same plan_ready / replanning events.
 type LoopOptions struct {
-	MaxTurns int
-	OnPlan   func(steps string)
-	OnReplan func(attempt int, reason string)
+	MaxTurns         int
+	OnPlan           func(steps string)
+	OnReplan         func(attempt int, reason string)
+	OnAssistantDelta llm.DeltaHandler
 }
 
 // NewToolLoop wraps a configured Agent (workspace, recorder, sandbox, permission
@@ -51,6 +53,7 @@ func NewToolLoop(a *Agent, generator llm.ToolCaller, options LoopOptions) *ToolL
 		maxTurns:  maxTurns,
 		onPlan:    options.OnPlan,
 		onReplan:  options.OnReplan,
+		onDelta:   options.OnAssistantDelta,
 	}
 }
 
@@ -89,7 +92,7 @@ func (l *ToolLoop) Run(ctx context.Context, prompt string) (Result, error) {
 			}, fmt.Errorf("tool loop exceeded %d turns", l.maxTurns)
 		}
 
-		completion, err := l.generator.GenerateWithTools(ctx, messages, schemas)
+		completion, err := l.generate(ctx, messages, schemas)
 		if err != nil {
 			return Result{Status: StatusFailed, Diff: l.currentDiff()}, err
 		}
@@ -166,6 +169,15 @@ func (l *ToolLoop) Run(ctx context.Context, prompt string) (Result, error) {
 			l.onReplan(replanAttempts, firstErrReason)
 		}
 	}
+}
+
+func (l *ToolLoop) generate(ctx context.Context, messages []llm.Message, schemas []llm.ToolSchema) (llm.Completion, error) {
+	if l.onDelta != nil {
+		if streamer, ok := l.generator.(llm.ToolStreamCaller); ok {
+			return streamer.GenerateWithToolsStream(ctx, messages, schemas, l.onDelta)
+		}
+	}
+	return l.generator.GenerateWithTools(ctx, messages, schemas)
 }
 
 // checkTurnPermissions validates every requested tool before any of them run. A

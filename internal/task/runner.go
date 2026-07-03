@@ -192,6 +192,12 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 					RetryCount:   max(0, attempt-1),
 				}))
 			},
+			OnAssistantDelta: func(delta string) error {
+				if strings.TrimSpace(delta) == "" {
+					return nil
+				}
+				return r.repo.AppendEvent(ctx, task.ID, EventAssistantDelta, r.eventPayloadWithModel(task, EventPayload{Message: delta}))
+			},
 		})
 		return runtimeResult{
 			answer:           result.Answer,

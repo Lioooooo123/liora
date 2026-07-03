@@ -76,6 +76,12 @@ type Generator interface {
 	Generate(ctx context.Context, messages []Message) (string, error)
 }
 
+type DeltaHandler func(delta string) error
+
+type StreamGenerator interface {
+	GenerateStream(ctx context.Context, messages []Message, onDelta DeltaHandler) (string, error)
+}
+
 type Client struct {
 	config     Config
 	httpClient *http.Client
