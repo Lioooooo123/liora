@@ -149,6 +149,10 @@ func fetchReleaseMetadata(ctx context.Context, client *http.Client, metadataURL 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		fallback, fallbackErr := fetchGitHubWebReleaseMetadata(ctx, client, metadataURL)
+		if fallbackErr == nil {
+			return fallback, nil
+		}
 		return release, fmt.Errorf("fetch update metadata: %s", resp.Status)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {

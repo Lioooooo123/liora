@@ -137,6 +137,60 @@ func TestUpdateDownloadsLatestReleaseAssetWithChecksum(t *testing.T) {
 	}
 }
 
+func TestUpdateFallsBackToGitHubReleasePageWhenAPIIsRateLimited(t *testing.T) {
+	// Given
+	archive := writeUpdateArchive(t, "v9.9.12")
+	checksum := sha256File(t, archive)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/Lioooooo123/liora/releases/latest":
+			http.Error(w, "rate limited", http.StatusForbidden)
+		case "/Lioooooo123/liora/releases/latest":
+			http.Redirect(w, r, "/Lioooooo123/liora/releases/tag/v9.9.12", http.StatusFound)
+		case "/Lioooooo123/liora/releases/tag/v9.9.12":
+			_, _ = w.Write([]byte("<html>latest</html>"))
+		case "/Lioooooo123/liora/releases/download/v9.9.12/liora_v9.9.12_" + runtimeGOOS() + "_" + runtimeGOARCH() + ".tar.gz":
+			data, err := os.ReadFile(archive)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = w.Write(data)
+		case "/Lioooooo123/liora/releases/download/v9.9.12/liora_v9.9.12_" + runtimeGOOS() + "_" + runtimeGOARCH() + ".tar.gz.sha256":
+			_, _ = fmt.Fprintf(w, "%s  archive\n", checksum)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	installDir := t.TempDir()
+	var output strings.Builder
+
+	// When
+	err := runUpdate(t.Context(), updateConfig{
+		currentVersion: "v0.0.1",
+		installDir:     installDir,
+		metadataURL:    server.URL + "/repos/Lioooooo123/liora/releases/latest",
+		stdout:         &output,
+		client:         server.Client(),
+	})
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := filepath.Join(installDir, "liora")
+	data, err := os.ReadFile(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "updated-v9.9.12") {
+		t.Fatalf("expected fallback release binary to be installed, got:\n%s", string(data))
+	}
+	if !strings.Contains(output.String(), "latest: v9.9.12") {
+		t.Fatalf("expected fallback output to report latest tag, got:\n%s", output.String())
+	}
+}
+
 func writeUpdateArchive(t *testing.T, version string) string {
 	t.Helper()
 	archivePath := filepath.Join(t.TempDir(), "liora_"+version+"_"+runtimeGOOS()+"_"+runtimeGOARCH()+".tar.gz")

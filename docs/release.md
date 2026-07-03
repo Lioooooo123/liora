@@ -120,7 +120,7 @@ docs/v0.1-exit-audit.md
 liora update
 ```
 
-默认会读取 GitHub latest release metadata，选择当前平台的 `liora_<version>_<goos>_<goarch>.tar.gz`。如果 release asset 旁边存在同名 `.sha256`，更新前会先校验再替换当前 `liora` 可执行文件。
+默认会读取 GitHub latest release metadata，选择当前平台的 `liora_<version>_<goos>_<goarch>.tar.gz`。如果 GitHub API 被限流，会回退到 GitHub Releases 网页的 `/releases/latest` 重定向来发现最新 tag，并按约定拼出安装包地址。如果 release asset 旁边存在同名 `.sha256`，更新前会先校验再替换当前 `liora` 可执行文件。
 
 本地或内测包可以直接指定 tarball：
 
