@@ -55,3 +55,44 @@ func TestStreamingLoopRendersAssistantMarkdown_whenMarkdownArrivesAsDeltas(t *te
 		}
 	}
 }
+
+func TestLineStreamRendererRendersAssistantMarkdownDelta_withoutWaitingForSummary(t *testing.T) {
+	// Given
+	var out strings.Builder
+	renderer := newLineStreamRenderer(&out)
+
+	// When
+	renderer.Render(streamUpdate("assistant.delta", eventPayload{Message: "## Result\n\n- **Live** item\n"}))
+	rendered := terminalPlainText(out.String())
+
+	// Then
+	for _, want := range []string{"Assistant", "Result", "Live item"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected live markdown delta to contain %q before summary, got:\n%s", want, rendered)
+		}
+	}
+	for _, avoid := range []string{"## Result", "**Live**"} {
+		if strings.Contains(rendered, avoid) {
+			t.Fatalf("live markdown delta should not expose raw marker %q, got:\n%s", avoid, rendered)
+		}
+	}
+}
+
+func TestLineStreamRendererCompletesAssistantDelta_whenSummaryExtendsPrefix(t *testing.T) {
+	// Given
+	var out strings.Builder
+	renderer := newLineStreamRenderer(&out)
+
+	// When
+	renderer.Render(streamUpdate("assistant.delta", eventPayload{Message: "completed "}))
+	renderer.Render(streamUpdate("task.summary", eventPayload{Message: "completed 1 step"}))
+	rendered := terminalPlainText(out.String())
+
+	// Then
+	if !strings.Contains(rendered, "completed 1 step") {
+		t.Fatalf("expected summary suffix to complete streamed assistant text, got:\n%s", rendered)
+	}
+	if got := strings.Count(rendered, "Assistant"); got != 1 {
+		t.Fatalf("expected summary completion to stay in one assistant panel, got %d:\n%s", got, rendered)
+	}
+}
