@@ -94,6 +94,17 @@
       }
     },
     {
+      "event": "prompt_context.snapshot",
+      "data": {
+        "message": "Prompt context snapshot",
+        "target": "sha256:fixture",
+        "output": "Prompt context session-001\nHash: sha256:fixture",
+        "source_item_count": 4,
+        "token_estimate": 256,
+        "token_budget": 4096
+      }
+    },
+    {
       "event": "task.summary",
       "data": {
         "message": "background summary"

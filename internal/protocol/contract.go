@@ -179,6 +179,8 @@ func sampleEventPayload(eventType task.EventType) task.EventPayload {
 		return task.EventPayload{Tool: "shell", Path: ".liora/tool-results/context.txt", Message: "full output reference", TokenEstimate: 2048}
 	case task.EventCompactBoundary:
 		return task.EventPayload{Message: "compacted before resume", TokenBudget: 512, TokenEstimate: 128}
+	case task.EventPromptContextSnapshot:
+		return task.EventPayload{Message: "Prompt context snapshot", Target: "sha256:fixture", Output: "Prompt context session-001\nHash: sha256:fixture", TokenBudget: 4096, TokenEstimate: 256, SourceItemCount: 4}
 	case task.EventSummary:
 		return task.EventPayload{Message: "background summary"}
 	case task.EventDiff:
