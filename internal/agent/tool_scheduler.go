@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -146,10 +147,55 @@ func pathResource(path string) string {
 	return "path:" + path
 }
 
-func (l *ToolLoop) dispatchBatch(ctx context.Context, batch toolBatch, outcomes []toolOutcome) {
+func fallbackStepAccess(step Step) toolAccess {
+	spec, ok := capabilities.ToolAccessFor(step.Tool)
+	if !ok {
+		return exclusiveWorkspaceAccess()
+	}
+	args := fallbackStepAccessArgs(step, spec)
+	return accessForSpec(spec, args)
+}
+
+func fallbackStepAccessArgs(step Step, spec capabilities.ToolAccessSpec) map[string]any {
+	args := map[string]any{}
+	switch strings.ToLower(step.Tool) {
+	case "glob":
+		if len(step.Args) > 1 {
+			args["path"] = step.Args[1]
+		}
+	case "mcp":
+		if len(step.Args) > 0 {
+			args["server"] = step.Args[0]
+		}
+		if len(step.Args) > 1 {
+			args["tool"] = step.Args[1]
+		}
+	default:
+		if len(step.Args) > 0 && strings.TrimSpace(spec.Argument) != "" {
+			args[spec.Argument] = step.Args[0]
+		}
+	}
+	return args
+}
+
+func (event ToolLifecycleEvent) withAccess(access toolAccess) ToolLifecycleEvent {
+	event.AccessMode = string(access.mode)
+	resource, argument, ok := strings.Cut(access.resource, ":")
+	if ok {
+		event.AccessResource = resource
+		event.AccessArgument = argument
+		return event
+	}
+	event.AccessResource = access.resource
+	return event
+}
+
+func (l *ToolLoop) dispatchBatch(ctx context.Context, batch toolBatch, outcomes []toolOutcome, batchIndex int) {
+	batchID := fmt.Sprintf("batch-%d", batchIndex)
+	batchSize := len(batch)
 	if len(batch) == 1 {
 		scheduled := batch[0]
-		outcomes[scheduled.index] = l.dispatchOne(ctx, scheduled.call)
+		outcomes[scheduled.index] = l.dispatchOne(ctx, scheduled.call, batchID, batchSize)
 		return
 	}
 	sem := make(chan struct{}, maxReadOnlyConcurrency)
@@ -160,7 +206,7 @@ func (l *ToolLoop) dispatchBatch(ctx context.Context, batch toolBatch, outcomes 
 		go func(scheduled scheduledToolCall) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			outcomes[scheduled.index] = l.dispatchOne(ctx, scheduled.call)
+			outcomes[scheduled.index] = l.dispatchOne(ctx, scheduled.call, batchID, batchSize)
 		}(scheduled)
 	}
 	wg.Wait()

@@ -254,6 +254,17 @@ func renderPersistedToolOutput(call llm.ToolCall, output string, outputPath stri
 	return strings.Join(lines, "\n")
 }
 
+func toolOutputPath(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		path, ok := strings.CutPrefix(strings.TrimSpace(line), "output_path: ")
+		if !ok {
+			continue
+		}
+		return strings.TrimSpace(path)
+	}
+	return ""
+}
+
 func safeToolOutputFileStem(call llm.ToolCall) string {
 	label := call.Name + "-" + call.ID
 	var builder strings.Builder

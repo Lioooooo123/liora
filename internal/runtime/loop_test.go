@@ -55,11 +55,54 @@ type runtimeToolContract struct {
 	events      []trace.Event
 }
 
+type recordingRuntimeLifecycleSink struct {
+	events []agent.ToolLifecycleEvent
+}
+
+func (r *recordingRuntimeLifecycleSink) RecordToolLifecycle(event agent.ToolLifecycleEvent) {
+	r.events = append(r.events, event)
+}
+
 type runtimeCodingEvalContract struct {
 	files  map[string]string
 	tools  []string
 	diff   string
 	status agent.Status
+}
+
+func TestRuntimeEmitsFallbackLifecycleWithoutChangingTraceContract(t *testing.T) {
+	root := t.TempDir()
+	generator := &fakeToolGenerator{
+		plannerReply: "write note.txt hi there",
+		disableTools: true,
+	}
+	runtime, err := New(root, llm.NewPlanner(generator))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := trace.NewMemoryRecorder()
+	lifecycle := &recordingRuntimeLifecycleSink{}
+
+	result, err := runtime.SubmitWithOptions(t.Context(), "create note.txt", SubmitOptions{
+		Recorder:          recorder,
+		ToolLifecycleSink: lifecycle,
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AgentResult.Status != agent.StatusCompleted {
+		t.Fatalf("expected completed result, got %#v", result.AgentResult)
+	}
+	if events := recorder.Events(); len(events) != 1 || events[0].Tool != "write" {
+		t.Fatalf("expected unchanged result-only trace contract, got %#v", events)
+	}
+	if got := runtimeLifecyclePhases(lifecycle.events); !reflect.DeepEqual(got, []string{"prepare", "authorize", "execute", "finalize"}) {
+		t.Fatalf("unexpected fallback lifecycle phases %#v events=%#v", got, lifecycle.events)
+	}
+	if lifecycle.events[3].ToolCallID != "fallback-step-1" || lifecycle.events[3].ToolResultID != "fallback-step-1-result" || lifecycle.events[3].Status != "ok" {
+		t.Fatalf("unexpected fallback finalize lifecycle %#v", lifecycle.events[3])
+	}
 }
 
 func TestRuntimeNativeToolLoopAndPlannerFallbackShareWriteTraceContract(t *testing.T) {
@@ -87,6 +130,14 @@ func TestRuntimeNativeToolLoopAndPlannerFallbackShareWriteTraceContract(t *testi
 	if fallback.events[0].ToolCallID != "fallback-step-1" || fallback.events[0].ToolResultID != "fallback-step-1-result" {
 		t.Fatalf("fallback trace did not synthesize stable step ids: %#v", fallback.events[0])
 	}
+}
+
+func runtimeLifecyclePhases(events []agent.ToolLifecycleEvent) []string {
+	phases := make([]string, 0, len(events))
+	for _, event := range events {
+		phases = append(phases, event.Phase)
+	}
+	return phases
 }
 
 func TestRuntimeNativeToolLoopAndPlannerFallbackShareErrorTraceContract(t *testing.T) {

@@ -34,10 +34,11 @@ type Runtime struct {
 }
 
 type SubmitOptions struct {
-	Recorder         trace.Recorder
-	OnPlan           func(steps string)
-	OnReplan         func(attempt int, reason string)
-	OnAssistantDelta llm.DeltaHandler
+	Recorder          trace.Recorder
+	ToolLifecycleSink agent.ToolLifecycleSink
+	OnPlan            func(steps string)
+	OnReplan          func(attempt int, reason string)
+	OnAssistantDelta  llm.DeltaHandler
 }
 
 func New(workspacePath string, planner *llm.Planner, stores ...*store.Store) (*Runtime, error) {
@@ -115,6 +116,9 @@ func (r *Runtime) SubmitWithOptions(ctx context.Context, input string, options S
 		options.OnPlan(turn.Steps)
 	}
 	runner := r.newAgent(recorder)
+	if options.ToolLifecycleSink != nil {
+		runner.SetToolLifecycleSink(options.ToolLifecycleSink)
+	}
 	result, err := runner.Run(ctx, turn.Steps)
 	plannedSteps := turn.Steps
 	if err != nil && r.shouldReplan(ctx, err) {
@@ -179,6 +183,9 @@ func (r *Runtime) toolLoopCaller() (llm.ToolCaller, bool) {
 
 func (r *Runtime) runToolLoop(ctx context.Context, input string, caller llm.ToolCaller, recorder trace.Recorder, options SubmitOptions) (tui.TurnResult, error) {
 	runner := r.newAgent(recorder)
+	if options.ToolLifecycleSink != nil {
+		runner.SetToolLifecycleSink(options.ToolLifecycleSink)
+	}
 	var plannedSteps string
 	loop := agent.NewToolLoop(runner, caller, agent.LoopOptions{
 		OnPlan: func(steps string) {

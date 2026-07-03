@@ -178,7 +178,8 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 			return runtimeResult{}, err
 		}
 		result, err := turnRuntime.SubmitWithOptions(ctx, prompt, runtime.SubmitOptions{
-			Recorder: recorder,
+			Recorder:          recorder,
+			ToolLifecycleSink: recorder,
 			OnPlan: func(steps string) {
 				if strings.TrimSpace(steps) == "" {
 					return
@@ -219,6 +220,7 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 	runner := agent.New(workspace, recorder)
 	runner.SetPermissionChecker(r.permissionChecker(task))
 	runner.SetCompletedToolLookup(r.completedToolLookup(task.ID))
+	runner.SetToolLifecycleSink(recorder)
 	runner.SetSkillReader(r.store)
 	runner.SetTodoExecutor(repositoryTodoExecutor{
 		repo:         r.repo,
@@ -470,6 +472,13 @@ func (r *repositoryRecorder) Record(event trace.Event) {
 	r.runner.appendTraceEvents(r.ctx, r.taskID, event)
 }
 
+func (r *repositoryRecorder) RecordToolLifecycle(event agent.ToolLifecycleEvent) {
+	r.once.Do(func() {
+		_ = r.runner.repo.UpdateStatus(r.ctx, r.taskID, StatusRunning)
+	})
+	r.runner.appendToolLifecycleEvent(r.ctx, r.taskID, event)
+}
+
 func (r *Runner) appendTraceEvents(ctx context.Context, taskID string, event trace.Event) {
 	task, _ := r.repo.Get(ctx, taskID)
 	_ = r.repo.AppendEvent(ctx, taskID, EventToolCall, r.eventPayloadWithModel(task, EventPayload{
@@ -484,6 +493,27 @@ func (r *Runner) appendTraceEvents(ctx context.Context, taskID string, event tra
 		Input:        event.Input,
 		Output:       event.Output,
 		Status:       string(event.Status),
+	}))
+}
+
+func (r *Runner) appendToolLifecycleEvent(ctx context.Context, taskID string, event agent.ToolLifecycleEvent) {
+	task, _ := r.repo.Get(ctx, taskID)
+	_ = r.repo.AppendEvent(ctx, taskID, EventToolLifecycle, r.eventPayloadWithModel(task, EventPayload{
+		Tool:           event.Tool,
+		ToolCallID:     event.ToolCallID,
+		ToolResultID:   event.ToolResultID,
+		Phase:          event.Phase,
+		Input:          event.Input,
+		Output:         event.Output,
+		OutputPath:     event.OutputPath,
+		Status:         event.Status,
+		BatchID:        event.BatchID,
+		BatchSize:      event.BatchSize,
+		AccessMode:     event.AccessMode,
+		AccessResource: event.AccessResource,
+		AccessArgument: event.AccessArgument,
+		DurationMS:     event.DurationMS,
+		Truncated:      event.Truncated,
 	}))
 }
 

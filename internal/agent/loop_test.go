@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -57,6 +58,14 @@ func newLoopAgent(t *testing.T, root string) *Agent {
 	return New(workspace, trace.NewMemoryRecorder())
 }
 
+type recordingLifecycleSink struct {
+	events []ToolLifecycleEvent
+}
+
+func (r *recordingLifecycleSink) RecordToolLifecycle(event ToolLifecycleEvent) {
+	r.events = append(r.events, event)
+}
+
 func TestToolLoopStreamsAssistantDeltas(t *testing.T) {
 	root := t.TempDir()
 	a := newLoopAgent(t, root)
@@ -75,6 +84,78 @@ func TestToolLoopStreamsAssistantDeltas(t *testing.T) {
 	}
 	if result.Summary != "hello" || strings.Join(got, "") != "hello" {
 		t.Fatalf("unexpected result=%#v deltas=%#v", result, got)
+	}
+}
+
+func TestToolLoopEmitsLifecycleEvents(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := newLoopAgent(t, root)
+	lifecycle := &recordingLifecycleSink{}
+	a.SetToolLifecycleSink(lifecycle)
+	caller := &fakeToolCaller{completions: []llm.Completion{
+		{ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "read", Arguments: `{"path":"README.md"}`}}},
+		{Content: "Read the readme."},
+	}}
+
+	loop := NewToolLoop(a, caller, LoopOptions{})
+	result, err := loop.Run(t.Context(), "summarize the readme")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusCompleted {
+		t.Fatalf("expected completed, got %s", result.Status)
+	}
+	if got := lifecyclePhases(lifecycle.events); !reflect.DeepEqual(got, []string{"prepare", "authorize", "execute", "finalize"}) {
+		t.Fatalf("unexpected lifecycle phases %#v events=%#v", got, lifecycle.events)
+	}
+	execute := lifecycle.events[2]
+	if execute.BatchSize != 1 || execute.AccessMode != "read" || execute.AccessResource != "path" || execute.AccessArgument != "README.md" {
+		t.Fatalf("expected execute lifecycle to include access and batch details, got %#v", execute)
+	}
+	final := lifecycle.events[3]
+	if final.Tool != "read" || final.ToolCallID != "call_1" || final.ToolResultID != "call_1-result" || final.Status != "ok" {
+		t.Fatalf("unexpected final lifecycle event %#v", final)
+	}
+}
+
+func TestToolLoopLifecycleForReplayedToolSkipsExecutionTrace(t *testing.T) {
+	root := t.TempDir()
+	a := newLoopAgent(t, root)
+	lifecycle := &recordingLifecycleSink{}
+	a.SetToolLifecycleSink(lifecycle)
+	a.SetCompletedToolLookup(func(_ context.Context, toolCallID string) (CompletedToolResult, bool, error) {
+		if toolCallID != "call_1" {
+			return CompletedToolResult{}, false, nil
+		}
+		return CompletedToolResult{Output: "cached read output"}, true, nil
+	})
+	caller := &fakeToolCaller{completions: []llm.Completion{
+		{ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "read", Arguments: `{"path":"README.md"}`}}},
+		{Content: "Used cached result."},
+	}}
+
+	loop := NewToolLoop(a, caller, LoopOptions{})
+	result, err := loop.Run(t.Context(), "summarize the readme")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusCompleted {
+		t.Fatalf("expected completed, got %s", result.Status)
+	}
+	if got := lifecyclePhases(lifecycle.events); !reflect.DeepEqual(got, []string{"prepare", "authorize", "finalize"}) {
+		t.Fatalf("unexpected replay lifecycle phases %#v events=%#v", got, lifecycle.events)
+	}
+	final := lifecycle.events[len(lifecycle.events)-1]
+	if final.Status != "replayed" || final.Output != "cached read output" {
+		t.Fatalf("unexpected replay finalize lifecycle %#v", final)
+	}
+	if events := a.recorder.(*trace.MemoryRecorder).Events(); len(events) != 0 {
+		t.Fatalf("expected replay path to skip duplicate trace events, got %#v", events)
 	}
 }
 
@@ -214,6 +295,8 @@ func TestToolLoopWritesFileAndReportsDiff(t *testing.T) {
 func TestToolLoopStopsForApproval(t *testing.T) {
 	root := t.TempDir()
 	a := newLoopAgent(t, root)
+	lifecycle := &recordingLifecycleSink{}
+	a.SetToolLifecycleSink(lifecycle)
 	a.SetPermissionChecker(permission.Policy{Mode: permission.ModePrompt})
 
 	caller := &fakeToolCaller{completions: []llm.Completion{
@@ -232,9 +315,23 @@ func TestToolLoopStopsForApproval(t *testing.T) {
 	if result.Status != StatusWaitingUser {
 		t.Fatalf("expected waiting status, got %#v", result)
 	}
+	if got := lifecyclePhases(lifecycle.events); !reflect.DeepEqual(got, []string{"prepare", "authorize"}) {
+		t.Fatalf("expected lifecycle to stop before execute, got phases=%#v events=%#v", got, lifecycle.events)
+	}
+	if lifecycle.events[1].Status != "waiting_user" {
+		t.Fatalf("expected authorize waiting_user lifecycle status, got %#v", lifecycle.events[1])
+	}
 	if len(a.recorder.(*trace.MemoryRecorder).Events()) != 0 {
 		t.Fatalf("expected no tools to run before approval, got %#v", a.recorder.(*trace.MemoryRecorder).Events())
 	}
+}
+
+func lifecyclePhases(events []ToolLifecycleEvent) []string {
+	phases := make([]string, 0, len(events))
+	for _, event := range events {
+		phases = append(phases, event.Phase)
+	}
+	return phases
 }
 
 func TestToolLoopStopsAtMaxTurns(t *testing.T) {

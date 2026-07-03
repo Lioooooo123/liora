@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Lioooooo123/liora/internal/llm"
 	"github.com/Lioooooo123/liora/internal/permission"
@@ -62,6 +63,9 @@ type toolOutcome struct {
 	failureOutput string
 	isError       bool
 	replayed      bool
+	batchID       string
+	batchSize     int
+	durationMS    int64
 }
 
 func (l *ToolLoop) Run(ctx context.Context, prompt string) (Result, error) {
@@ -113,6 +117,7 @@ func (l *ToolLoop) Run(ctx context.Context, prompt string) (Result, error) {
 			l.onPlan(renderToolCalls(completion.ToolCalls))
 		}
 
+		l.recordLifecycleForCalls(completion.ToolCalls, "prepare", "pending")
 		if waiting, err := l.checkTurnPermissions(ctx, completion.ToolCalls); err != nil {
 			return waiting, err
 		}
@@ -147,6 +152,16 @@ func (l *ToolLoop) Run(ctx context.Context, prompt string) (Result, error) {
 					ToolResultID: toolResultID(outcome.call),
 				})
 			}
+			finalizeStatus := string(status)
+			if outcome.replayed {
+				finalizeStatus = "replayed"
+			}
+			finalize := withLifecyclePhase(l.lifecycleEventForCall(outcome.call, outcome.batchID, outcome.batchSize), "finalize", finalizeStatus)
+			finalize.Output = outcome.output
+			finalize.OutputPath = toolOutputPath(outcome.output)
+			finalize.Truncated = finalize.OutputPath != ""
+			finalize.DurationMS = outcome.durationMS
+			l.recordLifecycle(finalize)
 			messages = append(messages, llm.Message{
 				Role:       "tool",
 				Content:    outcome.output,
@@ -184,6 +199,7 @@ func (l *ToolLoop) generate(ctx context.Context, messages []llm.Message, schemas
 // approval flow matches the planner path.
 func (l *ToolLoop) checkTurnPermissions(ctx context.Context, calls []llm.ToolCall) (Result, error) {
 	if l.agent.checker == nil {
+		l.recordLifecycleForCalls(calls, "authorize", "ok")
 		return Result{}, nil
 	}
 	for _, call := range calls {
@@ -193,34 +209,39 @@ func (l *ToolLoop) checkTurnPermissions(ctx context.Context, calls []llm.ToolCal
 			Input:      toolInput(call),
 		})
 		if err != nil {
+			l.recordLifecycle(withLifecyclePhase(l.lifecycleEventForCall(call, "", 0), "authorize", string(StatusWaitingUser)))
 			return Result{
 				Status:  StatusWaitingUser,
 				Summary: fmt.Sprintf("waiting for approval: %s %s", call.Name, toolInput(call)),
 				Diff:    l.currentDiff(),
 			}, err
 		}
+		l.recordLifecycle(withLifecyclePhase(l.lifecycleEventForCall(call, "", 0), "authorize", "ok"))
 	}
 	return Result{}, nil
 }
 
 func (l *ToolLoop) dispatch(ctx context.Context, calls []llm.ToolCall) []toolOutcome {
 	outcomes := make([]toolOutcome, len(calls))
-	for _, batch := range scheduleToolBatches(calls) {
-		l.dispatchBatch(ctx, batch, outcomes)
+	for batchIndex, batch := range scheduleToolBatches(calls) {
+		l.dispatchBatch(ctx, batch, outcomes, batchIndex+1)
 	}
 	return outcomes
 }
 
-func (l *ToolLoop) dispatchOne(ctx context.Context, call llm.ToolCall) toolOutcome {
+func (l *ToolLoop) dispatchOne(ctx context.Context, call llm.ToolCall, batchID string, batchSize int) toolOutcome {
 	if l.agent.replay != nil {
 		if replay, ok, err := l.agent.replay(ctx, call.ID); err == nil && ok {
-			return toolOutcome{call: call, output: replay.Output, replayed: true}
+			return toolOutcome{call: call, output: replay.Output, replayed: true, batchID: batchID, batchSize: batchSize}
 		}
 	}
+	execute := withLifecyclePhase(l.lifecycleEventForCall(call, batchID, batchSize), "execute", "running")
+	l.recordLifecycle(execute)
+	startedAt := time.Now()
 	args, err := parseToolArgs(call.Arguments)
 	if err != nil {
 		message := fmt.Sprintf("invalid arguments JSON: %v", err)
-		return toolOutcome{call: call, output: message, failureOutput: message, isError: true}
+		return toolOutcome{call: call, output: message, failureOutput: message, isError: true, batchID: batchID, batchSize: batchSize, durationMS: elapsedMilliseconds(startedAt)}
 	}
 	output, err := l.executeToolCall(ctx, call.Name, args)
 	if err != nil {
@@ -228,9 +249,46 @@ func (l *ToolLoop) dispatchOne(ctx context.Context, call llm.ToolCall) toolOutco
 		if output != "" {
 			message += "\n" + output
 		}
-		return toolOutcome{call: call, output: l.budgetToolOutput(ctx, call, message), failureOutput: message, isError: true}
+		return toolOutcome{call: call, output: l.budgetToolOutput(ctx, call, message), failureOutput: message, isError: true, batchID: batchID, batchSize: batchSize, durationMS: elapsedMilliseconds(startedAt)}
 	}
-	return toolOutcome{call: call, output: l.budgetToolOutput(ctx, call, output)}
+	return toolOutcome{call: call, output: l.budgetToolOutput(ctx, call, output), batchID: batchID, batchSize: batchSize, durationMS: elapsedMilliseconds(startedAt)}
+}
+
+func (l *ToolLoop) recordLifecycleForCalls(calls []llm.ToolCall, phase string, status string) {
+	for _, call := range calls {
+		l.recordLifecycle(withLifecyclePhase(l.lifecycleEventForCall(call, "", 0), phase, status))
+	}
+}
+
+func (l *ToolLoop) lifecycleEventForCall(call llm.ToolCall, batchID string, batchSize int) ToolLifecycleEvent {
+	event := ToolLifecycleEvent{
+		Tool:         call.Name,
+		ToolCallID:   call.ID,
+		ToolResultID: toolResultID(call),
+		Input:        toolInput(call),
+		BatchID:      batchID,
+		BatchSize:    batchSize,
+	}
+	accesses := toolAccesses(call)
+	if len(accesses) > 0 {
+		event = event.withAccess(accesses[0])
+	}
+	return event
+}
+
+func (l *ToolLoop) recordLifecycle(event ToolLifecycleEvent) {
+	l.agent.recordToolLifecycle(event)
+}
+
+func elapsedMilliseconds(startedAt time.Time) int64 {
+	if startedAt.IsZero() {
+		return 0
+	}
+	elapsed := time.Since(startedAt).Milliseconds()
+	if elapsed < 0 {
+		return 0
+	}
+	return elapsed
 }
 
 func toolResultID(call llm.ToolCall) string {

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -242,6 +243,61 @@ func TestRunnerPersistsPairedToolCallAndResultIDsForFailures(t *testing.T) {
 	}
 	if !strings.Contains(result.Output, "missing.txt") {
 		t.Fatalf("expected failed result output to mention missing file, got %#v", result)
+	}
+}
+
+func TestRunnerEmitsToolLifecycleEventsWithModelAttribution(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	task, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "write note",
+		Natural:   true,
+		ModelConfig: &ModelConfig{
+			Provider: "openai-chat",
+			Model:    "gpt-5",
+			Profile:  "strong",
+			Source:   "task_override",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner := NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "write notes.txt hello"}))
+	if err := runner.Run(t.Context(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := repo.Events(t.Context(), task.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsEventType(eventTypes(events), EventToolLifecycle) {
+		t.Fatalf("expected tool lifecycle events, got %#v", eventTypes(events))
+	}
+	payloads := lifecyclePayloads(t, events)
+	if got := lifecyclePayloadPhases(payloads); !reflect.DeepEqual(got, []string{"prepare", "authorize", "execute", "finalize"}) {
+		t.Fatalf("unexpected lifecycle phases %#v payloads=%#v", got, payloads)
+	}
+	final := payloads[len(payloads)-1]
+	if final.Provider != "openai-chat" || final.Model != "gpt-5" || final.Profile != "strong" {
+		t.Fatalf("expected lifecycle model attribution, got %#v", final)
+	}
+	if final.Tool != "write" || final.ToolCallID == "" || final.ToolResultID == "" || final.Status != "ok" {
+		t.Fatalf("unexpected finalize lifecycle payload %#v", final)
+	}
+	timeline, err := repo.Timeline(t.Context(), task.SessionID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !timelineHasLifecycle(timeline, "finalize") {
+		t.Fatalf("expected timeline lifecycle item, got %#v", timeline)
 	}
 }
 
@@ -1165,6 +1221,39 @@ func eventPayloads(events []Event) []string {
 		payloads = append(payloads, event.Payload)
 	}
 	return payloads
+}
+
+func lifecyclePayloads(t *testing.T, events []Event) []EventPayload {
+	t.Helper()
+	var payloads []EventPayload
+	for _, event := range events {
+		if event.Type != EventToolLifecycle {
+			continue
+		}
+		var payload EventPayload
+		if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+			t.Fatalf("decode lifecycle payload: %v", err)
+		}
+		payloads = append(payloads, payload)
+	}
+	return payloads
+}
+
+func lifecyclePayloadPhases(payloads []EventPayload) []string {
+	phases := make([]string, 0, len(payloads))
+	for _, payload := range payloads {
+		phases = append(phases, payload.Phase)
+	}
+	return phases
+}
+
+func timelineHasLifecycle(items []TimelineItem, phase string) bool {
+	for _, item := range items {
+		if item.Kind == "tool_lifecycle" && item.Status == phase {
+			return true
+		}
+	}
+	return false
 }
 
 func countEventType(events []EventType, want EventType) int {

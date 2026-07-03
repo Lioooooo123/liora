@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Lioooooo123/liora/internal/llm"
 	"github.com/Lioooooo123/liora/internal/permission"
@@ -28,17 +29,19 @@ type Result struct {
 }
 
 type Agent struct {
-	workspace *tools.Workspace
-	recorder  trace.Recorder
-	mcp       MCPExecutor
-	skills    SkillReader
-	shell     ShellExecutor
-	checker   permission.Checker
-	outputs   ToolOutputSink
-	todos     TodoExecutor
-	tasks     TaskExecutor
-	traceSeq  int
-	replay    CompletedToolLookup
+	workspace   *tools.Workspace
+	recorder    trace.Recorder
+	lifecycle   ToolLifecycleSink
+	lifecycleMu sync.Mutex
+	mcp         MCPExecutor
+	skills      SkillReader
+	shell       ShellExecutor
+	checker     permission.Checker
+	outputs     ToolOutputSink
+	todos       TodoExecutor
+	tasks       TaskExecutor
+	traceSeq    int
+	replay      CompletedToolLookup
 }
 
 type MCPExecutor interface {
@@ -55,6 +58,28 @@ type SkillReader interface {
 
 type ToolOutputSink interface {
 	PersistToolOutput(ctx context.Context, call llm.ToolCall, output string) (string, error)
+}
+
+type ToolLifecycleEvent struct {
+	Phase          string
+	Tool           string
+	ToolCallID     string
+	ToolResultID   string
+	Input          string
+	Output         string
+	OutputPath     string
+	Status         string
+	BatchID        string
+	BatchSize      int
+	AccessMode     string
+	AccessResource string
+	AccessArgument string
+	DurationMS     int64
+	Truncated      bool
+}
+
+type ToolLifecycleSink interface {
+	RecordToolLifecycle(event ToolLifecycleEvent)
 }
 
 type CompletedToolResult struct {
@@ -149,6 +174,10 @@ func (a *Agent) SetToolOutputSink(sink ToolOutputSink) {
 	a.outputs = sink
 }
 
+func (a *Agent) SetToolLifecycleSink(sink ToolLifecycleSink) {
+	a.lifecycle = sink
+}
+
 func (a *Agent) SetTodoExecutor(executor TodoExecutor) {
 	a.todos = executor
 }
@@ -177,17 +206,23 @@ func (a *Agent) Run(ctx context.Context, prompt string) (Result, error) {
 		}
 		stepTraceSeq := baseTraceSeq + i + 1
 		toolCallID, toolResultID := fallbackToolIDs(stepTraceSeq)
+		baseLifecycle := a.fallbackLifecycleEvent(step, toolCallID, toolResultID)
+		a.recordToolLifecycle(withLifecyclePhase(baseLifecycle, "prepare", "pending"))
 		if a.completed(ctx, toolCallID) {
+			a.recordToolLifecycle(withLifecyclePhase(baseLifecycle, "finalize", "replayed"))
 			a.rememberTraceSeq(stepTraceSeq)
 			continue
 		}
 		if err := a.checkPermission(ctx, step, toolCallID); err != nil {
+			a.recordToolLifecycle(withLifecyclePhase(baseLifecycle, "authorize", string(StatusWaitingUser)))
 			return Result{
 				Status:  StatusWaitingUser,
 				Summary: fmt.Sprintf("waiting for approval at step %d/%d: %s", i+1, len(steps), step.Raw),
 				Diff:    latestDiff,
 			}, err
 		}
+		a.recordToolLifecycle(withLifecyclePhase(baseLifecycle, "authorize", "ok"))
+		a.recordToolLifecycle(withLifecyclePhase(baseLifecycle, "execute", "running"))
 		output, diff, err := a.execute(ctx, step)
 		if diff != "" {
 			latestDiff = diff
@@ -205,6 +240,12 @@ func (a *Agent) Run(ctx context.Context, prompt string) (Result, error) {
 			ToolCallID:   toolCallID,
 			ToolResultID: toolResultID,
 		})
+		finalizeStatus := string(status)
+		finalize := withLifecyclePhase(baseLifecycle, "finalize", finalizeStatus)
+		finalize.Output = output
+		finalize.OutputPath = toolOutputPath(output)
+		finalize.Truncated = finalize.OutputPath != ""
+		a.recordToolLifecycle(finalize)
 		a.rememberTraceSeq(stepTraceSeq)
 		if err != nil {
 			return Result{
@@ -227,6 +268,34 @@ func (a *Agent) Run(ctx context.Context, prompt string) (Result, error) {
 		Summary: completionSummary(len(steps)),
 		Diff:    latestDiff,
 	}, nil
+}
+
+func (a *Agent) recordToolLifecycle(event ToolLifecycleEvent) {
+	if a.lifecycle == nil {
+		return
+	}
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
+	a.lifecycle.RecordToolLifecycle(event)
+}
+
+func (a *Agent) fallbackLifecycleEvent(step Step, toolCallID string, toolResultID string) ToolLifecycleEvent {
+	input := strings.Join(step.Args, " ")
+	event := ToolLifecycleEvent{
+		Tool:         step.Tool,
+		ToolCallID:   toolCallID,
+		ToolResultID: toolResultID,
+		Input:        input,
+		BatchID:      "fallback-step",
+		BatchSize:    1,
+	}
+	return event.withAccess(fallbackStepAccess(step))
+}
+
+func withLifecyclePhase(event ToolLifecycleEvent, phase string, status string) ToolLifecycleEvent {
+	event.Phase = phase
+	event.Status = status
+	return event
 }
 
 func (a *Agent) checkPermission(ctx context.Context, step Step, toolCallID string) error {
