@@ -637,6 +637,9 @@ func (c *Client) SessionContext(ctx context.Context, sessionID string, request t
 	if request.TokenBudget > 0 {
 		values.Set("token_budget", fmt.Sprintf("%d", request.TokenBudget))
 	}
+	if strings.TrimSpace(request.Query) != "" {
+		values.Set("q", request.Query)
+	}
 	path := "/v1/sessions/" + escapedID + "/context"
 	if encoded := values.Encode(); encoded != "" {
 		path += "?" + encoded

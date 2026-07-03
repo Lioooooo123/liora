@@ -849,13 +849,20 @@ func (r *Repository) ContextEnvelope(ctx context.Context, sessionID string, requ
 	}
 	itemLimit := normalizeContextItemLimit(request.ItemLimit)
 	tokenBudget := normalizeContextTokenBudget(request.TokenBudget)
-	timeline, err := r.Timeline(ctx, sessionID, itemLimit+1)
+	query := strings.TrimSpace(request.Query)
+	timelineLimit := itemLimit + 1
+	if query != "" {
+		timelineLimit = maxContextItemLimit
+	}
+	timeline, err := r.Timeline(ctx, sessionID, timelineLimit)
 	if err != nil {
 		return ContextEnvelope{}, err
 	}
 	truncated := false
-	if len(timeline) > itemLimit {
+	if query == "" && len(timeline) > itemLimit {
 		timeline = timeline[len(timeline)-itemLimit:]
+		truncated = true
+	} else if query != "" && len(timeline) > itemLimit {
 		truncated = true
 	}
 	transcript, artifactRefs := compactContextTimeline(timeline)
@@ -863,11 +870,15 @@ func (r *Repository) ContextEnvelope(ctx context.Context, sessionID string, requ
 	artifactRefs = contextArtifactRefs(transcript, artifactRefs)
 	availableTranscript := len(transcript)
 	availableArtifactRefs := len(artifactRefs)
+	if query != "" {
+		transcript = selectRelevantContextTranscript(transcript, itemLimit, query)
+		artifactRefs = contextArtifactRefs(transcript, nil)
+	}
 	todos, availableTodos, err := r.contextTodos(ctx, sessionID)
 	if err != nil {
 		return ContextEnvelope{}, err
 	}
-	memories, availableMemories, err := r.contextMemories(ctx, session.Workspace, maxContextMemories)
+	memories, availableMemories, err := r.contextMemories(ctx, session.Workspace, maxContextMemories, query)
 	if err != nil {
 		return ContextEnvelope{}, err
 	}
@@ -946,6 +957,62 @@ func filterContextTranscript(items []TimelineItem) []TimelineItem {
 	return filtered
 }
 
+func selectRelevantContextTranscript(items []TimelineItem, limit int, query string) []TimelineItem {
+	if strings.TrimSpace(query) == "" || len(items) <= limit {
+		return items
+	}
+	ranked := append([]TimelineItem(nil), items...)
+	sort.SliceStable(ranked, func(i, j int) bool {
+		left := contextRelevanceScore(query, contextItemBudgetText(ranked[i]))
+		right := contextRelevanceScore(query, contextItemBudgetText(ranked[j]))
+		if left != right {
+			return left > right
+		}
+		if !ranked[i].CreatedAt.Equal(ranked[j].CreatedAt) {
+			return ranked[i].CreatedAt.After(ranked[j].CreatedAt)
+		}
+		return ranked[i].ID > ranked[j].ID
+	})
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].CreatedAt.Equal(ranked[j].CreatedAt) {
+			return ranked[i].ID < ranked[j].ID
+		}
+		return ranked[i].CreatedAt.Before(ranked[j].CreatedAt)
+	})
+	return ranked
+}
+
+func contextRelevanceScore(query string, text string) int {
+	terms := contextRelevanceTerms(query)
+	if len(terms) == 0 {
+		return 0
+	}
+	normalizedText := strings.ToLower(text)
+	score := 0
+	for _, term := range terms {
+		score += strings.Count(normalizedText, term)
+	}
+	return score
+}
+
+func contextRelevanceTerms(query string) []string {
+	fields := strings.Fields(strings.ToLower(query))
+	terms := make([]string, 0, len(fields))
+	seen := map[string]bool{}
+	for _, field := range fields {
+		term := strings.Trim(field, " \t\r\n.,;:!?()[]{}\"'`")
+		if len([]rune(term)) < 3 || seen[term] {
+			continue
+		}
+		seen[term] = true
+		terms = append(terms, term)
+	}
+	return terms
+}
+
 func (r *Repository) contextTodos(ctx context.Context, sessionID string) ([]Todo, int, error) {
 	all, err := r.TodosBySession(ctx, sessionID)
 	if err != nil {
@@ -986,7 +1053,7 @@ func todoContextPriorityRank(priority string) int {
 	}
 }
 
-func (r *Repository) contextMemories(ctx context.Context, workspace string, limit int) ([]ContextMemory, int, error) {
+func (r *Repository) contextMemories(ctx context.Context, workspace string, limit int, query string) ([]ContextMemory, int, error) {
 	workspace = strings.TrimSpace(workspace)
 	if workspace == "" {
 		return nil, 0, nil
@@ -1005,6 +1072,11 @@ func (r *Repository) contextMemories(ctx context.Context, workspace string, limi
 	if limit <= 0 {
 		limit = maxContextMemories
 	}
+	query = strings.TrimSpace(query)
+	queryLimit := limit
+	if query != "" {
+		queryLimit = maxContextItemLimit
+	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, text, kind, source, workspace, importance, created_at, updated_at, expires_at
 		FROM memories
@@ -1013,7 +1085,7 @@ func (r *Repository) contextMemories(ctx context.Context, workspace string, limi
 			AND (expires_at IS NULL OR expires_at = '' OR expires_at > ?)
 		ORDER BY importance DESC, updated_at DESC, id DESC
 		LIMIT ?
-	`, workspace, now, limit)
+	`, workspace, now, queryLimit)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1028,6 +1100,25 @@ func (r *Repository) contextMemories(ctx context.Context, workspace string, limi
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
+	}
+	if query != "" {
+		sort.SliceStable(memories, func(i, j int) bool {
+			left := contextRelevanceScore(query, contextMemoryBudgetText(memories[i]))
+			right := contextRelevanceScore(query, contextMemoryBudgetText(memories[j]))
+			if left != right {
+				return left > right
+			}
+			if memories[i].Importance != memories[j].Importance {
+				return memories[i].Importance > memories[j].Importance
+			}
+			if !memories[i].UpdatedAt.Equal(memories[j].UpdatedAt) {
+				return memories[i].UpdatedAt.After(memories[j].UpdatedAt)
+			}
+			return memories[i].ID > memories[j].ID
+		})
+	}
+	if len(memories) > limit {
+		memories = memories[:limit]
 	}
 	return memories, available, nil
 }

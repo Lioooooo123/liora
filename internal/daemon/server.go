@@ -1001,7 +1001,11 @@ func (s *server) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		envelope, err := s.repo.ContextEnvelope(r.Context(), sessionID, taskpkg.ContextRequest{ItemLimit: limit, TokenBudget: tokenBudget})
+		envelope, err := s.repo.ContextEnvelope(r.Context(), sessionID, taskpkg.ContextRequest{
+			ItemLimit:   limit,
+			TokenBudget: tokenBudget,
+			Query:       r.URL.Query().Get("q"),
+		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return

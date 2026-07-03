@@ -51,7 +51,7 @@ type promptBudgetInputs struct {
 }
 
 func (r *Runner) withSessionContext(ctx context.Context, task Task, prompt string, budgetInputs promptBudgetInputs) (string, error) {
-	contextPrompt, envelope, err := r.sessionContextPrompt(ctx, task)
+	contextPrompt, envelope, err := r.sessionContextPrompt(ctx, task, budgetInputs.CurrentRequest)
 	if err != nil {
 		return "", err
 	}
@@ -64,10 +64,11 @@ func (r *Runner) withSessionContext(ctx context.Context, task Task, prompt strin
 	return strings.TrimSpace(contextPrompt + "\n\nCurrent user request:\n" + prompt), nil
 }
 
-func (r *Runner) sessionContextPrompt(ctx context.Context, task Task) (string, ContextEnvelope, error) {
+func (r *Runner) sessionContextPrompt(ctx context.Context, task Task, query string) (string, ContextEnvelope, error) {
 	envelope, err := r.repo.ContextEnvelope(ctx, task.SessionID, ContextRequest{
 		ItemLimit:   taskPromptContextItemLimit,
 		TokenBudget: taskPromptContextTokenBudget,
+		Query:       query,
 	})
 	if err != nil {
 		return "", ContextEnvelope{}, err

@@ -596,8 +596,9 @@ func normalizedTrust(level string, source string) string {
 }
 
 type ContextRequest struct {
-	ItemLimit   int `json:"item_limit,omitempty"`
-	TokenBudget int `json:"token_budget,omitempty"`
+	ItemLimit   int    `json:"item_limit,omitempty"`
+	TokenBudget int    `json:"token_budget,omitempty"`
+	Query       string `json:"query,omitempty"`
 }
 
 type CompactMode string

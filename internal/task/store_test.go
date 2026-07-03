@@ -1134,6 +1134,71 @@ func TestRepositoryContextEnvelopePacksRelevantSources(t *testing.T) {
 	}
 }
 
+func TestContextPackerSelectsTaskRelevantMemoryAndTranscript(t *testing.T) {
+	root := t.TempDir()
+	workspace := root + "/repo-a"
+	storeRoot := store.New(root)
+	for i := 0; i < maxContextMemories; i++ {
+		if _, err := storeRoot.CreateMemoryWithOptions(store.CreateMemoryRequest{
+			Text:       fmt.Sprintf("irrelevant style preference %d", i),
+			Kind:       "preference",
+			Workspace:  workspace,
+			Importance: 5,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	relevantMemory, err := storeRoot.CreateMemoryWithOptions(store.CreateMemoryRequest{
+		Text:       "payments retry policy must keep idempotency key",
+		Kind:       "rule",
+		Workspace:  workspace,
+		Importance: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := storeRoot.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	created, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "initial unrelated task",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), created.ID, EventSummary, EventPayload{Message: "payments retry transcript keeps idempotency key"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 12; i++ {
+		if _, err := repo.AppendMessage(t.Context(), created.SessionID, "assistant", fmt.Sprintf("recent unrelated transcript %02d", i), created.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	envelope, err := repo.ContextEnvelope(t.Context(), created.SessionID, ContextRequest{
+		ItemLimit:   4,
+		TokenBudget: 4096,
+		Query:       "payments retry idempotency",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(contextMemoriesText(envelope.Memories), relevantMemory.ID) && !strings.Contains(contextMemoriesText(envelope.Memories), "payments retry policy") {
+		t.Fatalf("expected relevant memory to outrank high-importance irrelevant memories, got %#v", envelope.Memories)
+	}
+	transcriptText := timelineItemsText(envelope.Transcript)
+	if !strings.Contains(transcriptText, "payments retry transcript") {
+		t.Fatalf("expected relevant older transcript to be selected, got %#v", envelope.Transcript)
+	}
+	if strings.Count(transcriptText, "recent unrelated transcript") >= len(envelope.Transcript) {
+		t.Fatalf("expected relevance to displace at least one recent irrelevant transcript, got %#v", envelope.Transcript)
+	}
+}
+
 func TestRepositoryContextEnvelopePackerExcludesIrrelevantAndTruncatesBudget(t *testing.T) {
 	root := t.TempDir()
 	workspace := root + "/repo-a"
