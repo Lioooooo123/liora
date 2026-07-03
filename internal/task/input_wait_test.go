@@ -186,3 +186,109 @@ func TestTaskPromptRecordsPromptContextSnapshot(t *testing.T) {
 		t.Fatalf("snapshot should persist budget, estimate, source count, and hash, got %#v", snapshot)
 	}
 }
+
+func TestPromptBudgetIncludesSystemUserWrapperAndContext(t *testing.T) {
+	root := t.TempDir()
+	workspace := root + "/repo"
+	storeRoot := store.New(root)
+	if _, err := storeRoot.CreateMemoryWithOptions(store.CreateMemoryRequest{
+		Text:       "budget memory preference",
+		Kind:       "preference",
+		Workspace:  workspace,
+		Importance: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := storeRoot.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	first, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "capture budget context",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), first.ID, EventSummary, EventPayload{Message: "budget assistant transcript"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), first.ID, EventToolResult, EventPayload{
+		Tool:   "shell",
+		Input:  "cat budget.txt",
+		Output: "budget tool output artifact://budget/result.txt",
+		Status: "ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), first.ID, EventArtifactReference, EventPayload{Tool: "shell", Path: "artifact://budget/result.txt", Message: "budget artifact preview"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.WriteTodos(t.Context(), TodoWriteRequest{
+		SessionID:    first.SessionID,
+		SourceTaskID: first.ID,
+		Todos: []TodoWriteItem{{
+			ID:       "todo-budget",
+			Content:  "budget todo context",
+			Status:   TodoStatusPending,
+			Priority: TodoPriorityCritical,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		SessionID: first.SessionID,
+		Prompt:    "continue after budget",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), second.ID, EventToolResult, EventPayload{
+		Tool:         "shell",
+		ToolCallID:   "call-budget-completed",
+		ToolResultID: "call-budget-completed-result",
+		Input:        "go test ./internal/task",
+		Output:       "ok",
+		Status:       "ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(repo, nil)
+	if _, err := runner.taskPrompt(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	events, err := repo.Events(t.Context(), second.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot EventPayload
+	for _, event := range events {
+		if event.Type != EventPromptContextSnapshot {
+			continue
+		}
+		if err := json.Unmarshal([]byte(event.Payload), &snapshot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, want := range []string{
+		"Prompt budget:",
+		"- system:",
+		"- current_request:",
+		"- prompt_wrapper:",
+		"- completed_tool_summary:",
+		"- transcript:",
+		"- memory:",
+		"- tool_result:",
+		"- artifact_preview:",
+		"- todo:",
+	} {
+		if !strings.Contains(snapshot.Output, want) {
+			t.Fatalf("expected prompt budget output to contain %q, got:\n%s", want, snapshot.Output)
+		}
+	}
+}

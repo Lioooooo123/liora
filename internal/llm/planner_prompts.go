@@ -12,6 +12,10 @@ func ToolChoiceReflectionPrompt() string {
 - Stop calling tools once you have enough evidence to answer.`
 }
 
+func PlannerSystemPrompt() string {
+	return plannerSystemPrompt()
+}
+
 func plannerSystemPrompt() string {
 	return `You are a coding-agent planner. Convert the user's request into newline-separated tool steps.
 

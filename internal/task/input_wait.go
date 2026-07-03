@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Lioooooo123/liora/internal/llm"
 	"github.com/Lioooooo123/liora/internal/trust"
 )
 
@@ -16,11 +17,14 @@ const (
 
 func (r *Runner) taskPrompt(ctx context.Context, task Task) (string, error) {
 	prompt := task.UserInput
+	currentRequest := task.UserInput
+	completedSummary := ""
 	completed, err := r.repo.CompletedToolResults(ctx, task.ID)
 	if err != nil {
 		return "", err
 	}
 	if summary := completedToolSummary(completed); summary != "" {
+		completedSummary = summary
 		prompt = strings.TrimSpace(prompt + "\n\n" + summary)
 	}
 	answer, ok, err := r.repo.LatestUserInput(ctx, task.ID)
@@ -28,13 +32,25 @@ func (r *Runner) taskPrompt(ctx context.Context, task Task) (string, error) {
 		return "", err
 	}
 	if !ok {
-		return r.withSessionContext(ctx, task, prompt)
+		return r.withSessionContext(ctx, task, prompt, promptBudgetInputs{
+			CurrentRequest:       currentRequest,
+			CompletedToolSummary: completedSummary,
+		})
 	}
+	currentRequest = strings.TrimSpace(currentRequest + "\n\nUser input after the previous pause:\n" + answer)
 	prompt = strings.TrimSpace(prompt + "\n\nUser input after the previous pause:\n" + answer)
-	return r.withSessionContext(ctx, task, prompt)
+	return r.withSessionContext(ctx, task, prompt, promptBudgetInputs{
+		CurrentRequest:       currentRequest,
+		CompletedToolSummary: completedSummary,
+	})
 }
 
-func (r *Runner) withSessionContext(ctx context.Context, task Task, prompt string) (string, error) {
+type promptBudgetInputs struct {
+	CurrentRequest       string
+	CompletedToolSummary string
+}
+
+func (r *Runner) withSessionContext(ctx context.Context, task Task, prompt string, budgetInputs promptBudgetInputs) (string, error) {
 	contextPrompt, envelope, err := r.sessionContextPrompt(ctx, task)
 	if err != nil {
 		return "", err
@@ -42,7 +58,7 @@ func (r *Runner) withSessionContext(ctx context.Context, task Task, prompt strin
 	if contextPrompt == "" {
 		return prompt, nil
 	}
-	if err := r.recordPromptContextSnapshot(ctx, task, envelope, contextPrompt); err != nil {
+	if err := r.recordPromptContextSnapshot(ctx, task, envelope, contextPrompt, budgetInputs); err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(contextPrompt + "\n\nCurrent user request:\n" + prompt), nil
@@ -72,23 +88,28 @@ func (r *Runner) sessionContextPrompt(ctx context.Context, task Task) (string, C
 	return strings.TrimSpace(builder.String()), envelope, nil
 }
 
-func (r *Runner) recordPromptContextSnapshot(ctx context.Context, task Task, envelope ContextEnvelope, contextPrompt string) error {
+func (r *Runner) recordPromptContextSnapshot(ctx context.Context, task Task, envelope ContextEnvelope, contextPrompt string, budgetInputs promptBudgetInputs) error {
 	hash := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(contextPrompt)))
+	buckets := promptBudgetBuckets(envelope, contextPrompt, budgetInputs)
 	return r.repo.AppendEvent(ctx, task.ID, EventPromptContextSnapshot, r.eventPayloadWithModel(task, EventPayload{
 		Message:         "Prompt context snapshot",
-		Output:          formatPromptContextSnapshot(envelope, hash),
+		Output:          formatPromptContextSnapshot(envelope, hash, buckets),
 		Target:          hash,
 		TokenBudget:     envelope.Budget.MaxTokens,
-		TokenEstimate:   envelope.Budget.EstimatedTokens,
+		TokenEstimate:   promptBudgetBucketSum(buckets),
 		SourceItemCount: promptContextSelectedItems(envelope),
 	}))
 }
 
-func formatPromptContextSnapshot(envelope ContextEnvelope, hash string) string {
+func formatPromptContextSnapshot(envelope ContextEnvelope, hash string, budgetBuckets []ContextBudgetBucket) string {
 	lines := []string{
 		fmt.Sprintf("Prompt context %s", envelope.Session.ID),
 		"Hash: " + hash,
 		fmt.Sprintf("Budget: %d/%d estimated tokens, %d item limit, truncated=%t", envelope.Budget.EstimatedTokens, envelope.Budget.MaxTokens, envelope.Budget.ItemLimit, envelope.Budget.Truncated),
+	}
+	lines = append(lines, "Prompt budget:")
+	for _, bucket := range budgetBuckets {
+		lines = append(lines, fmt.Sprintf("- %s: tokens=%d items=%d", bucket.Name, bucket.EstimatedTokens, bucket.Items))
 	}
 	if len(envelope.Pack.Sources) == 0 {
 		lines = append(lines, "Sources: none")
@@ -103,6 +124,89 @@ func formatPromptContextSnapshot(envelope ContextEnvelope, hash string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func promptBudgetBuckets(envelope ContextEnvelope, contextPrompt string, inputs promptBudgetInputs) []ContextBudgetBucket {
+	contextWrapperTokens := estimateTokens(contextPrompt) - envelope.Budget.EstimatedTokens
+	if contextWrapperTokens < 0 {
+		contextWrapperTokens = 0
+	}
+	buckets := []ContextBudgetBucket{
+		{Name: "system", EstimatedTokens: 4 + estimateTokens(llm.PlannerSystemPrompt()), Items: 1},
+		{Name: "current_request", EstimatedTokens: 4 + estimateTokens(inputs.CurrentRequest), Items: 1},
+		{Name: "prompt_wrapper", EstimatedTokens: 4 + contextWrapperTokens + estimateTokens("Current user request:"), Items: 1},
+		{Name: "completed_tool_summary", EstimatedTokens: estimateOptionalPromptBucket(inputs.CompletedToolSummary), Items: optionalPromptBucketItems(inputs.CompletedToolSummary)},
+		{Name: "transcript", EstimatedTokens: estimatePromptTranscriptTokens(envelope.Transcript), Items: countPromptTranscriptItems(envelope.Transcript)},
+		{Name: "memory", EstimatedTokens: estimateMemoriesTokens(envelope.Memories), Items: len(envelope.Memories)},
+		{Name: "tool_result", EstimatedTokens: estimatePromptToolResultTokens(envelope.Transcript), Items: countPromptToolResults(envelope.Transcript)},
+		{Name: "artifact_preview", EstimatedTokens: estimateArtifactRefsTokens(envelope.ArtifactRefs), Items: len(envelope.ArtifactRefs)},
+		{Name: "todo", EstimatedTokens: estimateTodosTokens(envelope.Todos), Items: len(envelope.Todos)},
+	}
+	return buckets
+}
+
+func estimateOptionalPromptBucket(value string) int {
+	if strings.TrimSpace(value) == "" {
+		return 0
+	}
+	return 4 + estimateTokens(value)
+}
+
+func optionalPromptBucketItems(value string) int {
+	if strings.TrimSpace(value) == "" {
+		return 0
+	}
+	return 1
+}
+
+func estimatePromptToolResultTokens(items []TimelineItem) int {
+	var total int
+	for _, item := range items {
+		if item.Kind == "tool_result" {
+			total += 4 + estimateTokens(contextItemBudgetText(item))
+		}
+	}
+	return total
+}
+
+func estimatePromptTranscriptTokens(items []TimelineItem) int {
+	var total int
+	for _, item := range items {
+		if item.Kind == "tool_result" || item.Kind == "artifact" {
+			continue
+		}
+		total += 4 + estimateTokens(contextItemBudgetText(item))
+	}
+	return total
+}
+
+func countPromptTranscriptItems(items []TimelineItem) int {
+	var count int
+	for _, item := range items {
+		if item.Kind == "tool_result" || item.Kind == "artifact" {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func countPromptToolResults(items []TimelineItem) int {
+	var count int
+	for _, item := range items {
+		if item.Kind == "tool_result" {
+			count++
+		}
+	}
+	return count
+}
+
+func promptBudgetBucketSum(buckets []ContextBudgetBucket) int {
+	var total int
+	for _, bucket := range buckets {
+		total += bucket.EstimatedTokens
+	}
+	return total
 }
 
 func promptContextSelectedItems(envelope ContextEnvelope) int {
