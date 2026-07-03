@@ -77,7 +77,7 @@ func TestNextReleaseVersionScriptIncrementsLatestSemverTag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := t.TempDir()
+	repo := tempGitRepoDir(t)
 	runGit(t, repo, "init")
 	runGit(t, repo, "config", "user.name", "Test User")
 	runGit(t, repo, "config", "user.email", "test@example.com")
@@ -106,7 +106,7 @@ func TestNextReleaseVersionScriptReturnsHeadTagForRerun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := t.TempDir()
+	repo := tempGitRepoDir(t)
 	runGit(t, repo, "init")
 	runGit(t, repo, "config", "user.name", "Test User")
 	runGit(t, repo, "config", "user.email", "test@example.com")
@@ -166,6 +166,18 @@ func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	gitArgs := append([]string{"-c", "gc.auto=0", "-c", "maintenance.auto=false"}, args...)
 	runCommand(t, dir, "git", gitArgs...)
+}
+
+func tempGitRepoDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "liora-release-version-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
+	return dir
 }
 
 func runCommand(t *testing.T, dir string, name string, args ...string) string {
