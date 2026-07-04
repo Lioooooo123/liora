@@ -1,10 +1,6 @@
 package tui
 
-import (
-	"strings"
-
-	"github.com/charmbracelet/lipgloss"
-)
+import "strings"
 
 func (m *model) refreshCompletions() {
 	line := strings.TrimRight(m.input.Value(), "\r\n")
@@ -54,20 +50,20 @@ func (m *model) completionPaletteView(width int) string {
 	}
 	lines := []string{
 		chromeInputBorderStyle.Render("╭" + strings.Repeat("─", innerWidth) + "╮"),
-		paletteLine("Commands", innerWidth),
+		paletteLine(chromeHotStyle.Render("command layer"), width),
+		paletteLine(mutedStyle.Render("Commands"), width),
 	}
-	commandRows := completionRows(m.completions, "command", innerWidth)
+	commandRows := completionRows(m.completions, "command", width)
 	if len(commandRows) == 0 {
-		commandRows = []string{paletteLine("  /help  show commands", innerWidth)}
+		commandRows = []string{paletteLine("  /help  show commands", width)}
 	}
 	lines = append(lines, commandRows...)
-	skillRows := completionRows(m.completions, "skill", innerWidth)
+	skillRows := completionRows(m.completions, "skill", width)
 	if len(skillRows) > 0 {
-		lines = append(lines, paletteLine("Skills", innerWidth))
+		lines = append(lines, paletteLine(mutedStyle.Render("Skills"), width))
 		lines = append(lines, skillRows...)
 	}
 	lines = append(lines,
-		paletteLine("Tab accept  Enter run  Esc close", innerWidth),
 		chromeInputBorderStyle.Render("╰"+strings.Repeat("─", innerWidth)+"╯"),
 	)
 	return strings.Join(lines, "\n")
@@ -106,12 +102,7 @@ func completionKind(item Completion) string {
 }
 
 func paletteLine(content string, innerWidth int) string {
-	content = truncateCells(content, innerWidth)
-	padding := innerWidth - lipgloss.Width(content)
-	if padding < 0 {
-		padding = 0
-	}
-	return chromeInputBorderStyle.Render("│") + content + strings.Repeat(" ", padding) + chromeInputBorderStyle.Render("│")
+	return truncateCells("  "+content, innerWidth)
 }
 
 func (m *model) completionHint(width int) string {

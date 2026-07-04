@@ -9,14 +9,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type fakeCompletionProvider struct {
-	items []Completion
-}
-
-func (f fakeCompletionProvider) Completions(_ context.Context, _ string) ([]Completion, error) {
-	return f.items, nil
-}
-
 func TestProgramChromeUsesCompactHeader_whenTranscriptExists(t *testing.T) {
 	// Given
 	model := newModel(context.Background(), Config{
@@ -32,7 +24,7 @@ func TestProgramChromeUsesCompactHeader_whenTranscriptExists(t *testing.T) {
 	rendered := model.headerView() + "\n" + model.statusLine()
 
 	// Then
-	for _, want := range []string{"✦", "LIORA", "ready", "─", "events", "type a request"} {
+	for _, want := range []string{"▌", "●", "LIORA", "ready", "─", "events", "type a request"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected chrome to contain %q, got:\n%s", want, rendered)
 		}
@@ -44,7 +36,7 @@ func TestProgramChromeUsesCompactHeader_whenTranscriptExists(t *testing.T) {
 	}
 }
 
-func TestProgramWelcomeCardShown_whenTranscriptIsEmpty(t *testing.T) {
+func TestProgramWorkbenchShown_whenTranscriptIsEmpty(t *testing.T) {
 	// Given
 	model := newModel(context.Background(), Config{
 		Workspace: "/tmp/project",
@@ -58,14 +50,38 @@ func TestProgramWelcomeCardShown_whenTranscriptIsEmpty(t *testing.T) {
 	view := model.View()
 
 	// Then
-	for _, want := range []string{"Welcome to Liora", "Directory:", "/diff", "/apply", "╭", "╰"} {
+	for _, want := range []string{"LIORA", "workbench", "workspace", "/tmp/project", "deepseek-v4-pro", "ready for work", "/help", "/diff", "/apply"} {
 		if !strings.Contains(view.Content, want) {
-			t.Fatalf("expected welcome card to contain %q, got:\n%s", want, view.Content)
+			t.Fatalf("expected empty workbench to contain %q, got:\n%s", want, view.Content)
 		}
 	}
-	if strings.Contains(view.Content, "workspace /tmp/project") {
-		t.Fatalf("empty state should not render the transcript chrome header, got:\n%s", view.Content)
+	for _, avoid := range []string{"Welcome to Liora", "Directory:"} {
+		if strings.Contains(view.Content, avoid) {
+			t.Fatalf("empty state should not render old welcome card copy %q, got:\n%s", avoid, view.Content)
+		}
 	}
+}
+
+func TestProgramWorkbenchFitsNarrowWidth_whenTranscriptIsEmpty(t *testing.T) {
+	// Given
+	model := newModel(context.Background(), Config{
+		Workspace: "/tmp/project-with-a-long-directory-name",
+		Model:     "deepseek-v4-pro",
+		Core:      "embedded daemon",
+		Safety:    "patch-first",
+	}, fakeStreamingSubmitter{})
+	model.resize(42, 18)
+
+	// When
+	view := model.View()
+
+	// Then
+	for _, want := range []string{"LIORA", "workbench", "/help"} {
+		if !strings.Contains(view.Content, want) {
+			t.Fatalf("expected narrow workbench to contain %q, got:\n%s", want, view.Content)
+		}
+	}
+	assertVisibleLinesWithinWidth(t, view.Content, 42)
 }
 
 func TestProgramInputPanelLeavesBottomBreathingRoom_whenRendered(t *testing.T) {
@@ -226,126 +242,6 @@ func TestProgramCommandResultUsesAssistantSection_whenApplyCompletes(t *testing.
 	}
 }
 
-func TestProgramShowsSkillCompletions_whenTypingSkillSlashCommand(t *testing.T) {
-	// Given
-	m := newModel(context.Background(), Config{
-		Workspace: "/tmp/project",
-		Completions: fakeCompletionProvider{items: []Completion{
-			{Value: "/skill review", Label: "/skill review", Description: "Review code changes"},
-			{Value: "/skill tests", Label: "/skill tests", Description: "Generate tests"},
-		}},
-	}, fakeStreamingSubmitter{})
-	m.resize(96, 20)
-	m.input.SetValue("/skill re")
-
-	// When
-	m.refreshCompletions()
-	panel := m.inputPanelView()
-
-	// Then
-	for _, want := range []string{"/skill review", "Review code changes"} {
-		if !strings.Contains(panel, want) {
-			t.Fatalf("expected skill completion panel to contain %q, got:\n%s", want, panel)
-		}
-	}
-	if strings.Contains(panel, "/skill tests") {
-		t.Fatalf("completion panel should filter by typed skill prefix, got:\n%s", panel)
-	}
-}
-
-func TestProgramSlashPaletteShowsSkillCompletions_whenTypingSlash(t *testing.T) {
-	// Given
-	m := newModel(context.Background(), Config{
-		Workspace: "/tmp/project",
-		Completions: fakeCompletionProvider{items: []Completion{
-			{Value: "/skill review", Label: "review", Description: "Review code changes"},
-			{Value: "/skill tests", Label: "tests", Description: "Generate tests"},
-		}},
-	}, fakeStreamingSubmitter{})
-	m.resize(96, 20)
-	m.input.SetValue("/")
-
-	// When
-	m.refreshCompletions()
-	panel := m.inputPanelView()
-
-	// Then
-	for _, want := range []string{"Commands", "Skills", "/help", "review", "Review code changes"} {
-		if !strings.Contains(panel, want) {
-			t.Fatalf("expected slash palette to contain %q, got:\n%s", want, panel)
-		}
-	}
-}
-
-func TestProgramTabAppliesSkillCompletion_whenSlashPrefixMatchesSkillName(t *testing.T) {
-	// Given
-	m := newModel(context.Background(), Config{
-		Workspace: "/tmp/project",
-		Completions: fakeCompletionProvider{items: []Completion{
-			{Value: "/skill review", Label: "review", Description: "Review code changes"},
-			{Value: "/skill tests", Label: "tests", Description: "Generate tests"},
-		}},
-	}, fakeStreamingSubmitter{})
-	m.resize(96, 20)
-	m.input.SetValue("/re")
-	m.refreshCompletions()
-
-	// When
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	got := updated.(*model).input.Value()
-
-	// Then
-	if got != "/skill review" {
-		t.Fatalf("expected /re tab to complete to /skill review, got %q", got)
-	}
-}
-
-func TestProgramShowsAllSkillCompletions_whenSkillCommandHasTrailingSpace(t *testing.T) {
-	// Given
-	m := newModel(context.Background(), Config{
-		Workspace: "/tmp/project",
-		Completions: fakeCompletionProvider{items: []Completion{
-			{Value: "/skill review", Label: "/skill review", Description: "Review code changes"},
-			{Value: "/skill tests", Label: "/skill tests", Description: "Generate tests"},
-		}},
-	}, fakeStreamingSubmitter{})
-	m.resize(96, 20)
-	m.input.SetValue("/skill ")
-
-	// When
-	m.refreshCompletions()
-	panel := m.inputPanelView()
-
-	// Then
-	for _, want := range []string{"/skill review", "/skill tests"} {
-		if !strings.Contains(panel, want) {
-			t.Fatalf("expected trailing-space skill completion panel to contain %q, got:\n%s", want, panel)
-		}
-	}
-}
-
-func TestProgramTabAppliesSkillCompletion_whenSingleSkillMatches(t *testing.T) {
-	// Given
-	m := newModel(context.Background(), Config{
-		Workspace: "/tmp/project",
-		Completions: fakeCompletionProvider{items: []Completion{
-			{Value: "/skill review", Label: "/skill review", Description: "Review code changes"},
-		}},
-	}, fakeStreamingSubmitter{})
-	m.resize(96, 20)
-	m.input.SetValue("/skill re")
-	m.refreshCompletions()
-
-	// When
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	got := updated.(*model).input.Value()
-
-	// Then
-	if got != "/skill review" {
-		t.Fatalf("expected tab to complete skill command, got %q", got)
-	}
-}
-
 func TestProgramFooterShowsProgress_whenInternalEventsAreHidden(t *testing.T) {
 	// Given
 	model := newModel(context.Background(), Config{Workspace: "/tmp/project"}, fakeStreamingSubmitter{})
@@ -433,14 +329,5 @@ func TestProgramAllowsControlCommand_whenTaskIsRunning(t *testing.T) {
 	}
 	if len(model.pending) != 0 {
 		t.Fatalf("control command should not be queued: %#v", model.pending)
-	}
-}
-
-func assertVisibleLinesWithinWidth(t *testing.T, content string, width int) {
-	t.Helper()
-	for _, line := range strings.Split(content, "\n") {
-		if got := lipgloss.Width(line); got > width {
-			t.Fatalf("expected line width <= %d, got %d for %q\n%s", width, got, line, content)
-		}
 	}
 }

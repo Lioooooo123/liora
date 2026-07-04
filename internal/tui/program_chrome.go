@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 var (
@@ -16,19 +17,14 @@ var (
 			Background(lipgloss.Color("236")).
 			Padding(0, 1)
 	chromeRuleStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
+	chromeRailStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 	chromeHotStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("222")).Bold(true)
-	chromeCardBorderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("75"))
 	chromeInputBorderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	chromeWelcomeLogoStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("149")).Bold(true)
-	chromeWelcomeTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Bold(true)
 )
 
 func (m *model) headerView() string {
-	if m.isTranscriptEmpty() {
-		return ""
-	}
 	width := m.viewportWidth()
-	left := chromeTitleStyle.Render(brandInline())
+	left := chromeTitleStyle.Render(brandInline()) + mutedStyle.Render(" workbench")
 	right := chromePillStyle.Render(m.statusLabel())
 	top := joinEdge(left, right, width)
 	return strings.Join([]string{
@@ -37,46 +33,46 @@ func (m *model) headerView() string {
 	}, "\n")
 }
 
-func (m *model) welcomeCardView() string {
+func (m *model) workbenchView() string {
 	width := m.viewportWidth()
-	if width < 24 {
-		return truncateCells(brandInline()+"  "+valueOr(m.cfg.Workspace, "workspace"), width)
-	}
-	innerWidth := width - 2
-	if innerWidth < 1 {
-		innerWidth = 1
-	}
-	top := chromeCardBorderStyle.Render("╭" + strings.Repeat("─", innerWidth) + "╮")
-	bottom := chromeCardBorderStyle.Render("╰" + strings.Repeat("─", innerWidth) + "╯")
-	empty := cardLine("", innerWidth)
-	logo := chromeWelcomeLogoStyle.Render("▟██▙")
-	title := chromeWelcomeTextStyle.Render("Welcome to Liora")
-	tagline := mutedStyle.Render("Ask, inspect, patch, then apply.")
 	lines := []string{
-		top,
-		empty,
-		cardLine("  "+logo+"  "+title, innerWidth),
-		cardLine("        "+tagline, innerWidth),
-		empty,
-		cardLine("  "+metaItem("Directory:", valueOr(m.cfg.Workspace, "-")), innerWidth),
-		cardLine("  "+metaItem("Model:", valueOr(m.cfg.Model, "scripted")), innerWidth),
-		cardLine("  "+metaItem("Core:", valueOr(m.cfg.Core, "-")), innerWidth),
-		cardLine("  "+metaItem("Safety:", valueOr(m.cfg.Safety, "-")), innerWidth),
-		empty,
-		cardLine("  "+chromeHotStyle.Render("/help")+" commands  "+chromeHotStyle.Render("/diff")+" review  "+chromeHotStyle.Render("/apply")+" write", innerWidth),
-		empty,
-		bottom,
+		workbenchLine("› ", chromeHotStyle.Render("ready for work"), width),
+		workbenchFieldLine("workspace", valueOr(m.cfg.Workspace, "-"), width),
+		workbenchFieldLine("model", valueOr(m.cfg.Model, "scripted"), width),
+		workbenchPairLine("core", valueOr(m.cfg.Core, "-"), "safety", valueOr(m.cfg.Safety, "-"), width),
+		workbenchLine("› ", mutedStyle.Render("actions"), width),
+		workbenchRailLine(chromeHotStyle.Render("/help")+" commands  "+chromeHotStyle.Render("/diff")+" review  "+chromeHotStyle.Render("/apply")+" write", width),
+		workbenchRailLine(mutedStyle.Render("patch-first workspace, no active task"), width),
+		workbenchLine("  ", mutedStyle.Render("ready for request"), width),
 	}
 	return strings.Join(lines, "\n")
 }
 
-func cardLine(content string, innerWidth int) string {
-	content = truncateCells(content, innerWidth)
-	padding := innerWidth - lipgloss.Width(content)
-	if padding < 0 {
-		padding = 0
+func workbenchFieldLine(key string, value string, width int) string {
+	return workbenchRailLine(metaItem(key, value), width)
+}
+
+func workbenchPairLine(leftKey string, leftValue string, rightKey string, rightValue string, width int) string {
+	prefix := chromeRailStyle.Render("  ")
+	contentWidth := width - lipgloss.Width(prefix)
+	if contentWidth < 1 {
+		return truncateCells(prefix, width)
 	}
-	return chromeCardBorderStyle.Render("│") + content + strings.Repeat(" ", padding) + chromeCardBorderStyle.Render("│")
+	content := joinEdge(metaItem(leftKey, leftValue), metaItem(rightKey, rightValue), contentWidth)
+	return prefix + content
+}
+
+func workbenchLine(prefix string, content string, width int) string {
+	prefix = chromeRailStyle.Render(prefix)
+	contentWidth := width - lipgloss.Width(prefix)
+	if contentWidth < 1 {
+		return truncateCells(prefix, width)
+	}
+	return prefix + truncateCells(content, contentWidth)
+}
+
+func workbenchRailLine(content string, width int) string {
+	return workbenchLine("  ", content, width)
 }
 
 func (m *model) statusLine() string {
@@ -137,14 +133,10 @@ func joinEdge(left string, right string, width int) string {
 }
 
 func truncateCells(value string, width int) string {
-	if width <= 0 || lipgloss.Width(value) <= width {
-		return value
+	if width <= 0 {
+		return ""
 	}
-	runes := []rune(value)
-	for len(runes) > 0 && lipgloss.Width(string(runes)+"…") > width {
-		runes = runes[:len(runes)-1]
-	}
-	return string(runes) + "…"
+	return ansi.Truncate(value, width, "…")
 }
 
 func compactMiddle(value string, maxCells int) string {

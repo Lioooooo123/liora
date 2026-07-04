@@ -7,7 +7,7 @@ func (m *model) refresh() {
 	offset := m.vp.YOffset()
 	m.rebuildBody()
 	if m.isTranscriptEmpty() {
-		m.vp.SetContent(m.welcomeCardView())
+		m.vp.SetContent(m.workbenchView())
 		m.vp.GotoTop()
 		return
 	}
