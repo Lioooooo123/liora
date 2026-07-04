@@ -154,6 +154,29 @@ func TestCLIDoctorIgnoresLegacyBaseURL_whenNamespacedProviderIsSet(t *testing.T)
 	}
 }
 
+func TestInteractiveStartFreshDefaultsToCleanSession(t *testing.T) {
+	tests := []struct {
+		name         string
+		sessionID    string
+		resumeLatest bool
+		forceNew     bool
+		want         bool
+	}{
+		{name: "default starts fresh", want: true},
+		{name: "explicit resume latest", resumeLatest: true, want: false},
+		{name: "explicit session attaches", sessionID: "session_123", want: false},
+		{name: "new session overrides resume latest", resumeLatest: true, forceNew: true, want: true},
+		{name: "session id stays explicit", sessionID: "session_123", forceNew: true, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := interactiveStartFresh(tt.sessionID, tt.resumeLatest, tt.forceNew); got != tt.want {
+				t.Fatalf("interactiveStartFresh() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCLIInteractiveDoctorCommandReportsConfigWithoutSecret(t *testing.T) {
 	// Given
 	workspace := t.TempDir()

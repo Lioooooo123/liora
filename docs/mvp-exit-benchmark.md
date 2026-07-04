@@ -40,7 +40,7 @@ Liora v0.1 是本地 Mac 上的轻量 agent 工坊。
 - 基础记忆能力可用：添加、列出、搜索记忆，并能注入 planner 上下文；daemon API、Go client 和 TUI 都走同一条 SQLite memory core path。
 - 任务历史可查询，事件可回放，客户端重连后能恢复任务时间线。
 - 会话历史可按 workspace 搜索，客户端不需要自己遍历 sessions/tasks/events 拼搜索。
-- TUI 重启后应默认接回同 workspace 最近 session；用户也能显式 `/new-session` 从新上下文开始。
+- TUI 重启后应默认从新 session 开始，避免上一轮聊天内容自动进入新任务；用户可显式 `/resume-latest` 或 `-resume-latest` 接回同 workspace 最近 session。
 
 ### 4. Sandbox 与安全边界
 

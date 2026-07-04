@@ -1233,6 +1233,48 @@ func TestDaemonSubmitterListsAndResumesSessions(t *testing.T) {
 	}
 }
 
+func TestDaemonSubmitterStartFreshDoesNotAutoResumeLatestOnSubmit(t *testing.T) {
+	root := t.TempDir()
+	repo, closeDB := newTestRepository(t)
+	defer closeDB()
+	runner := taskpkg.NewRunner(repo, llm.NewPlanner(&fakeGenerator{response: "list ."}))
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Runner: runner}))
+	defer server.Close()
+	client, err := daemonclient.New(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := NewDaemonSubmitter(client, root, true, "", false)
+	if _, err := seed.SubmitStream(t.Context(), "first prompt", nil); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := repo.ListSessions(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected one seed session, got %#v", sessions)
+	}
+	seedSessionID := sessions[0].ID
+
+	fresh := NewDaemonSubmitter(client, root, true, "", true)
+	if _, err := fresh.SubmitStream(t.Context(), "fresh prompt", nil); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err = repo.ListSessions(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("expected fresh submitter to create a second session, got %#v", sessions)
+	}
+	for _, session := range sessions {
+		if session.ID != seedSessionID && session.LastTaskID == "" {
+			t.Fatalf("expected new session to receive the fresh task, got %#v", sessions)
+		}
+	}
+}
+
 func TestDaemonSubmitterWorkbenchShowsRestartedBackgroundOutputs(t *testing.T) {
 	root := t.TempDir()
 	repo, closeDB := newTestRepository(t)

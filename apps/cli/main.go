@@ -45,7 +45,8 @@ func main() {
 	daemonToken := flag.String("daemon-token", os.Getenv("LIORA_DAEMON_TOKEN"), "local daemon capability token for persistent HTTP mode")
 	tuiDaemon := flag.Bool("tui-daemon", false, "run interactive TUI through the local daemon event stream")
 	sessionID := flag.String("session", "", "attach interactive TUI requests to an existing daemon session id")
-	forceNewSession := flag.Bool("new-session", false, "start a fresh interactive session instead of auto-resume")
+	resumeLatestSession := flag.Bool("resume-latest", false, "resume the latest workspace session on interactive startup")
+	forceNewSession := flag.Bool("new-session", false, "start a fresh interactive session; overrides -resume-latest")
 	doctor := flag.Bool("doctor", false, "print resolved LLM provider configuration and exit without calling the API")
 	diagnosticsOut := flag.String("diagnostics-out", "", "write a redacted diagnostics JSON bundle and exit without calling the API")
 	llmProvider := flag.String("llm-provider", getenvAny("LIORA_LLM_PROVIDER", "OPENAI_PROVIDER", ""), "LLM provider: openai-chat, openai-responses, deepseek, anthropic, gemini")
@@ -181,7 +182,8 @@ func main() {
 			os.Exit(1)
 		}
 
-		daemonSession := tuisession.NewDaemonSubmitter(client, workspace.Root(), true, strings.TrimSpace(*sessionID), *forceNewSession)
+		startFresh := interactiveStartFresh(*sessionID, *resumeLatestSession, *forceNewSession)
+		daemonSession := tuisession.NewDaemonSubmitter(client, workspace.Root(), true, strings.TrimSpace(*sessionID), startFresh)
 		tuiConfig := tui.Config{
 			Workspace: workspace.Root(),
 			Model:     llmLabel(llmConfig),
@@ -446,6 +448,16 @@ func parsedFlagNames() map[string]bool {
 		seen[f.Name] = true
 	})
 	return seen
+}
+
+func interactiveStartFresh(sessionID string, resumeLatest bool, forceNew bool) bool {
+	if strings.TrimSpace(sessionID) != "" {
+		return false
+	}
+	if forceNew {
+		return true
+	}
+	return !resumeLatest
 }
 
 func shouldIgnoreLegacyBaseURL(provider string, providerFlagSet bool, baseURLFlagSet bool) bool {

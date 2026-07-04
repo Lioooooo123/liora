@@ -282,7 +282,7 @@ liora > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 
 默认交互入口会在本进程内启动临时 Core Daemon，并通过 HTTP/SSE 复用 daemon/session/task/event 主链路；如果已经有独立 daemon，可使用 `liora -interactive -tui-daemon -daemon-addr 127.0.0.1:18080` 连接它。
 
-TUI 会自动继续当前 workspace 最近的 session，因此重启 `liora` 后可以直接 `/timeline` 或继续输入任务。需要手动接回最近 session 时可用 `/resume-latest`；想从干净上下文开始下一轮任务时可用 `/new-session`，也可以用 `/clear`。
+TUI 默认从干净 session 开始，避免重启后把上一轮聊天内容自动注入到新任务。需要接回最近 session 时可用启动参数 `-resume-latest`，或进入 TUI 后执行 `/resume-latest`；想重新切回干净上下文可用 `/new-session`，也可以用 `/clear`。
 
 `/timeline [limit]` 展示紧凑会话事件线，`/transcript [limit]` 展开 user、assistant、tool、diff、approval 和 status 内容，适合回看长会话；两者都来自 daemon 的 session timeline API。
 
@@ -300,7 +300,7 @@ TUI 会自动继续当前 workspace 最近的 session，因此重启 `liora` 后
 
 任务 streaming 期间可以直接输入 `/cancel` 中止当前任务；后台任务可用 `/cancel task_xxx` 指定取消。其它命令会在当前任务结束后按顺序执行，避免 `/apply` 或 `/exit` 抢在结果和 diff 之前生效。
 
-CLI 侧也新增显式 session 控制：`liora -interactive -session <session_id> -workspace <path>` 可直接挂载已有会话；`liora -interactive -new-session -workspace <path>` 可固定走新上下文，这对脚本化重放或多入口（桌面端）接入很有用。
+CLI 侧也提供显式 session 控制：`liora -interactive -session <session_id> -workspace <path>` 可直接挂载已有会话；`liora -interactive -resume-latest -workspace <path>` 可启动时恢复最近会话；`liora -interactive -new-session -workspace <path>` 可强制走新上下文，这对脚本化重放或多入口（桌面端）接入很有用。
 
 交互界面会展示：
 
