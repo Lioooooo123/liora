@@ -132,8 +132,14 @@ func RenderWelcome(config Config) string {
 	}
 	lines = append(lines,
 		"",
-		commandStyle.Render("/help")+" commands  "+commandStyle.Render("/workbench")+" workspace  "+commandStyle.Render("/memory")+" memory  "+commandStyle.Render("/schedule")+" schedules  "+commandStyle.Render("/exit")+" quit",
-		mutedStyle.Render("Patch-first: review changes, then /apply."),
+		commandStyle.Render("/help")+" commands  "+commandStyle.Render("/exit")+" quit",
+		commandStyle.Render("/workbench")+" workspace",
+		commandStyle.Render("/memory")+" memory  "+commandStyle.Render("/schedule")+" schedules",
+		commandStyle.Render("/sessions")+" sessions",
+		commandStyle.Render("/context")+" context  "+commandStyle.Render("/status")+" status",
+		commandStyle.Render("/resume-latest")+" resume",
+		commandStyle.Render("/new-session")+" new session",
+		mutedStyle.Render("Patch-first: review, then /apply."),
 	)
 	return renderPanel("Liora", lines) + "\n"
 }

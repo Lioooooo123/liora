@@ -42,6 +42,9 @@ func (m *model) workbenchView() string {
 		workbenchPairLine("core", valueOr(m.cfg.Core, "-"), "safety", valueOr(m.cfg.Safety, "-"), width),
 		workbenchLine("› ", mutedStyle.Render("actions"), width),
 		workbenchRailLine(chromeHotStyle.Render("/help")+" commands  "+chromeHotStyle.Render("/diff")+" review  "+chromeHotStyle.Render("/apply")+" write", width),
+		workbenchRailLine(chromeHotStyle.Render("/sessions")+" sessions  "+chromeHotStyle.Render("/resume-latest")+" resume", width),
+		workbenchRailLine(chromeHotStyle.Render("/new-session")+" new  "+chromeHotStyle.Render("/context")+" context", width),
+		workbenchRailLine(chromeHotStyle.Render("/status")+" status", width),
 		workbenchRailLine(mutedStyle.Render("patch-first workspace, no active task"), width),
 		workbenchLine("  ", mutedStyle.Render("ready for request"), width),
 	}
