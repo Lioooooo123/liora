@@ -88,3 +88,21 @@ func TestEventCatalogRejectsMalformedToolLifecycle(t *testing.T) {
 		})
 	}
 }
+
+func TestEventCatalogAcceptsWhitespaceAssistantDelta(t *testing.T) {
+	for _, message := range []string{" ", "\n", "\n\n"} {
+		t.Run(strings.ReplaceAll(message, "\n", "\\n"), func(t *testing.T) {
+			if err := ValidateEvent(EventAssistantDelta, EventPayload{Message: message}); err != nil {
+				t.Fatalf("expected whitespace assistant delta to stay valid for markdown streaming, got %v", err)
+			}
+		})
+	}
+}
+
+func TestEventCatalogRejectsEmptyAssistantDelta(t *testing.T) {
+	err := ValidateEvent(EventAssistantDelta, EventPayload{})
+
+	if err == nil || !strings.Contains(err.Error(), "payload.message") {
+		t.Fatalf("expected empty assistant delta to require payload.message, got %v", err)
+	}
+}

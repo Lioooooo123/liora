@@ -143,6 +143,52 @@ func TestRunnerPersistsAssistantDeltaEventsFromStreamingToolLoop(t *testing.T) {
 	}
 }
 
+func TestRunnerPersistsWhitespaceAssistantDeltaEventsFromStreamingToolLoop(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	task, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "answer in markdown",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	generator := &fakeStreamingToolGenerator{
+		completion: llm.Completion{Content: "## Result\n\n- item"},
+		deltas:     []string{"## Result", "\n\n", "- item"},
+	}
+	runner := NewRunner(repo, llm.NewPlanner(generator))
+	if err := runner.Run(t.Context(), task.ID); err != nil {
+		t.Fatalf("runner should preserve whitespace assistant deltas without failing the turn: %v", err)
+	}
+
+	events, err := repo.Events(t.Context(), task.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deltaText strings.Builder
+	for _, event := range events {
+		if event.Type != EventAssistantDelta {
+			continue
+		}
+		var payload EventPayload
+		if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+			t.Fatal(err)
+		}
+		deltaText.WriteString(payload.Message)
+	}
+	if deltaText.String() != "## Result\n\n- item" {
+		t.Fatalf("expected markdown whitespace deltas to round-trip, got %q", deltaText.String())
+	}
+}
+
 func TestRunnerExecutesTaskAndPersistsEvents(t *testing.T) {
 	workspace := t.TempDir()
 	db, err := store.New(t.TempDir()).OpenDB()

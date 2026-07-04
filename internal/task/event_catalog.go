@@ -206,7 +206,11 @@ func ValidateEvent(eventType EventType, payload EventPayload) error {
 		if strings.TrimSpace(payload.Phase) == "" {
 			return fmt.Errorf("%s requires payload.phase", eventType)
 		}
-	case EventTodoUpdated, EventTranscriptEntry, EventArtifactReference, EventCompactBoundary, EventPromptContextSnapshot, EventAssistantDelta, EventHookRun, EventScheduleTriggered, EventSubagentStarted, EventSubagentCompleted:
+	case EventAssistantDelta:
+		if payload.Message == "" {
+			return fmt.Errorf("%s requires payload.message", eventType)
+		}
+	case EventTodoUpdated, EventTranscriptEntry, EventArtifactReference, EventCompactBoundary, EventPromptContextSnapshot, EventHookRun, EventScheduleTriggered, EventSubagentStarted, EventSubagentCompleted:
 		if !hasEventNarrative(payload) {
 			return fmt.Errorf("%s requires payload.message, payload.action, payload.target, or payload.id", eventType)
 		}
