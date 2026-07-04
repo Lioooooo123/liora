@@ -113,7 +113,7 @@ func FormatDaemonEventUpdate(update StreamUpdate) DaemonEventSection {
 	case daemonEventTodoUpdated:
 		return DaemonEventSection{Title: "Todo", Body: formatTodoEvent(payload), Visible: true}
 	case daemonEventAssistantDelta:
-		if strings.TrimSpace(payload.Message) != "" {
+		if payload.Message != "" {
 			return DaemonEventSection{Title: "Assistant", Body: payload.Message, Visible: true}
 		}
 	case daemonEventSummary:

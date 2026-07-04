@@ -16,6 +16,7 @@ type Config struct {
 	Model       string
 	Core        string
 	Safety      string
+	Width       int
 	Commands    CommandHandler
 	Completions CompletionProvider
 }
@@ -115,6 +116,10 @@ func New(config Config, submitter Submitter) *App {
 }
 
 func RenderWelcome(config Config) string {
+	return RenderWelcomeWithWidth(config, config.Width)
+}
+
+func RenderWelcomeWithWidth(config Config, width int) string {
 	model := config.Model
 	if model == "" {
 		model = "scripted"
@@ -141,13 +146,23 @@ func RenderWelcome(config Config) string {
 		commandStyle.Render("/new-session")+" new session",
 		mutedStyle.Render("Patch-first: review, then /apply."),
 	)
-	return renderPanel("Liora", lines) + "\n"
+	var out strings.Builder
+	renderSectionWithWidth(&out, "Liora", strings.Join(lines, "\n"), width)
+	return strings.TrimLeft(out.String(), "\n") + "\n"
 }
 
 func (a *App) Run(ctx context.Context, input io.Reader, output io.Writer) error {
-	fmt.Fprint(output, RenderWelcome(a.config))
+	fmt.Fprint(output, RenderWelcomeWithWidth(a.config, a.renderWidth()))
 	if streamer, ok := a.submitter.(StreamingSubmitter); ok {
 		return a.runStreaming(ctx, input, output, streamer)
 	}
 	return a.runBlocking(ctx, input, output)
+}
+
+func (a *App) renderWidth() int {
+	return normalizeRenderWidth(a.config.Width)
+}
+
+func (a *App) renderSection(output io.Writer, title string, body string) {
+	renderSectionWithWidth(output, title, body, a.renderWidth())
 }

@@ -74,6 +74,7 @@ func TestCLIDoctorReportsAnthropicConfigWithoutSecret(t *testing.T) {
 		"LIORA_LLM_PROVIDER=anthropic",
 		"LIORA_LLM_API_KEY=test-secret",
 		"LIORA_LLM_MODEL=claude-test",
+		"COLUMNS=240",
 	)
 
 	// When
@@ -198,7 +199,7 @@ func TestCLIInteractiveDoctorCommandReportsConfigWithoutSecret(t *testing.T) {
 	rendered := string(output)
 	for _, want := range []string{
 		"Liora doctor",
-		"workspace: " + workspace,
+		"workspace:",
 		"core: embedded daemon",
 		"safety: patch-first",
 		"provider: anthropic",
@@ -210,6 +211,9 @@ func TestCLIInteractiveDoctorCommandReportsConfigWithoutSecret(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected interactive doctor output to contain %q, got:\n%s", want, rendered)
 		}
+	}
+	if !strings.Contains(rendered, filepath.Base(workspace)) {
+		t.Fatalf("expected interactive doctor output to contain workspace basename %q, got:\n%s", filepath.Base(workspace), rendered)
 	}
 	if strings.Contains(rendered, "test-secret") {
 		t.Fatalf("interactive doctor output leaked API key:\n%s", rendered)
@@ -318,6 +322,7 @@ func cleanLLMEnv(t *testing.T, extra ...string) []string {
 		"OPENAI_MODEL":       true,
 		"GOCACHE":            true,
 		"GOMODCACHE":         true,
+		"COLUMNS":            true,
 	}
 	env := make([]string, 0, len(os.Environ())+len(extra))
 	for _, entry := range os.Environ() {

@@ -197,7 +197,7 @@ func (r *Runner) runTask(ctx context.Context, task Task) (runtimeResult, error) 
 				}))
 			},
 			OnAssistantDelta: func(delta string) error {
-				if strings.TrimSpace(delta) == "" {
+				if delta == "" {
 					return nil
 				}
 				return r.repo.AppendEvent(ctx, task.ID, EventAssistantDelta, r.eventPayloadWithModel(task, EventPayload{Message: delta}))

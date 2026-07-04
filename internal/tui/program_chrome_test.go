@@ -24,12 +24,12 @@ func TestProgramChromeUsesCompactHeader_whenTranscriptExists(t *testing.T) {
 	rendered := model.headerView() + "\n" + model.statusLine()
 
 	// Then
-	for _, want := range []string{"▌", "●", "LIORA", "ready", "─", "events", "type a request"} {
+	for _, want := range []string{"›", "liora", "type a request", "context: fresh"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected chrome to contain %q, got:\n%s", want, rendered)
 		}
 	}
-	for _, avoid := range []string{"workspace", "project-with-a-longer-name", "model", "deepseek-v4-pro", "core", "embedded daemon", "safety", "patch-first", "/timeline", "/workbench", "/cancel"} {
+	for _, avoid := range []string{"model", "deepseek-v4-pro", "core", "embedded daemon", "safety", "patch-first", "/timeline", "/workbench", "/cancel"} {
 		if strings.Contains(rendered, avoid) {
 			t.Fatalf("compact transcript header should not contain old chrome %q, got:\n%s", avoid, rendered)
 		}
@@ -50,12 +50,12 @@ func TestProgramWorkbenchShown_whenTranscriptIsEmpty(t *testing.T) {
 	view := model.View()
 
 	// Then
-	for _, want := range []string{"LIORA", "workbench", "workspace", "/tmp/project", "deepseek-v4-pro", "ready for work", "/help", "/diff", "/apply"} {
+	for _, want := range []string{"› liora", "Welcome to Liora", "Directory:", "/tmp/project", "fresh, no previous transcript injected", "deepseek-v4-pro", "Goal Mode", "/sessions", "/resume-latest", "/new-session", "/context", "/status"} {
 		if !strings.Contains(view.Content, want) {
 			t.Fatalf("expected empty workbench to contain %q, got:\n%s", want, view.Content)
 		}
 	}
-	for _, avoid := range []string{"Welcome to Liora", "Directory:"} {
+	for _, avoid := range []string{"ready for work", "patch-first workspace, no active task"} {
 		if strings.Contains(view.Content, avoid) {
 			t.Fatalf("empty state should not render old welcome card copy %q, got:\n%s", avoid, view.Content)
 		}
@@ -76,7 +76,7 @@ func TestProgramWorkbenchFitsNarrowWidth_whenTranscriptIsEmpty(t *testing.T) {
 	view := model.View()
 
 	// Then
-	for _, want := range []string{"LIORA", "workbench", "/help"} {
+	for _, want := range []string{"LIORA", "fresh session", "Goal Mode", "/sessions"} {
 		if !strings.Contains(view.Content, want) {
 			t.Fatalf("expected narrow workbench to contain %q, got:\n%s", want, view.Content)
 		}
@@ -96,7 +96,7 @@ func TestProgramInputPanelLeavesBottomBreathingRoom_whenRendered(t *testing.T) {
 	if !strings.HasSuffix(view.Content, "\n \n ") {
 		t.Fatalf("expected input panel to leave bottom breathing room, got:\n%q", view.Content)
 	}
-	for _, want := range []string{"╭", "╰", "liora", "request, or /help for commands"} {
+	for _, want := range []string{"╭", "╰", ">", "request, or /help for commands"} {
 		if !strings.Contains(view.Content, want) {
 			t.Fatalf("expected input panel to contain %q, got:\n%s", want, view.Content)
 		}

@@ -8,14 +8,19 @@ import (
 
 type lineStreamRenderer struct {
 	output             io.Writer
+	width              int
 	assistantBuffer    strings.Builder
 	assistantText      strings.Builder
 	assistantPanelOpen bool
 	assistantCodeBlock bool
 }
 
-func newLineStreamRenderer(output io.Writer) *lineStreamRenderer {
-	return &lineStreamRenderer{output: output}
+func newLineStreamRenderer(output io.Writer, widths ...int) *lineStreamRenderer {
+	width := 0
+	if len(widths) > 0 {
+		width = widths[0]
+	}
+	return &lineStreamRenderer{output: output, width: normalizeRenderWidth(width)}
 }
 
 func (l *streamingLoop) renderStreamUpdate(update StreamUpdate) {
@@ -44,12 +49,12 @@ func (r *lineStreamRenderer) Render(update StreamUpdate) {
 			r.finalizeAssistantSummary(section.Body)
 			return
 		}
-		renderSectionWithWidth(r.output, section.Title, section.Body, 0)
+		renderSectionWithWidth(r.output, section.Title, section.Body, r.width)
 		return
 	}
 	r.Flush()
 	if section.Visible {
-		renderSectionWithWidth(r.output, section.Title, section.Body, 0)
+		renderSectionWithWidth(r.output, section.Title, section.Body, r.width)
 	}
 }
 
@@ -107,12 +112,13 @@ func (r *lineStreamRenderer) renderAssistantLine(line string) {
 		r.writeAssistantPanelLine(line)
 		return
 	}
-	rendered, ok := renderSectionMarkdown("Assistant", line, 0)
+	rendered, ok := renderSectionMarkdown("Assistant", line, r.bodyWidth())
 	if !ok {
 		rendered = line
 	} else {
 		rendered = strings.TrimSpace(rendered)
 	}
+	rendered = wrapSectionBody(rendered, r.bodyWidth())
 	for _, renderedLine := range strings.Split(rendered, "\n") {
 		r.writeAssistantPanelLine(renderedLine)
 	}
@@ -120,6 +126,9 @@ func (r *lineStreamRenderer) renderAssistantLine(line string) {
 
 func (r *lineStreamRenderer) writeAssistantPanelLine(line string) {
 	r.openAssistantPanel()
+	if r.bodyWidth() > 0 {
+		line = truncateCells(line, r.bodyWidth())
+	}
 	if line == "" {
 		fmt.Fprintln(r.output, railStyle.Render("│"))
 		return
@@ -142,6 +151,13 @@ func (r *lineStreamRenderer) closeAssistantPanel() {
 	fmt.Fprintln(r.output, railStyle.Render("╰"))
 	r.assistantPanelOpen = false
 	r.assistantCodeBlock = false
+}
+
+func (r *lineStreamRenderer) bodyWidth() int {
+	if r.width <= 2 {
+		return 0
+	}
+	return r.width - 2
 }
 
 func isMarkdownFenceLine(line string) bool {

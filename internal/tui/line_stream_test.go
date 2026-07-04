@@ -78,6 +78,47 @@ func TestLineStreamRendererRendersAssistantMarkdownDelta_withoutWaitingForSummar
 	}
 }
 
+func TestLineStreamRendererPreservesWhitespaceDeltasForLiveMarkdown(t *testing.T) {
+	// Given
+	var out strings.Builder
+	renderer := newLineStreamRenderer(&out, 48)
+
+	// When
+	for _, part := range []string{"## Result", "\n\n", "- **Live**", " markdown", "\n"} {
+		renderer.Render(streamUpdate("assistant.delta", eventPayload{Message: part}))
+	}
+	renderer.Flush()
+	rendered := terminalPlainText(out.String())
+
+	// Then
+	for _, want := range []string{"Assistant", "Result", "Live markdown"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected live markdown with whitespace deltas to contain %q, got:\n%s", want, rendered)
+		}
+	}
+	for _, avoid := range []string{"## Result", "**Live**"} {
+		if strings.Contains(rendered, avoid) {
+			t.Fatalf("live markdown should not expose raw marker %q, got:\n%s", avoid, rendered)
+		}
+	}
+	assertVisibleLinesWithinWidth(t, rendered, 48)
+}
+
+func TestLineStreamRendererWrapsAssistantMarkdownToWidth(t *testing.T) {
+	// Given
+	var out strings.Builder
+	renderer := newLineStreamRenderer(&out, 34)
+
+	// When
+	renderer.Render(streamUpdate("assistant.delta", eventPayload{
+		Message: "## Result\n\n" + strings.Repeat("longword", 10) + "\n",
+	}))
+	renderer.Flush()
+
+	// Then
+	assertVisibleLinesWithinWidth(t, terminalPlainText(out.String()), 34)
+}
+
 func TestLineStreamRendererCompletesAssistantDelta_whenSummaryExtendsPrefix(t *testing.T) {
 	// Given
 	var out strings.Builder

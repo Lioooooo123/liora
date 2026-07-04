@@ -62,6 +62,56 @@ func TestRunnerTaskPromptIncludesPriorSessionContext_whenContinuingSession(t *te
 	}
 }
 
+func TestRunnerTaskPromptDoesNotIncludePriorWorkspaceSession_whenSessionIsFresh(t *testing.T) {
+	// Given
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	first, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "上一轮聊天里的私有细节",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), first.ID, EventSummary, EventPayload{Message: "上次聊天总结不应该进入新 session。"}); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: workspace,
+		Prompt:    "这是默认新会话",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(repo, nil)
+
+	// When
+	prompt, err := runner.taskPrompt(t.Context(), fresh)
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"上一轮聊天里的私有细节", "上次聊天总结不应该进入新 session"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("fresh session prompt leaked prior workspace session content %q:\n%s", forbidden, prompt)
+		}
+	}
+	if strings.Contains(prompt, "Session context") {
+		t.Fatalf("fresh session should not fabricate transcript context, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "这是默认新会话") {
+		t.Fatalf("fresh prompt should keep the current request, got:\n%s", prompt)
+	}
+}
+
 func TestTaskPromptWrapsUntrustedContext(t *testing.T) {
 	// Given
 	workspace := t.TempDir()

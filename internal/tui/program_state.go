@@ -1,6 +1,10 @@
 package tui
 
-import tea "charm.land/bubbletea/v2"
+import (
+	"strings"
+
+	tea "charm.land/bubbletea/v2"
+)
 
 func (m *model) submitPending() tea.Cmd {
 	if len(m.pending) == 0 {
@@ -27,6 +31,20 @@ func (m *model) noteStreamUpdate(update StreamUpdate) {
 	case "tool.call":
 		m.lastStatus = "running tool"
 		if payload.Tool != "" {
+			m.nextAction = strings.TrimSpace(payload.Tool + " " + payload.Input)
+			if m.nextAction == "" {
+				m.nextAction = payload.Tool
+			}
+		}
+	case "tool.lifecycle":
+		if payload.Phase != "" {
+			m.lastStatus = "tool " + payload.Phase
+		} else {
+			m.lastStatus = "tool"
+		}
+		if access := formatToolLifecycleAccess(payload); access != "" {
+			m.nextAction = strings.TrimSpace(payload.Tool + " " + access)
+		} else if payload.Tool != "" {
 			m.nextAction = payload.Tool
 		}
 	case "task.diff":

@@ -22,18 +22,22 @@ func RenderStreamUpdateWithWidth(output io.Writer, update StreamUpdate, width in
 }
 
 func RenderTurn(output io.Writer, view TurnView) {
+	RenderTurnWithWidth(output, view, 0)
+}
+
+func RenderTurnWithWidth(output io.Writer, view TurnView, width int) {
 	result := view.TurnResult
 	if view.ShowUser {
-		renderSection(output, "You", view.Input)
+		renderSectionWithWidth(output, "You", view.Input, width)
 	}
 	if strings.TrimSpace(result.Answer) != "" {
-		renderSection(output, "Assistant", result.Answer)
+		renderSectionWithWidth(output, "Assistant", result.Answer, width)
 	}
 	if strings.TrimSpace(result.AgentResult.Summary) != "" && strings.TrimSpace(result.Answer) == "" {
-		renderSection(output, "Assistant", result.AgentResult.Summary)
+		renderSectionWithWidth(output, "Assistant", result.AgentResult.Summary, width)
 	}
 	if strings.TrimSpace(result.AgentResult.Diff) != "" {
-		renderSection(output, "Assistant", PatchReadyReply(result.AgentResult.Diff))
+		renderSectionWithWidth(output, "Assistant", PatchReadyReply(result.AgentResult.Diff), width)
 	}
 }
 

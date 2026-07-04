@@ -108,3 +108,29 @@ func TestProgramRendersAssistantMarkdown_whenSummaryIsMarkdown(t *testing.T) {
 		}
 	}
 }
+
+func TestProgramPreservesWhitespaceDeltas_whenRenderingLiveMarkdown(t *testing.T) {
+	// Given
+	model := newModel(context.Background(), Config{Workspace: "/tmp/project"}, fakeStreamingSubmitter{})
+	model.resize(72, 18)
+
+	// When
+	for _, part := range []string{"## Result", "\n\n", "- **Live**", " markdown", "\n"} {
+		_, _ = model.Update(streamUpdateMsg{
+			update: streamUpdate("assistant.delta", eventPayload{Message: part}),
+		})
+	}
+	transcript := terminalPlainText(model.body.String())
+
+	// Then
+	for _, want := range []string{"Assistant", "Result", "Live markdown"} {
+		if !strings.Contains(transcript, want) {
+			t.Fatalf("expected full-screen markdown stream to contain %q, got:\n%s", want, transcript)
+		}
+	}
+	for _, avoid := range []string{"## Result", "**Live**"} {
+		if strings.Contains(transcript, avoid) {
+			t.Fatalf("full-screen markdown stream should not expose raw marker %q, got:\n%s", avoid, transcript)
+		}
+	}
+}

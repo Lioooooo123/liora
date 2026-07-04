@@ -24,7 +24,7 @@ func (a *App) runBlocking(ctx context.Context, input io.Reader, output io.Writer
 			fmt.Fprintln(output, "Bye")
 			return nil
 		case "/help":
-			renderSection(output, "Help", helpText())
+			a.renderSection(output, "Help", helpText())
 			continue
 		}
 		if strings.HasPrefix(line, "/") && a.config.Commands != nil {
@@ -34,14 +34,14 @@ func (a *App) runBlocking(ctx context.Context, input io.Reader, output io.Writer
 				continue
 			}
 			if handled {
-				renderSection(output, commandResultTitle(line), result)
+				a.renderSection(output, commandResultTitle(line), result)
 				continue
 			}
-			renderSection(output, "System", "Unknown command. Use /help to view available commands.")
+			a.renderSection(output, "System", "Unknown command. Use /help to view available commands.")
 			continue
 		}
 		if strings.HasPrefix(line, "/") {
-			renderSection(output, "System", "Unknown command. Use /help to view available commands.")
+			a.renderSection(output, "System", "Unknown command. Use /help to view available commands.")
 			continue
 		}
 		if err := a.runTurn(ctx, line, output); err != nil {
@@ -176,7 +176,7 @@ func (l *streamingLoop) handleLine(line string) bool {
 		fmt.Fprintln(l.output, "Bye")
 		return true
 	case "/help":
-		renderSection(l.output, "Help", helpText())
+		l.app.renderSection(l.output, "Help", helpText())
 		return false
 	}
 	if strings.HasPrefix(line, "/") && l.app.config.Commands != nil {
@@ -186,21 +186,21 @@ func (l *streamingLoop) handleLine(line string) bool {
 			return false
 		}
 		if handled {
-			renderSection(l.output, commandResultTitle(line), result)
+			l.app.renderSection(l.output, commandResultTitle(line), result)
 			return false
 		}
-		renderSection(l.output, "System", "Unknown command. Use /help to view available commands.")
+		l.app.renderSection(l.output, "System", "Unknown command. Use /help to view available commands.")
 		return false
 	}
 	if strings.HasPrefix(line, "/") {
-		renderSection(l.output, "System", "Unknown command. Use /help to view available commands.")
+		l.app.renderSection(l.output, "System", "Unknown command. Use /help to view available commands.")
 		return false
 	}
 	if l.running {
-		renderSection(l.output, "System", "Task is still running. Use /cancel, /approve, /deny, or wait for it to finish.")
+		l.app.renderSection(l.output, "System", "Task is still running. Use /cancel, /approve, /deny, or wait for it to finish.")
 		return false
 	}
-	renderSection(l.output, "You", line)
+	l.app.renderSection(l.output, "You", line)
 	l.startTurn(line)
 	return false
 }
@@ -211,7 +211,7 @@ func (l *streamingLoop) startTurn(input string) {
 	l.running = true
 	l.turnDone = done
 	l.streamEvents = updates
-	l.renderer = newLineStreamRenderer(l.output)
+	l.renderer = newLineStreamRenderer(l.output, l.app.renderWidth())
 	go func() {
 		_, err := l.streamer.SubmitStream(l.ctx, input, func(update StreamUpdate) {
 			updates <- update
@@ -228,7 +228,7 @@ func isRunningCommand(line string) bool {
 
 func (a *App) runTurn(ctx context.Context, input string, output io.Writer) error {
 	if streamer, ok := a.submitter.(StreamingSubmitter); ok {
-		renderer := newLineStreamRenderer(output)
+		renderer := newLineStreamRenderer(output, a.renderWidth())
 		_, err := streamer.SubmitStream(ctx, input, func(update StreamUpdate) {
 			renderer.Render(update)
 		})
@@ -236,10 +236,10 @@ func (a *App) runTurn(ctx context.Context, input string, output io.Writer) error
 		return err
 	}
 	result, err := a.submitter.Submit(ctx, input)
-	RenderTurn(output, TurnView{
+	RenderTurnWithWidth(output, TurnView{
 		Input:      input,
 		ShowUser:   true,
 		TurnResult: result,
-	})
+	}, a.renderWidth())
 	return err
 }

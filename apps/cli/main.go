@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/Lioooooo123/liora/internal/tui"
 	"github.com/Lioooooo123/liora/internal/tuisession"
 	"github.com/mattn/go-isatty"
+	"golang.org/x/term"
 )
 
 var version = "dev"
@@ -189,6 +191,7 @@ func main() {
 			Model:     llmLabel(llmConfig),
 			Core:      coreLabel,
 			Safety:    safetyLabel(patchMode),
+			Width:     terminalWidth(os.Stdout.Fd()),
 			Commands: tui.CommandChain{
 				doctorCommand{
 					config: llmConfig,
@@ -347,6 +350,17 @@ func useFullScreenTUI() bool {
 		return false
 	}
 	return isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd())
+}
+
+func terminalWidth(fd uintptr) int {
+	if columns, err := strconv.Atoi(strings.TrimSpace(os.Getenv("COLUMNS"))); err == nil && columns > 0 {
+		return columns
+	}
+	width, _, err := term.GetSize(int(fd))
+	if err == nil && width > 0 {
+		return width
+	}
+	return 0
 }
 
 func toBool(v string) bool {

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"strconv"
 	"strings"
 
@@ -11,44 +12,152 @@ import (
 var (
 	chromeTitleStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("230"))
+				Foreground(lipgloss.Color("149"))
 	chromePillStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("229")).
 			Background(lipgloss.Color("236")).
 			Padding(0, 1)
 	chromeRuleStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
 	chromeRailStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
-	chromeHotStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("222")).Bold(true)
+	chromeHotStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Bold(true)
+	chromeWarnStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	chromeInputBorderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	chromePanelStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("75"))
 )
 
 func (m *model) headerView() string {
 	width := m.viewportWidth()
-	left := chromeTitleStyle.Render(brandInline()) + mutedStyle.Render(" workbench")
+	left := chromeTitleStyle.Render(brandPrompt())
+	if !m.running && m.lastStatus == "ready" {
+		return truncateCells(left, width)
+	}
 	right := chromePillStyle.Render(m.statusLabel())
-	top := joinEdge(left, right, width)
-	return strings.Join([]string{
-		top,
-		chromeRuleStyle.Render(strings.Repeat("─", width)),
-	}, "\n")
+	return joinEdge(left, right, width)
 }
 
 func (m *model) workbenchView() string {
 	width := m.viewportWidth()
-	lines := []string{
-		workbenchLine("› ", chromeHotStyle.Render("ready for work"), width),
-		workbenchFieldLine("workspace", valueOr(m.cfg.Workspace, "-"), width),
-		workbenchFieldLine("model", valueOr(m.cfg.Model, "scripted"), width),
-		workbenchPairLine("core", valueOr(m.cfg.Core, "-"), "safety", valueOr(m.cfg.Safety, "-"), width),
-		workbenchLine("› ", mutedStyle.Render("actions"), width),
-		workbenchRailLine(chromeHotStyle.Render("/help")+" commands  "+chromeHotStyle.Render("/diff")+" review  "+chromeHotStyle.Render("/apply")+" write", width),
-		workbenchRailLine(chromeHotStyle.Render("/sessions")+" sessions  "+chromeHotStyle.Render("/resume-latest")+" resume", width),
-		workbenchRailLine(chromeHotStyle.Render("/new-session")+" new  "+chromeHotStyle.Render("/context")+" context", width),
-		workbenchRailLine(chromeHotStyle.Render("/status")+" status", width),
-		workbenchRailLine(mutedStyle.Render("patch-first workspace, no active task"), width),
-		workbenchLine("  ", mutedStyle.Render("ready for request"), width),
+	return strings.Join(nonEmpty([]string{
+		m.welcomePanelView(width),
+		"",
+		goalModeView(width),
+	}), "\n")
+}
+
+func (m *model) welcomePanelView(width int) string {
+	if width < 24 {
+		return truncateCells(brandPrompt()+" ready", width)
 	}
+	innerWidth := width - 2
+	top := chromePanelStyle.Render("╭" + strings.Repeat("─", innerWidth) + "╮")
+	bottom := chromePanelStyle.Render("╰" + strings.Repeat("─", innerWidth) + "╯")
+	bodyWidth := innerWidth
+	var body []string
+	if width >= 68 {
+		body = m.welcomePanelWideLines(bodyWidth)
+	} else {
+		body = m.welcomePanelCompactLines(bodyWidth)
+	}
+	lines := []string{top}
+	for _, line := range body {
+		lines = append(lines, panelLine(line, bodyWidth))
+	}
+	lines = append(lines, bottom)
 	return strings.Join(lines, "\n")
+}
+
+func (m *model) welcomePanelWideLines(width int) []string {
+	avatar := brandAvatarLines()
+	gap := "    "
+	text := []string{
+		chromeHotStyle.Render("Welcome to Liora"),
+		mutedStyle.Render("Local-first coding agent. Configure a model, then start a turn."),
+		"",
+		metaLine("Directory", valueOr(m.cfg.Workspace, "-")),
+		metaLine("Session", "fresh, no previous transcript injected"),
+		metaLine("Model", modelStateText(m.cfg.Model)),
+		metaLine("Runtime", strings.TrimSpace(valueOr(m.cfg.Core, "-")+"  "+valueOr(m.cfg.Safety, "-"))),
+		shortcutCompactLine(),
+	}
+	contentWidth := width - 6
+	if contentWidth < 1 {
+		contentWidth = width
+	}
+	lines := []string{""}
+	for i := 0; i < len(text); i++ {
+		left := strings.Repeat(" ", 4+lipgloss.Width(avatar[0])) + gap
+		if i < len(avatar) {
+			left = "    " + avatar[i] + gap
+		}
+		line := left + text[i]
+		lines = append(lines, truncateCells(line, contentWidth))
+	}
+	return lines
+}
+
+func (m *model) welcomePanelCompactLines(width int) []string {
+	lines := []string{
+		" " + brandInline(),
+		" " + mutedStyle.Render("fresh session, no previous transcript injected"),
+		" " + metaLine("Directory", compactMiddle(valueOr(m.cfg.Workspace, "-"), max(8, width-14))),
+		" " + metaLine("Model", modelStateText(m.cfg.Model)),
+	}
+	for _, line := range shortcutLines() {
+		lines = append(lines, " "+line)
+	}
+	return lines
+}
+
+func panelLine(content string, width int) string {
+	return chromePanelStyle.Render("│") + truncateCells(content, width) + strings.Repeat(" ", max(0, width-lipgloss.Width(content))) + chromePanelStyle.Render("│")
+}
+
+func metaLine(key string, value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = "-"
+	}
+	return mutedStyle.Render(key+": ") + metadataStyle.Render(value)
+}
+
+func modelStateText(model string) string {
+	if strings.TrimSpace(model) == "" || strings.TrimSpace(model) == "scripted" {
+		return chromeWarnStyle.Render("not set, run /model or configure LIORA_LLM_*")
+	}
+	return metadataStyle.Render(model)
+}
+
+func shortcutLines() []string {
+	return []string{
+		mutedStyle.Render("Sessions: ") +
+			commandStyle.Render("/sessions") + mutedStyle.Render("  ") +
+			commandStyle.Render("/resume-latest"),
+		mutedStyle.Render("New:      ") +
+			commandStyle.Render("/new-session"),
+		mutedStyle.Render("Context:  ") +
+			commandStyle.Render("/context") + mutedStyle.Render("  ") +
+			commandStyle.Render("/status") + mutedStyle.Render("  ") +
+			commandStyle.Render("/help"),
+	}
+}
+
+func shortcutCompactLine() string {
+	return mutedStyle.Render("Shortcuts: ") +
+		commandStyle.Render("/sessions") + mutedStyle.Render("  ") +
+		commandStyle.Render("/resume-latest") + mutedStyle.Render("  ") +
+		commandStyle.Render("/new-session") + mutedStyle.Render("  ") +
+		commandStyle.Render("/context") + mutedStyle.Render("  ") +
+		commandStyle.Render("/status")
+}
+
+func goalModeView(width int) string {
+	title := chromeHotStyle.Render("✦ Goal Mode")
+	first := title + " " + metadataStyle.Render("use "+commandStyle.Render("/goal set <outcome>")+" to keep multi-turn work focused")
+	second := mutedStyle.Render("  Best for multi-step tasks with a clear, verifiable finish line")
+	return strings.Join([]string{
+		truncateCells(first, width),
+		truncateCells(second, width),
+	}, "\n")
 }
 
 func workbenchFieldLine(key string, value string, width int) string {
@@ -86,6 +195,9 @@ func (m *model) statusLineForWidth(width int) string {
 	if width < 1 {
 		return ""
 	}
+	if !m.running && len(m.pending) == 0 && m.eventCount == 0 && m.lastStatus == "ready" {
+		return m.idleFooterLine(width)
+	}
 	pending := ""
 	if len(m.pending) > 0 {
 		pending = "pending " + strconv.Itoa(len(m.pending))
@@ -103,6 +215,18 @@ func (m *model) statusLineForWidth(width int) string {
 	}
 	right := chromeHotStyle.Render(rightText)
 	return joinEdge(left, right, width)
+}
+
+func (m *model) idleFooterLine(width int) string {
+	left := compactWorkspace(m.cfg.Workspace, max(8, width/4))
+	middle := mutedStyle.Render("type a request  |  /compact compresses long context")
+	right := metadataStyle.Render("context: fresh")
+	available := width - lipgloss.Width(left) - lipgloss.Width(right) - 4
+	if available < 8 {
+		return truncateCells(left+"  "+right, width)
+	}
+	middle = truncateCells(middle, available)
+	return joinEdge(left, middle+"  "+right, width)
 }
 
 func (m *model) statusLabel() string {
@@ -165,6 +289,17 @@ func valueOr(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func compactWorkspace(path string, maxCells int) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "-"
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" && strings.HasPrefix(path, home) {
+		path = "~" + strings.TrimPrefix(path, home)
+	}
+	return mutedStyle.Render(compactMiddle(path, maxCells))
 }
 
 func nonEmpty(values []string) []string {

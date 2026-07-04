@@ -69,7 +69,7 @@ type model struct {
 func newModel(ctx context.Context, cfg Config, submitter StreamingSubmitter) *model {
 	input := textarea.New()
 	input.Placeholder = "Type a request, or /help for commands"
-	input.Prompt = promptStyle.Render("liora") + " > "
+	input.Prompt = promptStyle.Render(">") + " "
 	input.ShowLineNumbers = false
 	input.EndOfBufferCharacter = ' '
 	input.MaxHeight = 1
