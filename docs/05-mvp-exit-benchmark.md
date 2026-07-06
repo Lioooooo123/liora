@@ -12,7 +12,7 @@ Liora v0.1 是本地 Mac 上的轻量 agent 工坊。
 
 ## 结束标准
 
-当前目标达到以下基准后，可以认为 v0.1 能力底座完成，长期目标可以结束，后续进入 v0.2 规划。最终收敛以 [Liora v0.1 Exit Audit](v0.1-exit-audit.md) 为准：所有 P0 evidence matrix 项都有当前证据，且从干净并已推送的 `main` 分支运行 `./scripts/v0.1-exit-audit.sh "$PWD"` 通过。
+当前目标达到以下基准后，可以认为 v0.1 能力底座完成，长期目标可以结束，后续进入 v0.2 规划。最终收敛以 [Liora v0.1 Exit Audit](04-v0.1-exit-audit.md) 为准：所有 P0 evidence matrix 项都有当前证据，且从干净并已推送的 `main` 分支运行 `./scripts/v0.1-exit-audit.sh "$PWD"` 通过。
 
 ### 1. 任务能力
 

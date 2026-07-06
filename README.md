@@ -25,13 +25,13 @@ docs/         产品、架构和发布文档
 
 当前 `apps/cli` 负责安装产物 `liora`，TUI 直接由 Go 原生实现（`internal/tui`，基于 charmbracelet Bubble Tea），与 core 同二进制、无 Node 依赖。未来桌面/Web 入口应通过 Core Daemon API 复用 Go core，而不是重写 agent 执行逻辑。
 
-文档入口见 [Liora Docs](docs/README.md)，技术选型见 [Liora 技术选型](docs/tech-stack-selection.md)。
+文档入口见 [Liora Docs](docs/00-index.md)，技术选型见 [Liora 技术选型](docs/03-tech-stack-selection.md)。
 
 16 人格 Agent App 目前是产品探索文档，不代表当前 CLI 已实现相关功能：
 
-- [16 人格 Agent PRD](docs/16-personality-agent-prd.md)
-- [16 人格 Agent Prompt / Persona Spec](docs/16-personality-agent-persona-spec.md)
-- [16 人格日记本](docs/16人格日记本.md)
+- [16 人格 Agent PRD](docs/10-16-personality-agent-prd.md)
+- [16 人格 Agent Prompt / Persona Spec](docs/11-16-personality-agent-persona-spec.md)
+- [16 人格日记本](docs/12-16人格日记本.md)
 
 ## 功能
 
@@ -54,7 +54,7 @@ docs/         产品、架构和发布文档
 
 ## MVP 结束基准
 
-当前长期目标按 [Liora MVP Exit Benchmark](docs/mvp-exit-benchmark.md) 和 [Liora v0.1 Exit Audit](docs/v0.1-exit-audit.md) 验收。v0.1 的结束点是本地能力底座可靠可用：任务、事件流、SQLite 持久化、patch/apply、cancel、sandbox 基线和 smoke 验证达标；1.0 路线见 [Liora 1.0 计划](docs/liora-1.0-plan.md)。
+当前长期目标按 [Liora MVP Exit Benchmark](docs/05-mvp-exit-benchmark.md) 和 [Liora v0.1 Exit Audit](docs/04-v0.1-exit-audit.md) 验收。v0.1 的结束点是本地能力底座可靠可用：任务、事件流、SQLite 持久化、patch/apply、cancel、sandbox 基线和 smoke 验证达标；1.0 路线见 [Liora 1.0 计划](docs/01-liora-1.0-plan.md)。
 
 ## 支持的步骤
 
@@ -156,7 +156,7 @@ LIORA_VERSION=v0.1.0 ./scripts/package-release.sh
 ./scripts/release-smoke.sh dist/liora_v0.1.0_$(go env GOOS)_$(go env GOARCH).tar.gz
 ```
 
-这个 smoke 会覆盖安装后的 `liora update --from <archive>`。更多说明见 [Release Packaging](docs/release.md)。
+这个 smoke 会覆盖安装后的 `liora update --from <archive>`。更多说明见 [Release Packaging](docs/06-release-packaging.md)。
 
 ## 脚本模式
 

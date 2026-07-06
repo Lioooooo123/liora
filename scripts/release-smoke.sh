@@ -26,13 +26,16 @@ if [ ! -x "$PACKAGE_DIR/install.sh" ]; then
 fi
 for path in \
   "$PACKAGE_DIR/README.md" \
-  "$PACKAGE_DIR/docs/README.md" \
-  "$PACKAGE_DIR/docs/liora-1.0-plan.md" \
-  "$PACKAGE_DIR/docs/coding-agent-architecture-plan.md" \
-  "$PACKAGE_DIR/docs/tech-stack-selection.md" \
-  "$PACKAGE_DIR/docs/release.md" \
-  "$PACKAGE_DIR/docs/mvp-exit-benchmark.md" \
-  "$PACKAGE_DIR/docs/v0.1-exit-audit.md" \
+  "$PACKAGE_DIR/docs/00-index.md" \
+  "$PACKAGE_DIR/docs/01-liora-1.0-plan.md" \
+  "$PACKAGE_DIR/docs/02-coding-agent-architecture-plan.md" \
+  "$PACKAGE_DIR/docs/03-tech-stack-selection.md" \
+  "$PACKAGE_DIR/docs/04-v0.1-exit-audit.md" \
+  "$PACKAGE_DIR/docs/05-mvp-exit-benchmark.md" \
+  "$PACKAGE_DIR/docs/06-release-packaging.md" \
+  "$PACKAGE_DIR/docs/10-16-personality-agent-prd.md" \
+  "$PACKAGE_DIR/docs/11-16-personality-agent-persona-spec.md" \
+  "$PACKAGE_DIR/docs/12-16人格日记本.md" \
   "$PACKAGE_DIR/bin/liora"
 do
   if [ ! -e "$path" ]; then

@@ -698,7 +698,7 @@ Widget 不承担完整对话，只承担存在感和入口：
 ## 15. 后续待补
 
 1. 给 16 个 Agent 起原创中文名和视觉方向。
-2. 已完成基础版：写每个 Agent 的完整 prompt/persona spec，见 [16-personality-agent-persona-spec.md](/Users/bytedance/dev/liora/docs/16-personality-agent-persona-spec.md)。
+2. 已完成基础版：写每个 Agent 的完整 prompt/persona spec，见 [11-16-personality-agent-persona-spec.md](11-16-personality-agent-persona-spec.md)。
 3. 做 10 个同题盲测样本。
 4. 做 6 个多人房间脚本样例。
 5. 验证 Widget 首屏视觉和点击路径。

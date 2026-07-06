@@ -155,7 +155,7 @@ func TestReleaseSmokeScriptInstallsArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
-	for _, want := range []string{`release-supply-chain-audit.sh`, `tar -xzf`, `install.sh`, `README.md`, `docs/README.md`, `docs/release.md`, `LIORA_INSTALL_DIR`, `-version`, `-doctor`, `arbitrary-workspace`, `workspace-smoke.txt`, `-prompt 'list .'`} {
+	for _, want := range []string{`release-supply-chain-audit.sh`, `tar -xzf`, `install.sh`, `README.md`, `docs/00-index.md`, `docs/06-release-packaging.md`, `docs/10-16-personality-agent-prd.md`, `docs/11-16-personality-agent-persona-spec.md`, `docs/12-16人格日记本.md`, `LIORA_INSTALL_DIR`, `-version`, `-doctor`, `arbitrary-workspace`, `workspace-smoke.txt`, `-prompt 'list .'`} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected release smoke script to contain %q, got:\n%s", want, content)
 		}

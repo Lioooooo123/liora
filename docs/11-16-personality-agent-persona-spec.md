@@ -3,7 +3,7 @@
 > 版本：v0.1
 > 日期：2026-07-05
 > 对应 PRD 待补项：`2. 写每个 Agent 的完整 prompt/persona spec`
-> 依赖文档：[16-personality-agent-prd.md](/Users/bytedance/dev/liora/docs/16-personality-agent-prd.md)
+> 依赖文档：[10-16-personality-agent-prd.md](10-16-personality-agent-prd.md)
 
 本文是 16 个 Agent 的人格配置交付物。它不是最终代码，也不是完整系统安全 prompt，而是可交给模型层、产品层和评测层使用的 persona spec。
 

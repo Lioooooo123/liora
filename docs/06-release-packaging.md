@@ -120,13 +120,16 @@ liora -daemon -daemon-addr 127.0.0.1:18080
 bin/liora
 install.sh
 README.md
-docs/README.md
-docs/liora-1.0-plan.md
-docs/coding-agent-architecture-plan.md
-docs/tech-stack-selection.md
-docs/release.md
-docs/mvp-exit-benchmark.md
-docs/v0.1-exit-audit.md
+docs/00-index.md
+docs/01-liora-1.0-plan.md
+docs/02-coding-agent-architecture-plan.md
+docs/03-tech-stack-selection.md
+docs/04-v0.1-exit-audit.md
+docs/05-mvp-exit-benchmark.md
+docs/06-release-packaging.md
+docs/10-16-personality-agent-prd.md
+docs/11-16-personality-agent-persona-spec.md
+docs/12-16人格日记本.md
 ```
 
 `install.sh` 不会写入 API key。LLM 配置仍由用户自己放到 `~/.config/liora/.env`，或通过环境变量设置。

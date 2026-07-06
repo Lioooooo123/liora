@@ -257,7 +257,7 @@ echo "[post] scoped diff check"
     scripts/supply_chain_test.go \
     scripts/tui-smoke.sh \
     README.md \
-    docs/release.md \
+    docs/06-release-packaging.md \
     implementation-notes.md
   )
   git diff --check -- "${files[@]}"
