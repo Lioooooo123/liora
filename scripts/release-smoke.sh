@@ -33,6 +33,7 @@ for path in \
   "$PACKAGE_DIR/docs/04-v0.1-exit-audit.md" \
   "$PACKAGE_DIR/docs/05-mvp-exit-benchmark.md" \
   "$PACKAGE_DIR/docs/06-release-packaging.md" \
+  "$PACKAGE_DIR/docs/07-development-workflow.md" \
   "$PACKAGE_DIR/docs/10-16-personality-agent-prd.md" \
   "$PACKAGE_DIR/docs/11-16-personality-agent-persona-spec.md" \
   "$PACKAGE_DIR/docs/12-16人格日记本.md" \

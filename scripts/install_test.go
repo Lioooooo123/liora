@@ -69,6 +69,32 @@ func TestPackageReleaseScriptBuildsInstallableArchive(t *testing.T) {
 	}
 }
 
+func TestCleanWorkspaceScriptRemovesOnlyGeneratedArtifacts(t *testing.T) {
+	data, err := os.ReadFile("clean-workspace.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		`--dry-run`,
+		`dist`,
+		`bin`,
+		`liora-demo`,
+		`packages/*/dist`,
+		`packages/*/*.tsbuildinfo`,
+		`rm -rf -- "$path"`,
+		`node_modules`,
+		`.omo`,
+		`.superpowers`,
+		`.codegraph`,
+		`implementation-notes.md`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected clean workspace script to contain %q, got:\n%s", want, content)
+		}
+	}
+}
+
 func TestNextReleaseVersionScriptIncrementsLatestSemverTag(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is required")
@@ -155,7 +181,7 @@ func TestReleaseSmokeScriptInstallsArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
-	for _, want := range []string{`release-supply-chain-audit.sh`, `tar -xzf`, `install.sh`, `README.md`, `docs/00-index.md`, `docs/06-release-packaging.md`, `docs/10-16-personality-agent-prd.md`, `docs/11-16-personality-agent-persona-spec.md`, `docs/12-16人格日记本.md`, `LIORA_INSTALL_DIR`, `-version`, `-doctor`, `arbitrary-workspace`, `workspace-smoke.txt`, `-prompt 'list .'`} {
+	for _, want := range []string{`release-supply-chain-audit.sh`, `tar -xzf`, `install.sh`, `README.md`, `docs/00-index.md`, `docs/06-release-packaging.md`, `docs/07-development-workflow.md`, `docs/10-16-personality-agent-prd.md`, `docs/11-16-personality-agent-persona-spec.md`, `docs/12-16人格日记本.md`, `LIORA_INSTALL_DIR`, `-version`, `-doctor`, `arbitrary-workspace`, `workspace-smoke.txt`, `-prompt 'list .'`} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected release smoke script to contain %q, got:\n%s", want, content)
 		}

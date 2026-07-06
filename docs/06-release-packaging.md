@@ -127,6 +127,7 @@ docs/03-tech-stack-selection.md
 docs/04-v0.1-exit-audit.md
 docs/05-mvp-exit-benchmark.md
 docs/06-release-packaging.md
+docs/07-development-workflow.md
 docs/10-16-personality-agent-prd.md
 docs/11-16-personality-agent-persona-spec.md
 docs/12-16人格日记本.md

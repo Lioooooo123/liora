@@ -11,5 +11,7 @@ dist/
 bin/
 node_modules/
 *.tsbuildinfo
+packages/*/dist/
+.DS_Store
 /cli
 /liora-demo

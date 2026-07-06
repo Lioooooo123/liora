@@ -25,7 +25,7 @@ docs/         产品、架构和发布文档
 
 当前 `apps/cli` 负责安装产物 `liora`，TUI 直接由 Go 原生实现（`internal/tui`，基于 charmbracelet Bubble Tea），与 core 同二进制、无 Node 依赖。未来桌面/Web 入口应通过 Core Daemon API 复用 Go core，而不是重写 agent 执行逻辑。
 
-文档入口见 [Liora Docs](docs/00-index.md)，技术选型见 [Liora 技术选型](docs/03-tech-stack-selection.md)。
+文档入口见 [Liora Docs](docs/00-index.md)，下一阶段开发入口见 [Development Workflow](docs/07-development-workflow.md)，技术选型见 [Liora 技术选型](docs/03-tech-stack-selection.md)。
 
 16 人格 Agent App 目前是产品探索文档，不代表当前 CLI 已实现相关功能：
 
