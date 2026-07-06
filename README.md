@@ -27,6 +27,12 @@ docs/         产品、架构和发布文档
 
 文档入口见 [Liora Docs](docs/README.md)，技术选型见 [Liora 技术选型](docs/tech-stack-selection.md)。
 
+16 人格 Agent App 目前是产品探索文档，不代表当前 CLI 已实现相关功能：
+
+- [16 人格 Agent PRD](docs/16-personality-agent-prd.md)
+- [16 人格 Agent Prompt / Persona Spec](docs/16-personality-agent-persona-spec.md)
+- [16 人格日记本](docs/16人格日记本.md)
+
 ## 功能
 
 - 默认使用当前目录作为 workspace。
@@ -551,7 +557,7 @@ LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scr
 - `internal/daemon`：本地 HTTP API 和 SSE 事件流。
 - `internal/task`：任务模型、SQLite 仓储和任务 runner。
 - `internal/sandbox`：Shell executor 抽象，支持 local 和 Docker。
-- `internal/tui`：Go 原生 TUI —— TTY 下 Bubble Tea 全屏、非 TTY 下 line-based renderer，不直接执行工具；默认通过 embedded daemon 访问任务事件流。
+- `internal/tui`：Go 原生 TUI，TTY 下 Bubble Tea 全屏、非 TTY 下 line-based renderer，不直接执行工具；默认通过 embedded daemon 访问任务事件流。
 - `internal/runtime`：连接 Planner 和 Agent，是交互模式的一轮执行编排层。
 - `internal/llm`：多供应商 LLM client 和自然语言 Planner。
 - `internal/store`：goal、memory、skill 和 MCP 配置的本地持久化；daemon 对 memory 暴露结构化 API。
