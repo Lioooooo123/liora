@@ -41,8 +41,11 @@ jobs:
           test "$(go env GOOS)" = "darwin"
           test "$(go env GOARCH)" = "arm64"
 
-      - name: Test release path
-        run: go test ./scripts ./internal/tui ./internal/tuisession ./internal/daemonclient ./apps/cli
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -count=1 ./...
 
       - name: Build release package
         run: LIORA_VERSION="${{ steps.version.outputs.version }}" GOOS=darwin GOARCH=arm64 ./scripts/package-release.sh
