@@ -694,7 +694,7 @@ func (s *server) handleWorkbench(w http.ResponseWriter, r *http.Request) {
 const backgroundOutputPreviewRunes = 1600
 
 func (s *server) backgroundTaskOutput(ctx context.Context, task taskpkg.Task) (taskpkg.BackgroundTaskOutput, error) {
-	events, err := s.repo.Events(ctx, task.ID, 100)
+	events, err := s.repo.LatestEvents(ctx, task.ID, 100)
 	if err != nil {
 		return taskpkg.BackgroundTaskOutput{}, err
 	}
@@ -1380,7 +1380,7 @@ func (s *server) handleTaskDiff(w http.ResponseWriter, r *http.Request, taskID s
 		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
 		return
 	}
-	events, err := s.repo.Events(r.Context(), taskID, 0)
+	events, err := s.repo.LatestEvents(r.Context(), taskID, 1000)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

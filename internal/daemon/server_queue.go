@@ -431,7 +431,7 @@ func (s *server) latestWaitIsApproval(ctx context.Context, taskID string) bool {
 }
 
 func (s *server) latestWaitingRequest(ctx context.Context, taskID string) (taskpkg.EventType, taskpkg.EventPayload, error) {
-	events, err := s.repo.Events(ctx, taskID, 0)
+	events, err := s.repo.LatestEvents(ctx, taskID, 1000)
 	if err != nil {
 		return "", taskpkg.EventPayload{}, err
 	}

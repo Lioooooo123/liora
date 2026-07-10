@@ -105,7 +105,7 @@ func (r *Repository) ReceiveUserInput(ctx context.Context, id string, message st
 }
 
 func (r *Repository) LatestUserInput(ctx context.Context, id string) (string, bool, error) {
-	events, err := r.Events(ctx, id, 0)
+	events, err := r.LatestEvents(ctx, id, 1000)
 	if err != nil {
 		return "", false, err
 	}
@@ -522,7 +522,7 @@ func (r *Repository) markExpiredTaskStale(ctx context.Context, id string, reason
 }
 
 func (r *Repository) latestExpiry(ctx context.Context, taskID string) (time.Time, bool, error) {
-	events, err := r.Events(ctx, taskID, 0)
+	events, err := r.LatestEvents(ctx, taskID, 1000)
 	if err != nil {
 		return time.Time{}, false, err
 	}

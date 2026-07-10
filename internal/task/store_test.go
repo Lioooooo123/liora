@@ -2125,6 +2125,60 @@ func TestRepositoryCancelsTask(t *testing.T) {
 	}
 }
 
+func TestLatestEventsSeesNewestBeyondThousandCap(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	repo := NewRepository(db)
+	created, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "long streamed task",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 1100; i++ {
+		if err := repo.AppendEvent(t.Context(), created.ID, EventAssistantDelta, EventPayload{Message: "delta"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.AppendEvent(t.Context(), created.ID, EventUserInputRequest, EventPayload{
+		Tool:   "run",
+		Status: string(StatusWaitingUser),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The old-window read misses the trailing event (this is the bug).
+	oldest, err := repo.Events(t.Context(), created.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldest[len(oldest)-1].Type == EventUserInputRequest {
+		t.Fatalf("Events unexpectedly returned the newest event; test no longer exercises the >1000 case")
+	}
+
+	latest, err := repo.LatestEvents(t.Context(), created.ID, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(latest) == 0 || latest[len(latest)-1].Type != EventUserInputRequest {
+		t.Fatalf("LatestEvents must surface the trailing user_input.requested, got %d events ending in %v",
+			len(latest), lastEventType(latest))
+	}
+}
+
+func lastEventType(events []Event) EventType {
+	if len(events) == 0 {
+		return ""
+	}
+	return events[len(events)-1].Type
+}
+
 func TestUpdateStatusDoesNotOverwriteTerminalState(t *testing.T) {
 	db, err := store.New(t.TempDir()).OpenDB()
 	if err != nil {

@@ -1777,6 +1777,55 @@ func TestServerConversationThreadModelConfigRejectsMalformedBindings(t *testing.
 	}
 }
 
+func TestServerServesDiffAfterOneThousandEvents(t *testing.T) {
+	workspace := t.TempDir()
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	task, err := repo.Create(t.Context(), taskpkg.CreateRequest{
+		Workspace: workspace,
+		Prompt:    "long streamed patch task",
+		Natural:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a long streamed answer: the diff lands after >1000 events.
+	for i := 0; i < 1100; i++ {
+		if err := repo.AppendEvent(t.Context(), task.ID, taskpkg.EventAssistantDelta, taskpkg.EventPayload{Message: "delta"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	patch, err := apply.CreatePatch(workspace, []apply.FileChange{{Path: "notes.txt", Before: "", After: "hello\n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvent(t.Context(), task.ID, taskpkg.EventDiff, taskpkg.EventPayload{Diff: patch}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(NewServer(Config{Repository: repo}))
+	defer server.Close()
+	resp, err := http.Get(server.URL + "/v1/tasks/" + task.ID + "/diff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("diff buried after 1000 events returned %d, want 200", resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "+++ b/notes.txt") {
+		t.Fatalf("unexpected diff response %s", string(data))
+	}
+}
+
 func TestServerServesDiffAndAppliesPatch(t *testing.T) {
 	workspace := t.TempDir()
 	db, err := store.New(t.TempDir()).OpenDB()

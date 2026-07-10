@@ -2280,6 +2280,48 @@ func (r *Repository) EventsAfter(ctx context.Context, taskID string, afterSeq in
 	return r.eventsAfter(ctx, taskID, afterSeq, limit)
 }
 
+// LatestEvents returns the newest `limit` events for a task in ascending
+// (oldest-to-newest) order. Callers that need the most recent event of some
+// type must use this instead of Events: Events reads the *oldest* window (seq 0
+// upward, capped at 1000), so on a task with more than 1000 events — routine
+// for any long streamed answer — a trailing approval/input/diff/expiry event is
+// invisible to a backward scan over that window.
+func (r *Repository) LatestEvents(ctx context.Context, taskID string, limit int) ([]Event, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT rowid, id, task_id, type, payload_json, created_at
+		FROM task_events
+		WHERE task_id = ?
+		ORDER BY rowid DESC
+		LIMIT ?
+	`, taskID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []Event
+	for rows.Next() {
+		var event Event
+		var createdAt string
+		if err := rows.Scan(&event.Seq, &event.ID, &event.TaskID, &event.Type, &event.Payload, &createdAt); err != nil {
+			return nil, err
+		}
+		event.CreatedAt = parseTime(createdAt)
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Reverse to ascending order so existing backward-scan callers are unchanged.
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
+	}
+	return events, nil
+}
+
 func (r *Repository) eventsAfter(ctx context.Context, taskID string, afterSeq int64, limit int) ([]Event, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT rowid, id, task_id, type, payload_json, created_at
