@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,42 @@ import (
 	"github.com/Lioooooo123/liora/internal/store"
 	"github.com/Lioooooo123/liora/internal/trust"
 )
+
+func TestCreateRejectsNonAbsoluteWorkspace(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	if _, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: "relative/dir",
+		Prompt:    "x",
+		Natural:   true,
+	}); err == nil {
+		t.Fatal("expected relative workspace to be rejected")
+	}
+}
+
+func TestCreateRejectsFileWorkspace(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	file := filepath.Join(t.TempDir(), "a-file")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: file,
+		Prompt:    "x",
+		Natural:   true,
+	}); err == nil {
+		t.Fatal("expected a file workspace to be rejected")
+	}
+}
 
 func TestRepositoryCreatesListsAndReadsTaskEvents(t *testing.T) {
 	db, err := store.New(t.TempDir()).OpenDB()

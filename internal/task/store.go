@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -73,6 +74,17 @@ func (r *Repository) Create(ctx context.Context, request CreateRequest) (Task, e
 	workspace := strings.TrimSpace(request.Workspace)
 	if workspace == "" {
 		return Task{}, fmt.Errorf("workspace is required")
+	}
+	// Require an absolute path so a workspace never resolves against the daemon's
+	// working directory, and reject a path that exists but is not a directory.
+	// Existence is not required here: the tools layer stats the workspace when a
+	// task actually runs. Confining tool I/O to this root (including symlink
+	// escapes) is enforced in internal/tools and internal/apply.
+	if !filepath.IsAbs(workspace) {
+		return Task{}, fmt.Errorf("workspace must be an absolute path: %s", workspace)
+	}
+	if info, statErr := os.Stat(workspace); statErr == nil && !info.IsDir() {
+		return Task{}, fmt.Errorf("workspace is not a directory: %s", workspace)
 	}
 	origin, automation, err := NormalizeAutomationMetadata(request)
 	if err != nil {
