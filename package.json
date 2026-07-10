@@ -15,6 +15,7 @@
     "go.sum"
   ],
   "scripts": {
+    "test": "pnpm --filter @liora/protocol test",
     "clean": "./scripts/clean-workspace.sh",
     "clean:dry": "./scripts/clean-workspace.sh --dry-run",
     "build:cli": "go build -o dist/dev/liora ./apps/cli",
