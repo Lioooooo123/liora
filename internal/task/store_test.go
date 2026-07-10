@@ -2125,6 +2125,79 @@ func TestRepositoryCancelsTask(t *testing.T) {
 	}
 }
 
+func TestUpdateStatusDoesNotOverwriteTerminalState(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	repo := NewRepository(db)
+	created, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "long task",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Cancel(t.Context(), created.ID, "user requested"); err != nil {
+		t.Fatal(err)
+	}
+	// A runner finishing after the cancel must not resurrect the task.
+	if err := repo.UpdateStatus(t.Context(), created.ID, StatusCompleted); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(t.Context(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusCancelled {
+		t.Fatalf("cancelled task overwritten to %s", got.Status)
+	}
+}
+
+func TestCancelDoesNotOverwriteCompletedState(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	repo := NewRepository(db)
+	created, err := repo.Create(t.Context(), CreateRequest{
+		Workspace: t.TempDir(),
+		Prompt:    "long task",
+		Natural:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(t.Context(), created.ID, StatusCompleted); err != nil {
+		t.Fatal(err)
+	}
+	// A cancel racing in after completion is an idempotent no-op.
+	if err := repo.Cancel(t.Context(), created.ID, "user requested"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(t.Context(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusCompleted {
+		t.Fatalf("completed task overwritten to %s", got.Status)
+	}
+	events, err := repo.Events(t.Context(), created.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events {
+		if e.Type == EventCancelled {
+			t.Fatalf("cancel wrote an event for an already-completed task: %#v", events)
+		}
+	}
+}
+
 func TestRepositoryCancelResolvesPendingApprovalItem(t *testing.T) {
 	db, err := store.New(t.TempDir()).OpenDB()
 	if err != nil {

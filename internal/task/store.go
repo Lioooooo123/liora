@@ -1902,6 +1902,12 @@ func (r *Repository) AppendMessage(ctx context.Context, sessionID string, role s
 	return message, nil
 }
 
+// terminalStatusGuard is the WHERE fragment that prevents any later write from
+// overwriting a task that has already reached a final state. Once a task is
+// completed, failed, cancelled, or stale, its status is immutable — this makes
+// cancel-vs-finish races resolve to whichever terminal write lands first.
+const terminalStatusGuard = ` AND status NOT IN ('completed','failed','cancelled','stale')`
+
 func (r *Repository) UpdateStatus(ctx context.Context, id string, status Status) error {
 	now := time.Now().UTC()
 	var completedAt any
@@ -1911,8 +1917,8 @@ func (r *Repository) UpdateStatus(ctx context.Context, id string, status Status)
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE tasks
 		SET status = ?, updated_at = ?, completed_at = COALESCE(?, completed_at)
-		WHERE id = ?
-	`, string(status), formatTime(now), completedAt, id)
+		WHERE id = ?`+terminalStatusGuard,
+		string(status), formatTime(now), completedAt, id)
 	return err
 }
 
@@ -1983,12 +1989,22 @@ func (r *Repository) Cancel(ctx context.Context, id string, reason string) error
 	if reason == "" {
 		reason = "cancelled"
 	}
-	if _, err := tx.ExecContext(ctx, `
+	res, err := tx.ExecContext(ctx, `
 		UPDATE tasks
 		SET status = ?, updated_at = ?, completed_at = COALESCE(?, completed_at)
-		WHERE id = ?
-	`, string(StatusCancelled), formatTime(now), formatTime(now), id); err != nil {
+		WHERE id = ?`+terminalStatusGuard,
+		string(StatusCancelled), formatTime(now), formatTime(now), id)
+	if err != nil {
 		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		// Task is missing or already terminal; cancel is an idempotent no-op
+		// and must not append a spurious cancellation event.
+		return nil
 	}
 	if err := r.resolveApprovalItemTx(ctx, tx, id, "cancelled", "user", now); err != nil {
 		return err
