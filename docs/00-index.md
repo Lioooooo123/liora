@@ -15,6 +15,7 @@
 - [05 MVP Exit Benchmark](05-mvp-exit-benchmark.md)：v0.1 产品和能力边界说明，以 exit audit 为最终口径。
 - [06 Release Packaging](06-release-packaging.md)：本地 tarball、安装脚本和 release smoke 说明。
 - [07 Development Workflow](07-development-workflow.md)：仓库入口、常用命令、清理规则和下一阶段开发前检查。
+- [13 Hardening & Remediation Plan](13-hardening-remediation-plan.md)：2026-07-11 四维审计（安全、架构、健壮性、测试）发现的问题清单与分阶段修复计划。
 
 ## 2. 16 人格产品探索
 
