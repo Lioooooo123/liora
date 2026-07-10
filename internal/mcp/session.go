@@ -28,6 +28,43 @@ type lineReadResult struct {
 	err  error
 }
 
+// childEnviron builds the environment for an MCP subprocess: the parent
+// environment with likely-secret variables removed, plus the server's own
+// configured env applied last. MCP servers are third-party binaries, so they
+// must not inherit Liora's API keys, daemon token, or provider config.
+func childEnviron(configEnv map[string]string) []string {
+	base := os.Environ()
+	env := make([]string, 0, len(base)+len(configEnv))
+	for _, kv := range base {
+		key, _, ok := strings.Cut(kv, "=")
+		if !ok || isSecretEnvKey(key) {
+			continue
+		}
+		env = append(env, kv)
+	}
+	for key, value := range configEnv {
+		env = append(env, key+"="+value)
+	}
+	return env
+}
+
+// isSecretEnvKey reports whether an environment variable name likely holds a
+// secret or Liora/LLM-provider configuration that an MCP server should not see.
+func isSecretEnvKey(key string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(key))
+	for _, suffix := range []string{"_API_KEY", "_TOKEN", "_SECRET", "_SECRET_KEY", "_PASSWORD", "_ACCESS_KEY", "_CREDENTIALS"} {
+		if strings.HasSuffix(upper, suffix) {
+			return true
+		}
+	}
+	for _, prefix := range []string{"LIORA_", "OPENAI", "ANTHROPIC", "GEMINI", "DEEPSEEK"} {
+		if strings.HasPrefix(upper, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) start(ctx context.Context) (*session, error) {
 	if strings.TrimSpace(c.config.Command) == "" {
 		return nil, errors.New("MCP server command is required")
@@ -38,10 +75,7 @@ func (c *Client) start(ctx context.Context) (*session, error) {
 	default:
 	}
 	cmd := exec.Command(c.config.Command, c.config.Args...)
-	cmd.Env = os.Environ()
-	for key, value := range c.config.Env {
-		cmd.Env = append(cmd.Env, key+"="+value)
-	}
+	cmd.Env = childEnviron(c.config.Env)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

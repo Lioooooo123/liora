@@ -83,6 +83,52 @@ func TestClientReusesInitializedSession_whenListingThenCalling(t *testing.T) {
 	}
 }
 
+func TestClientFiltersSecretsFromServerEnv(t *testing.T) {
+	if os.Getenv("LIORA_FAKE_MCP_SERVER") == "1" {
+		runFakeMCPServer()
+		return
+	}
+	t.Setenv("LIORA_LLM_API_KEY", "super-secret")
+	t.Setenv("OPENAI_API_KEY", "another-secret")
+	t.Setenv("LIORA_DAEMON_TOKEN", "daemon-token")
+	t.Setenv("HARMLESS_VAR", "keep-me")
+
+	dumpPath := filepath.Join(t.TempDir(), "env.txt")
+	cfg := ServerConfig{
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestClientFiltersSecretsFromServerEnv"},
+		Env: map[string]string{
+			"LIORA_FAKE_MCP_SERVER":   "1",
+			"LIORA_FAKE_MCP_ENV_DUMP": dumpPath,
+			"CONFIGURED_VAR":          "configured-value",
+		},
+	}
+	client := NewClient(cfg)
+	if _, err := client.ListTools(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(dumpPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := string(data)
+	for _, secret := range []string{"LIORA_LLM_API_KEY=", "OPENAI_API_KEY=", "LIORA_DAEMON_TOKEN="} {
+		if strings.Contains(env, secret) {
+			t.Fatalf("secret %q leaked to MCP server environment:\n%s", secret, env)
+		}
+	}
+	if !strings.Contains(env, "PATH=") {
+		t.Fatalf("expected PATH to be inherited by MCP server:\n%s", env)
+	}
+	if !strings.Contains(env, "HARMLESS_VAR=keep-me") {
+		t.Fatalf("expected non-secret env to be inherited:\n%s", env)
+	}
+	if !strings.Contains(env, "CONFIGURED_VAR=configured-value") {
+		t.Fatalf("expected configured env to be applied:\n%s", env)
+	}
+}
+
 func TestManagerListsConfiguredServers(t *testing.T) {
 	if os.Getenv("LIORA_FAKE_MCP_SERVER") == "1" {
 		runFakeMCPServer()
@@ -238,6 +284,9 @@ func TestManagerListToolsRunsServersConcurrently(t *testing.T) {
 }
 
 func runFakeMCPServer() {
+	if dump := os.Getenv("LIORA_FAKE_MCP_ENV_DUMP"); dump != "" {
+		_ = os.WriteFile(dump, []byte(strings.Join(os.Environ(), "\n")), 0o600)
+	}
 	mode := os.Getenv("LIORA_FAKE_MCP_SERVER")
 	scanner := bufio.NewScanner(os.Stdin)
 	encoder := json.NewEncoder(os.Stdout)
