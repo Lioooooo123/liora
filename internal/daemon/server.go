@@ -85,7 +85,22 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("/v1/sessions/", s.requireCapability(s.handleSession))
 	mux.HandleFunc("/v1/tasks", s.requireCapability(s.handleTasks))
 	mux.HandleFunc("/v1/tasks/", s.requireCapability(s.handleTask))
-	return mux
+	return rejectEmptyPathSegments(mux)
+}
+
+// rejectEmptyPathSegments returns 404 for request paths containing an empty
+// segment (e.g. "/v1/schedules//trigger"). Without this guard, net/http's
+// ServeMux silently redirects such paths to their cleaned form, so an empty
+// resource id would resolve to a different, valid-looking route. Rejecting up
+// front keeps routing deterministic across Go versions.
+func rejectEmptyPathSegments(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "//") {
+			writeError(w, http.StatusNotFound, fmt.Errorf("not found: %s", r.URL.Path))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type server struct {
