@@ -61,7 +61,7 @@ require_text apps/cli/main.go "\"github.com/Lioooooo123/liora/internal/daemoncli
 require_text apps/cli/main.go "\"github.com/Lioooooo123/liora/internal/store\""
 require_text apps/cli/main.go "taskpkg \"github.com/Lioooooo123/liora/internal/task\""
 require_text apps/cli/main.go "\"github.com/Lioooooo123/liora/internal/tui\""
-require_text apps/cli/main.go "http.ListenAndServe(*daemonAddr, server)"
+require_text apps/cli/main.go "runDaemon(newDaemonHTTPServer(*daemonAddr, server))"
 require_text apps/cli/main.go "startEmbeddedDaemon(persistentStore, planner, llmRegistry, sandboxExecutor, patchMode)"
 require_text apps/cli/main.go "daemonclient.New(baseURL, clientOptions...)"
 require_text apps/cli/main.go "tui.RunProgram(context.Background(), tuiConfig, daemonSession)"

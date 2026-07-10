@@ -17,6 +17,20 @@ import (
 	"time"
 )
 
+func TestNewDaemonHTTPServerSetsSSESafeTimeouts(t *testing.T) {
+	server := newDaemonHTTPServer("127.0.0.1:0", http.NewServeMux())
+	if server.ReadHeaderTimeout == 0 {
+		t.Fatal("expected ReadHeaderTimeout to be set (slowloris protection)")
+	}
+	if server.IdleTimeout == 0 {
+		t.Fatal("expected IdleTimeout to be set")
+	}
+	// The daemon streams SSE, so a write deadline would truncate long streams.
+	if server.WriteTimeout != 0 {
+		t.Fatalf("WriteTimeout must stay unset for SSE, got %v", server.WriteTimeout)
+	}
+}
+
 // fakeToolStep is one structured tool call the stateful fake LLM should request,
 // in order, before it finishes the tool-use loop with a plain-text summary.
 type fakeToolStep struct {
