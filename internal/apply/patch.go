@@ -178,7 +178,46 @@ func resolve(workspace string, path string) (string, error) {
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path outside workspace: %s", path)
 	}
+	if err := ensureRealPathWithinRoot(root, abs); err != nil {
+		return "", err
+	}
 	return abs, nil
+}
+
+// ensureRealPathWithinRoot verifies that abs, after resolving symlinks in its
+// deepest existing ancestor, still lives inside root. A lexical check alone
+// cannot catch a symlink inside the workspace pointing outside it, because the
+// cleaned path stays within root while the OS follows the link to the real
+// target. The leaf may not exist yet (a new file), so resolve the nearest
+// existing ancestor instead of abs itself.
+func ensureRealPathWithinRoot(root, abs string) error {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	probe := abs
+	for {
+		if _, err := os.Lstat(probe); err == nil {
+			break
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			break
+		}
+		probe = parent
+	}
+	realProbe, err := filepath.EvalSymlinks(probe)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(realRoot, realProbe)
+	if err != nil {
+		return err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path outside workspace: %s", abs)
+	}
+	return nil
 }
 
 func splitPatchLines(content string) []string {

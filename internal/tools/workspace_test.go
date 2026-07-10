@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -34,6 +35,75 @@ func TestWorkspaceToolsRejectPathTraversal(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(filepath.Dir(root), "escape.txt")); !os.IsNotExist(statErr) {
 		t.Fatalf("write escaped workspace, stat err: %v", statErr)
+	}
+}
+
+func TestWorkspaceToolsRejectSymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+	root := t.TempDir()
+	outsideDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outsideDir, "secret.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A directory symlink inside the workspace pointing outside it.
+	if err := os.Symlink(outsideDir, filepath.Join(root, "evil")); err != nil {
+		t.Fatal(err)
+	}
+	// A file symlink inside the workspace pointing outside it.
+	if err := os.Symlink(filepath.Join(outsideDir, "secret.txt"), filepath.Join(root, "evilfile")); err != nil {
+		t.Fatal(err)
+	}
+
+	workspace, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := workspace.ReadFile("evil/secret.txt"); err == nil {
+		t.Fatal("expected read through directory symlink to be rejected")
+	}
+	if _, err := workspace.ReadFile("evilfile"); err == nil {
+		t.Fatal("expected read through file symlink to be rejected")
+	}
+	if err := workspace.WriteFile("evil/planted.txt", "owned"); err == nil {
+		t.Fatal("expected write through directory symlink to be rejected")
+	}
+	if _, statErr := os.Stat(filepath.Join(outsideDir, "planted.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("write escaped workspace through symlink, stat err: %v", statErr)
+	}
+}
+
+func TestWorkspaceToolsAllowInternalSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "real", "file.txt"), []byte("inside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A symlink that stays inside the workspace must keep working.
+	if err := os.Symlink(filepath.Join(root, "real"), filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	workspace, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := workspace.ReadFile("link/file.txt")
+	if err != nil {
+		t.Fatalf("internal symlink read should succeed: %v", err)
+	}
+	if !strings.Contains(content, "inside") {
+		t.Fatalf("unexpected content %q", content)
+	}
+	if err := workspace.WriteFile("link/new.txt", "written\n"); err != nil {
+		t.Fatalf("internal symlink write should succeed: %v", err)
 	}
 }
 
