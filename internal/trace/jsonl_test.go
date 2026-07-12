@@ -3,9 +3,55 @@ package trace
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestWriteJSONLUsesOwnerOnlyPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix file mode semantics differ on windows")
+	}
+	dir := filepath.Join(t.TempDir(), "traces")
+	path := filepath.Join(dir, "trace.jsonl")
+	if err := WriteJSONL(path, []Event{{Tool: "run", Input: "echo $SECRET", Output: "value", Status: StatusOK}}); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("trace file mode = %v, want 0600", fi.Mode().Perm())
+	}
+	di, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if di.Mode().Perm() != 0o700 {
+		t.Fatalf("trace dir mode = %v, want 0700", di.Mode().Perm())
+	}
+}
+
+func TestWriteJSONLTightensExistingFilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix file mode semantics differ on windows")
+	}
+	path := filepath.Join(t.TempDir(), "trace.jsonl")
+	if err := os.WriteFile(path, []byte("old secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteJSONL(path, []Event{{Tool: "read", Output: "new secret", Status: StatusOK}}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("rewritten trace mode = %v, want 0600", info.Mode().Perm())
+	}
+}
 
 func TestWriteJSONLStoresTraceEvents(t *testing.T) {
 	events := []Event{

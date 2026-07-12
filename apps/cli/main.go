@@ -7,8 +7,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Lioooooo123/liora/internal/agent"
@@ -138,7 +140,7 @@ func main() {
 			AuthToken:  *daemonToken,
 		})
 		fmt.Printf("Liora daemon listening on %s (sandbox=%s patch_mode=%t auth=%s)\n", *daemonAddr, sandbox.Label(sandboxExecutor), patchMode, daemonAuthStatus(*daemonToken))
-		if err := http.ListenAndServe(*daemonAddr, server); err != nil {
+		if err := runDaemon(newDaemonHTTPServer(*daemonAddr, server)); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -285,6 +287,54 @@ func main() {
 	}
 }
 
+// newDaemonHTTPServer builds the daemon's HTTP server with slowloris and idle
+// protection. It deliberately leaves ReadTimeout/WriteTimeout unset: the daemon
+// serves long-lived SSE streams, and a write deadline would truncate them.
+func newDaemonHTTPServer(addr string, handler http.Handler) *http.Server {
+	serverCtx, cancelServer := context.WithCancel(context.Background())
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		BaseContext: func(net.Listener) context.Context {
+			return serverCtx
+		},
+	}
+	// Shutdown does not cancel active request contexts by itself. Cancelling the
+	// base context lets long-lived SSE handlers exit so graceful shutdown can
+	// actually drain instead of timing out and forcing os.Exit.
+	server.RegisterOnShutdown(cancelServer)
+	return server
+}
+
+// runDaemon serves until the process receives SIGINT/SIGTERM, then drains
+// in-flight HTTP handlers with a bounded deadline instead of dropping the
+// connections abruptly.
+func runDaemon(server *http.Server) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serveErr := make(chan error, 1)
+	go func() {
+		err := server.ListenAndServe()
+		if err == http.ErrServerClosed {
+			err = nil
+		}
+		serveErr <- err
+	}()
+
+	select {
+	case err := <-serveErr:
+		return err
+	case <-ctx.Done():
+		stop()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return server.Shutdown(shutdownCtx)
+	}
+}
+
 type embeddedDaemon struct {
 	server  *http.Server
 	db      interface{ Close() error }
@@ -302,11 +352,11 @@ func startEmbeddedDaemon(persistentStore *store.Store, planner *llm.Planner, reg
 		return nil, err
 	}
 	repo := taskpkg.NewRepository(db)
-	server := &http.Server{Handler: daemon.NewServer(daemon.Config{
+	server := newDaemonHTTPServer("", daemon.NewServer(daemon.Config{
 		Repository: repo,
 		Runner:     newTaskRunner(repo, planner, registry, persistentStore, executor, patchMode),
 		Store:      persistentStore,
-	})}
+	}))
 	embedded := &embeddedDaemon{
 		server:  server,
 		db:      db,

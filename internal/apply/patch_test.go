@@ -3,9 +3,32 @@ package apply
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestApplyUnifiedPatchRejectsSymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+	workspace := t.TempDir()
+	outsideDir := t.TempDir()
+	if err := os.Symlink(outsideDir, filepath.Join(workspace, "evil")); err != nil {
+		t.Fatal(err)
+	}
+	patch := `--- a/evil/planted.txt
++++ b/evil/planted.txt
+@@ -0,0 +1 @@
++owned
+`
+	if _, err := ApplyUnifiedPatch(workspace, patch); err == nil {
+		t.Fatal("expected patch through a symlink to be rejected")
+	}
+	if _, statErr := os.Stat(filepath.Join(outsideDir, "planted.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("patch escaped workspace through symlink, stat err: %v", statErr)
+	}
+}
 
 func TestApplyUnifiedPatchUpdatesWorkspaceFile(t *testing.T) {
 	workspace := t.TempDir()

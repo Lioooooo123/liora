@@ -126,7 +126,7 @@ readOutput:
 	if err != nil {
 		return taskpkg.Task{}, "", err
 	}
-	events, err := s.repo.Events(ctx, child.ID, 1000)
+	events, err := s.repo.LatestEvents(ctx, child.ID, 1000)
 	if err != nil {
 		return taskpkg.Task{}, "", err
 	}

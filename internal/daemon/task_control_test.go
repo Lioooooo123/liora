@@ -197,6 +197,11 @@ func TestTaskControlReadsOutputAndStopsOnlyChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for i := 0; i < 1100; i++ {
+		if err := repo.AppendEvent(t.Context(), child.ID, taskpkg.EventAssistantDelta, taskpkg.EventPayload{Message: "streaming"}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := repo.AppendEvent(t.Context(), child.ID, taskpkg.EventSummary, taskpkg.EventPayload{Message: "child summary"}); err != nil {
 		t.Fatal(err)
 	}

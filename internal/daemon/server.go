@@ -85,7 +85,22 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("/v1/sessions/", s.requireCapability(s.handleSession))
 	mux.HandleFunc("/v1/tasks", s.requireCapability(s.handleTasks))
 	mux.HandleFunc("/v1/tasks/", s.requireCapability(s.handleTask))
-	return mux
+	return rejectEmptyPathSegments(mux)
+}
+
+// rejectEmptyPathSegments returns 404 for request paths containing an empty
+// segment (e.g. "/v1/schedules//trigger"). Without this guard, net/http's
+// ServeMux silently redirects such paths to their cleaned form, so an empty
+// resource id would resolve to a different, valid-looking route. Rejecting up
+// front keeps routing deterministic across Go versions.
+func rejectEmptyPathSegments(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "//") {
+			writeError(w, http.StatusNotFound, fmt.Errorf("not found: %s", r.URL.Path))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type server struct {
@@ -679,7 +694,7 @@ func (s *server) handleWorkbench(w http.ResponseWriter, r *http.Request) {
 const backgroundOutputPreviewRunes = 1600
 
 func (s *server) backgroundTaskOutput(ctx context.Context, task taskpkg.Task) (taskpkg.BackgroundTaskOutput, error) {
-	events, err := s.repo.Events(ctx, task.ID, 100)
+	events, err := s.repo.LatestEvents(ctx, task.ID, 100)
 	if err != nil {
 		return taskpkg.BackgroundTaskOutput{}, err
 	}
@@ -689,6 +704,14 @@ func (s *server) backgroundTaskOutput(ctx context.Context, task taskpkg.Task) (t
 		Title:     task.Title,
 		UpdatedAt: task.UpdatedAt,
 	}
+	if artifactEvent, ok, err := s.repo.LatestEventOfType(ctx, task.ID, taskpkg.EventArtifactReference); err != nil {
+		return taskpkg.BackgroundTaskOutput{}, err
+	} else if ok {
+		var payload taskpkg.EventPayload
+		if err := json.Unmarshal([]byte(artifactEvent.Payload), &payload); err == nil {
+			setArtifactReferenceIfMissing(&result, payload)
+		}
+	}
 	var lifecycleOutput string
 	for i := len(events) - 1; i >= 0; i-- {
 		var payload taskpkg.EventPayload
@@ -696,10 +719,7 @@ func (s *server) backgroundTaskOutput(ctx context.Context, task taskpkg.Task) (t
 			continue
 		}
 		if result.ArtifactURI == "" && events[i].Type == taskpkg.EventArtifactReference {
-			result.ArtifactURI = strings.TrimSpace(payload.Path)
-			if result.ArtifactURI != "" {
-				result.ArtifactTailHint = "/artifact " + result.ArtifactURI + " tail"
-			}
+			setArtifactReferenceIfMissing(&result, payload)
 		}
 		if result.Output == "" {
 			if output, lifecycle := backgroundOutputText(events[i].Type, payload); lifecycle {
@@ -715,6 +735,16 @@ func (s *server) backgroundTaskOutput(ctx context.Context, task taskpkg.Task) (t
 	result.Output = firstNonEmpty(result.Output, lifecycleOutput)
 	result.Output = truncateBackgroundOutput(result.Output)
 	return result, nil
+}
+
+func setArtifactReferenceIfMissing(result *taskpkg.BackgroundTaskOutput, payload taskpkg.EventPayload) {
+	if result.ArtifactURI != "" {
+		return
+	}
+	result.ArtifactURI = strings.TrimSpace(payload.Path)
+	if result.ArtifactURI != "" {
+		result.ArtifactTailHint = "/artifact " + result.ArtifactURI + " tail"
+	}
 }
 
 func backgroundOutputText(eventType taskpkg.EventType, payload taskpkg.EventPayload) (string, bool) {
@@ -1160,6 +1190,10 @@ func (s *server) handleTaskApproval(w http.ResponseWriter, r *http.Request, task
 			return
 		}
 		if err := s.repo.GrantApproval(r.Context(), taskID, request.DecidedBy); err != nil {
+			if errors.Is(err, taskpkg.ErrStatusTransitionRejected) {
+				writeError(w, http.StatusConflict, err)
+				return
+			}
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -1212,6 +1246,10 @@ func (s *server) handleTaskApproval(w http.ResponseWriter, r *http.Request, task
 			return
 		}
 		if err := s.repo.DenyApproval(r.Context(), taskID, request.Reason, request.DecidedBy); err != nil {
+			if errors.Is(err, taskpkg.ErrStatusTransitionRejected) {
+				writeError(w, http.StatusConflict, err)
+				return
+			}
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -1321,12 +1359,13 @@ func (s *server) startTaskAsync(taskID string) error {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				message := fmt.Sprintf("task runner panic: %v", recovered)
-				_ = s.repo.UpdateStatus(context.Background(), taskID, taskpkg.StatusFailed)
-				_ = s.repo.AppendEvent(context.Background(), taskID, taskpkg.EventError, taskpkg.EventPayload{
-					Message: message,
-					Status:  string(taskpkg.StatusFailed),
-					Reason:  "panic_recovered",
-				})
+				if err := s.repo.UpdateStatus(context.Background(), taskID, taskpkg.StatusFailed); err == nil {
+					_ = s.repo.AppendEvent(context.Background(), taskID, taskpkg.EventError, taskpkg.EventPayload{
+						Message: message,
+						Status:  string(taskpkg.StatusFailed),
+						Reason:  "panic_recovered",
+					})
+				}
 			}
 			s.unregisterRunning(taskID)
 			s.startNextQueuedAfter(taskID)
@@ -1365,7 +1404,7 @@ func (s *server) handleTaskDiff(w http.ResponseWriter, r *http.Request, taskID s
 		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
 		return
 	}
-	events, err := s.repo.Events(r.Context(), taskID, 0)
+	events, err := s.repo.LatestEvents(r.Context(), taskID, 1000)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

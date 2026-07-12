@@ -581,7 +581,7 @@ LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scr
 
 - LLM Planner 只允许输出受控工具步骤；如果模型输出未知工具，程序会拒绝执行。
 - natural task 工具失败后会最多触发一次 bounded replan；它不是无限自修复循环，避免本地任务失控运行。
-- Daemon 当前默认适合本机开发使用，尚未实现本地 token 或 Unix socket 鉴权。
+- Daemon 支持 `-daemon-token` 启用本地 token 鉴权（请求需携带对应 Authorization）；默认不设置 token，embedded daemon 默认同样无 token，适合本机开发使用。Unix socket 鉴权尚未实现。
 - SSE 已使用同进程事件通知和增量游标；跨进程写库场景保留低频 fallback 轮询。
 - MCP 当前实现为 stdio JSON-RPC MVP，每次 list/call 会启动一次 server；后续可优化为长连接 session pool。
 - Skill 当前以本地 `SKILL.md` 摘要形式注入 Planner，没有实现独立 skill 执行沙盒。

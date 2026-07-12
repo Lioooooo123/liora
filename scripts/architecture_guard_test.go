@@ -70,7 +70,7 @@ func main() {
 	_ = taskpkg.Task{}
 	_ = store.New
 	_, _ = daemonclient.New("")
-	_ = http.ListenAndServe(*daemonAddr, server)
+	_ = runDaemon(newDaemonHTTPServer(*daemonAddr, server))
 	_ = startEmbeddedDaemon(persistentStore, planner, llmRegistry, sandboxExecutor, patchMode)
 	_ = daemonclient.New(baseURL, clientOptions...)
 	_ = tui.RunProgram(context.Background(), tuiConfig, daemonSession)

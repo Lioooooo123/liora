@@ -229,8 +229,12 @@ func TestParentTaskUsesTaskOutputAndTaskStopThroughNativeToolLoop(t *testing.T) 
 	if child.Origin != taskpkg.OriginSubagent || child.SubagentName != "worker" || child.Role != "implementation" {
 		t.Fatalf("unexpected child metadata %#v", child)
 	}
-	if child.Status != taskpkg.StatusCancelled {
-		t.Fatalf("expected parent TaskStop to cancel child, got %#v", child)
+	// The parent's TaskOutput waits for the child, which completes on its own
+	// ("child output ready"). By the time TaskStop runs the child is already
+	// terminal, so stopping it is a no-op: a completed status must never be
+	// overwritten to cancelled (guarded by UpdateStatus/Cancel).
+	if child.Status != taskpkg.StatusCompleted {
+		t.Fatalf("expected child to stay completed after a late TaskStop, got %#v", child)
 	}
 
 	parentEvents, err := repo.Events(t.Context(), parent.ID, 0)
@@ -248,8 +252,8 @@ func TestParentTaskUsesTaskOutputAndTaskStopThroughNativeToolLoop(t *testing.T) 
 	if !eventToolOutputContains(parentEvents, "TaskOutput", "child output ready") {
 		t.Fatalf("expected parent TaskOutput to observe child output, got %#v", parentEvents)
 	}
-	if !eventToolOutputContains(parentEvents, "TaskStop", "status: cancelled") {
-		t.Fatalf("expected parent TaskStop to report cancelled child, got %#v", parentEvents)
+	if !eventToolOutputContains(parentEvents, "TaskStop", "status: completed") {
+		t.Fatalf("expected parent TaskStop to report the child's terminal status, got %#v", parentEvents)
 	}
 	if !eventPayloadContains(parentEvents, taskpkg.EventSummary, "parent saw child output") {
 		t.Fatalf("expected parent final summary to mention child output, got %#v", parentEvents)
@@ -262,8 +266,13 @@ func TestParentTaskUsesTaskOutputAndTaskStopThroughNativeToolLoop(t *testing.T) 
 	if !eventPayloadContains(childEvents, taskpkg.EventSummary, "child output ready") {
 		t.Fatalf("expected child summary output, got %#v", childEvents)
 	}
-	if !hasEvent(childEvents, taskpkg.EventCancelled) {
-		t.Fatalf("expected child cancellation event, got %#v", childEvents)
+	// The child finished before the late TaskStop, so it records completion, not
+	// cancellation.
+	if !hasEvent(childEvents, taskpkg.EventCompleted) {
+		t.Fatalf("expected child completion event, got %#v", childEvents)
+	}
+	if hasEvent(childEvents, taskpkg.EventCancelled) {
+		t.Fatalf("late TaskStop must not append a cancellation event to a completed child, got %#v", childEvents)
 	}
 }
 

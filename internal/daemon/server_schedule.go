@@ -67,7 +67,8 @@ func (s *server) handleSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/v1/schedules/")
-	parts := strings.Split(strings.Trim(path, "/"), "/")
+	path = strings.TrimSuffix(path, "/")
+	parts := strings.Split(path, "/")
 	if len(parts) == 1 && parts[0] != "" {
 		s.handleScheduleResource(w, r, parts[0])
 		return

@@ -2,6 +2,7 @@ package task
 
 import (
 	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,11 +17,14 @@ func TestRepositoryChildTaskScopeIsBoundedByParent(t *testing.T) {
 	defer db.Close()
 
 	repo := NewRepository(db)
+	workspace := t.TempDir()
+	shared := t.TempDir()
+	src := filepath.Join(workspace, "src")
 	parent, err := repo.Create(t.Context(), CreateRequest{
-		Workspace: "/repo",
+		Workspace: workspace,
 		Prompt:    "parent task",
 		Scope: TaskScope{
-			Paths:           []string{"/repo", "/tmp/shared"},
+			Paths:           []string{workspace, shared},
 			NetworkHosts:    []string{"api.internal"},
 			MCPServers:      []string{"filesystem"},
 			MCPTools:        []string{"filesystem.read"},
@@ -32,11 +36,11 @@ func TestRepositoryChildTaskScopeIsBoundedByParent(t *testing.T) {
 	}
 
 	child, err := repo.Create(t.Context(), CreateRequest{
-		Workspace:    "/repo",
+		Workspace:    workspace,
 		Prompt:       "child task",
 		ParentTaskID: parent.ID,
 		Scope: TaskScope{
-			Paths:           []string{"/repo/src"},
+			Paths:           []string{src},
 			NetworkHosts:    []string{"api.internal"},
 			MCPServers:      []string{"filesystem"},
 			MCPTools:        []string{"filesystem.read"},
@@ -52,7 +56,7 @@ func TestRepositoryChildTaskScopeIsBoundedByParent(t *testing.T) {
 	if len(child.ApprovalGrants) != 0 {
 		t.Fatalf("child must not inherit approval grants, got %#v", child.ApprovalGrants)
 	}
-	if got := child.Scope.Paths; len(got) != 1 || got[0] != "/repo/src" {
+	if got := child.Scope.Paths; len(got) != 1 || got[0] != src {
 		t.Fatalf("unexpected child path scope %#v", child.Scope)
 	}
 
@@ -74,11 +78,13 @@ func TestRepositoryChildTaskDefaultsToParentPathScopeOnly(t *testing.T) {
 	defer db.Close()
 
 	repo := NewRepository(db)
+	workspace := t.TempDir()
+	shared := t.TempDir()
 	parent, err := repo.Create(t.Context(), CreateRequest{
-		Workspace: "/repo",
+		Workspace: workspace,
 		Prompt:    "parent task",
 		Scope: TaskScope{
-			Paths:           []string{"/repo", "/tmp/shared"},
+			Paths:           []string{workspace, shared},
 			NetworkHosts:    []string{"api.internal"},
 			MCPServers:      []string{"filesystem"},
 			MCPTools:        []string{"filesystem.read"},
@@ -90,7 +96,7 @@ func TestRepositoryChildTaskDefaultsToParentPathScopeOnly(t *testing.T) {
 	}
 
 	child, err := repo.Create(t.Context(), CreateRequest{
-		Workspace:    "/repo",
+		Workspace:    workspace,
 		Prompt:       "child task",
 		ParentTaskID: parent.ID,
 	})
@@ -100,7 +106,7 @@ func TestRepositoryChildTaskDefaultsToParentPathScopeOnly(t *testing.T) {
 	if !child.InheritedScopeFromParent {
 		t.Fatalf("expected child to record inherited scope, got %#v", child)
 	}
-	if got := child.Scope.Paths; len(got) != 2 || got[0] != "/repo" || got[1] != "/tmp/shared" {
+	if got := child.Scope.Paths; len(got) != 2 || got[0] != workspace || got[1] != shared {
 		t.Fatalf("expected child to default to parent paths only, got %#v", child.Scope)
 	}
 	if len(child.Scope.NetworkHosts) != 0 || len(child.Scope.MCPServers) != 0 || len(child.Scope.MCPTools) != 0 || len(child.Scope.ApprovalActions) != 0 {
@@ -111,7 +117,7 @@ func TestRepositoryChildTaskDefaultsToParentPathScopeOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Scope.Paths) != 2 || got.Scope.Paths[0] != "/repo" || got.Scope.Paths[1] != "/tmp/shared" {
+	if len(got.Scope.Paths) != 2 || got.Scope.Paths[0] != workspace || got.Scope.Paths[1] != shared {
 		t.Fatalf("expected persisted child path defaults, got %#v", got.Scope)
 	}
 	if len(got.Scope.NetworkHosts) != 0 || len(got.Scope.MCPServers) != 0 || len(got.Scope.MCPTools) != 0 || len(got.Scope.ApprovalActions) != 0 {
@@ -127,8 +133,9 @@ func TestRepositoryChildTaskInheritsParentModelUnlessOverridden(t *testing.T) {
 	defer db.Close()
 
 	repo := NewRepository(db)
+	workspace := t.TempDir()
 	parent, err := repo.Create(t.Context(), CreateRequest{
-		Workspace: "/repo",
+		Workspace: workspace,
 		Prompt:    "parent task",
 		ModelConfig: &ModelConfig{
 			Provider: "openai-chat",
@@ -141,7 +148,7 @@ func TestRepositoryChildTaskInheritsParentModelUnlessOverridden(t *testing.T) {
 		t.Fatal(err)
 	}
 	child, err := repo.Create(t.Context(), CreateRequest{
-		Workspace:    "/repo",
+		Workspace:    workspace,
 		Prompt:       "child task",
 		ParentTaskID: parent.ID,
 	})
@@ -152,7 +159,7 @@ func TestRepositoryChildTaskInheritsParentModelUnlessOverridden(t *testing.T) {
 		t.Fatalf("expected child to inherit parent model config, got %#v", child.ModelConfig)
 	}
 	override, err := repo.Create(t.Context(), CreateRequest{
-		Workspace:    "/repo",
+		Workspace:    workspace,
 		Prompt:       "override child task",
 		ParentTaskID: parent.ID,
 		ModelConfig: &ModelConfig{
@@ -178,11 +185,13 @@ func TestRepositoryRejectsChildScopeEscalation(t *testing.T) {
 	defer db.Close()
 
 	repo := NewRepository(db)
+	workspace := t.TempDir()
+	otherWorkspace := t.TempDir()
 	parent, err := repo.Create(t.Context(), CreateRequest{
-		Workspace: "/repo",
+		Workspace: workspace,
 		Prompt:    "parent task",
 		Scope: TaskScope{
-			Paths:           []string{"/repo"},
+			Paths:           []string{workspace},
 			NetworkHosts:    []string{"api.internal"},
 			MCPServers:      []string{"filesystem"},
 			MCPTools:        []string{"filesystem.read"},
@@ -200,28 +209,28 @@ func TestRepositoryRejectsChildScopeEscalation(t *testing.T) {
 	}{
 		{
 			name: "path outside parent",
-			request: CreateRequest{Workspace: "/repo", Prompt: "child", ParentTaskID: parent.ID, Scope: TaskScope{
+			request: CreateRequest{Workspace: workspace, Prompt: "child", ParentTaskID: parent.ID, Scope: TaskScope{
 				Paths: []string{"/etc"},
 			}},
 			want: "outside parent scope",
 		},
 		{
 			name: "network outside parent",
-			request: CreateRequest{Workspace: "/repo", Prompt: "child", ParentTaskID: parent.ID, Scope: TaskScope{
+			request: CreateRequest{Workspace: workspace, Prompt: "child", ParentTaskID: parent.ID, Scope: TaskScope{
 				NetworkHosts: []string{"public.example.com"},
 			}},
 			want: "outside parent scope",
 		},
 		{
 			name: "mcp tool outside parent",
-			request: CreateRequest{Workspace: "/repo", Prompt: "child", ParentTaskID: parent.ID, Scope: TaskScope{
+			request: CreateRequest{Workspace: workspace, Prompt: "child", ParentTaskID: parent.ID, Scope: TaskScope{
 				MCPTools: []string{"filesystem.write"},
 			}},
 			want: "outside parent scope",
 		},
 		{
 			name: "approval action outside parent",
-			request: CreateRequest{Workspace: "/repo", Prompt: "child", ParentTaskID: parent.ID, Scope: TaskScope{
+			request: CreateRequest{Workspace: workspace, Prompt: "child", ParentTaskID: parent.ID, Scope: TaskScope{
 				ApprovalActions: []string{"push"},
 			}},
 			want: "outside parent scope",
@@ -229,7 +238,7 @@ func TestRepositoryRejectsChildScopeEscalation(t *testing.T) {
 		{
 			name: "child auto approves parent",
 			request: CreateRequest{
-				Workspace:         "/repo",
+				Workspace:         workspace,
 				Prompt:            "child",
 				ParentTaskID:      parent.ID,
 				AutoApproveParent: true,
@@ -239,7 +248,7 @@ func TestRepositoryRejectsChildScopeEscalation(t *testing.T) {
 		{
 			name: "child carries approval grants",
 			request: CreateRequest{
-				Workspace:      "/repo",
+				Workspace:      workspace,
 				Prompt:         "child",
 				ParentTaskID:   parent.ID,
 				ApprovalGrants: []string{"apply_patch"},
@@ -249,7 +258,7 @@ func TestRepositoryRejectsChildScopeEscalation(t *testing.T) {
 		{
 			name: "missing parent",
 			request: CreateRequest{
-				Workspace:    "/repo",
+				Workspace:    workspace,
 				Prompt:       "child",
 				ParentTaskID: "task_missing",
 			},
@@ -258,7 +267,7 @@ func TestRepositoryRejectsChildScopeEscalation(t *testing.T) {
 		{
 			name: "workspace outside parent",
 			request: CreateRequest{
-				Workspace:    "/other",
+				Workspace:    otherWorkspace,
 				Prompt:       "child",
 				ParentTaskID: parent.ID,
 			},
