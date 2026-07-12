@@ -12,7 +12,11 @@ func (c *Client) Generate(ctx context.Context, messages []Message) (string, erro
 	if strings.TrimSpace(c.config.Model) == "" {
 		return "", fmt.Errorf("LLM model is required")
 	}
-	switch NormalizeProvider(c.config.Provider) {
+	provider := NormalizeProvider(c.config.Provider)
+	if provider != ProviderOpenAICodex && strings.TrimSpace(c.config.APIKey) == "" {
+		return "", fmt.Errorf("LLM API key is required")
+	}
+	switch provider {
 	case ProviderOpenAICodex:
 		credential, err := c.resolveCredential(ctx)
 		if err != nil {
@@ -20,24 +24,12 @@ func (c *Client) Generate(ctx context.Context, messages []Message) (string, erro
 		}
 		return c.generateCodexResponses(ctx, messages, credential, nil)
 	case ProviderOpenAIChat, ProviderDeepSeek:
-		if strings.TrimSpace(c.config.APIKey) == "" {
-			return "", fmt.Errorf("LLM API key is required")
-		}
 		return c.generateOpenAIChat(ctx, messages)
 	case ProviderOpenAIResponses:
-		if strings.TrimSpace(c.config.APIKey) == "" {
-			return "", fmt.Errorf("LLM API key is required")
-		}
 		return c.generateOpenAIResponses(ctx, messages)
 	case ProviderAnthropic:
-		if strings.TrimSpace(c.config.APIKey) == "" {
-			return "", fmt.Errorf("LLM API key is required")
-		}
 		return c.generateAnthropic(ctx, messages)
 	case ProviderGemini:
-		if strings.TrimSpace(c.config.APIKey) == "" {
-			return "", fmt.Errorf("LLM API key is required")
-		}
 		return c.generateGemini(ctx, messages)
 	default:
 		return "", fmt.Errorf("unsupported LLM provider %q", c.config.Provider)

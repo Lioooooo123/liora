@@ -12,30 +12,57 @@ type Status struct {
 	ExpiresAt  time.Time
 }
 
+type LoginProvider interface {
+	Refresher
+	LoginBrowser(context.Context, func(string)) (OAuthCredential, error)
+	LoginDevice(context.Context, func(DeviceCodeInfo)) (OAuthCredential, error)
+}
+
 type Service struct {
-	store   *Store
-	manager *Manager
-	oauth   *CodexOAuth
+	store     *Store
+	manager   *Manager
+	providers map[string]LoginProvider
 }
 
-func NewService(store *Store, manager *Manager, oauth *CodexOAuth) *Service {
-	return &Service{store: store, manager: manager, oauth: oauth}
+func NewService(store *Store, manager *Manager) *Service {
+	return &Service{store: store, manager: manager, providers: map[string]LoginProvider{}}
 }
 
-func (s *Service) LoginBrowser(ctx context.Context, onAuthURL func(string)) error {
-	credential, err := s.oauth.LoginBrowser(ctx, onAuthURL)
+func (s *Service) Register(provider string, loginProvider LoginProvider) {
+	provider = normalizeProvider(provider)
+	if provider == "" || loginProvider == nil {
+		return
+	}
+	s.providers[provider] = loginProvider
+	if s.manager != nil {
+		s.manager.Register(provider, loginProvider)
+	}
+}
+
+func (s *Service) LoginBrowser(ctx context.Context, provider string, onAuthURL func(string)) error {
+	provider = normalizeProvider(provider)
+	loginProvider, ok := s.providers[provider]
+	if !ok {
+		return fmt.Errorf("auth provider %q is not registered", provider)
+	}
+	credential, err := loginProvider.LoginBrowser(ctx, onAuthURL)
 	if err != nil {
 		return err
 	}
-	return s.store.Save(ProviderOpenAICodex, credential)
+	return s.store.Save(provider, credential)
 }
 
-func (s *Service) LoginDevice(ctx context.Context, onDeviceCode func(DeviceCodeInfo)) error {
-	credential, err := s.oauth.LoginDevice(ctx, onDeviceCode)
+func (s *Service) LoginDevice(ctx context.Context, provider string, onDeviceCode func(DeviceCodeInfo)) error {
+	provider = normalizeProvider(provider)
+	loginProvider, ok := s.providers[provider]
+	if !ok {
+		return fmt.Errorf("auth provider %q is not registered", provider)
+	}
+	credential, err := loginProvider.LoginDevice(ctx, onDeviceCode)
 	if err != nil {
 		return err
 	}
-	return s.store.Save(ProviderOpenAICodex, credential)
+	return s.store.Save(provider, credential)
 }
 
 func (s *Service) Status(provider string) (Status, error) {

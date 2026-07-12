@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	authpkg "github.com/Lioooooo123/liora/internal/auth"
 	hookpkg "github.com/Lioooooo123/liora/internal/hook"
 	"github.com/Lioooooo123/liora/internal/llm"
 	"github.com/Lioooooo123/liora/internal/store"
@@ -31,7 +32,7 @@ type doctorReportContext struct {
 	Schema    *store.SchemaReport
 	Store     *store.Store
 	Runtime   *doctorRuntimeStatus
-	CodexAuth string
+	CodexAuth *authpkg.Status
 }
 
 type doctorRuntimeStatus struct {
@@ -51,7 +52,7 @@ func doctorReport(config llm.Config, reportContext doctorReportContext) (string,
 	keyStatus := "missing"
 	if strings.TrimSpace(resolved.APIKey) != "" {
 		keyStatus = "configured"
-	} else if resolved.Provider == llm.ProviderOpenAICodex && (reportContext.CodexAuth == "configured" || reportContext.CodexAuth == "expired") {
+	} else if resolved.Provider == llm.ProviderOpenAICodex && reportContext.CodexAuth != nil && reportContext.CodexAuth.Configured {
 		keyStatus = "oauth"
 	}
 	capability := resolved.Capability
@@ -78,7 +79,7 @@ func doctorReport(config llm.Config, reportContext doctorReportContext) (string,
 		"base_url: "+redactDiagnosticURL(resolved.BaseURL),
 		"api_key: "+keyStatus,
 		"credential.api_key: "+keyStatus+" redacted=true",
-		"auth.openai-codex: "+emptyDiagnosticValue(reportContext.CodexAuth),
+		"auth.openai-codex: "+codexAuthDiagnosticState(reportContext.CodexAuth),
 		"tools: "+toolsStatus,
 	)
 	lines = append(lines, renderModelCapability(capability)...)
@@ -91,6 +92,19 @@ func doctorReport(config llm.Config, reportContext doctorReportContext) (string,
 		lines = append(lines, renderSchemaReport(*reportContext.Schema)...)
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+func codexAuthDiagnosticState(status *authpkg.Status) string {
+	if status == nil {
+		return "unavailable"
+	}
+	if !status.Configured {
+		return "missing"
+	}
+	if status.Expired {
+		return "expired"
+	}
+	return "configured"
 }
 
 func renderModelCapability(capability llm.ModelCapability) []string {

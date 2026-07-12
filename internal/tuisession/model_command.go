@@ -44,6 +44,22 @@ func (s *DaemonSubmitter) showCurrentModel(ctx context.Context) (string, bool, e
 	return strings.Join(lines, "\n"), true, nil
 }
 
+// SelectModel ensures a fresh TUI has a thread before persisting a provider/model choice.
+func (s *DaemonSubmitter) SelectModel(ctx context.Context, provider string, model string) (string, error) {
+	if s.currentSessionID() == "" {
+		thread, err := s.client.CreateConversationThread(ctx, store.CreateConversationThreadRequest{
+			Workspace: s.workspace,
+			Title:     "New session",
+		})
+		if err != nil {
+			return "", err
+		}
+		s.rememberSession(thread.ID)
+	}
+	output, _, err := s.setCurrentModel(ctx, strings.TrimSpace(provider)+" "+strings.TrimSpace(model))
+	return output, err
+}
+
 func (s *DaemonSubmitter) handleModel(ctx context.Context, args string) (string, bool, error) {
 	command, rest, _ := strings.Cut(strings.TrimSpace(args), " ")
 	switch strings.TrimSpace(command) {

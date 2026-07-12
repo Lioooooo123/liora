@@ -13,7 +13,11 @@ func (c *Client) GenerateStream(ctx context.Context, messages []Message, onDelta
 	if strings.TrimSpace(c.config.Model) == "" {
 		return "", fmt.Errorf("LLM model is required")
 	}
-	switch NormalizeProvider(c.config.Provider) {
+	provider := NormalizeProvider(c.config.Provider)
+	if provider != ProviderOpenAICodex && strings.TrimSpace(c.config.APIKey) == "" {
+		return "", fmt.Errorf("LLM API key is required")
+	}
+	switch provider {
 	case ProviderOpenAICodex:
 		credential, err := c.resolveCredential(ctx)
 		if err != nil {
@@ -21,9 +25,6 @@ func (c *Client) GenerateStream(ctx context.Context, messages []Message, onDelta
 		}
 		return c.generateCodexResponses(ctx, messages, credential, onDelta)
 	case ProviderOpenAIChat, ProviderDeepSeek:
-		if strings.TrimSpace(c.config.APIKey) == "" {
-			return "", fmt.Errorf("LLM API key is required")
-		}
 		return c.generateOpenAIChatStream(ctx, messages, onDelta)
 	default:
 		text, err := c.Generate(ctx, messages)

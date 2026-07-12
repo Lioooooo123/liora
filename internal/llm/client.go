@@ -15,6 +15,7 @@ const (
 	ProviderDeepSeek        = "deepseek"
 	ProviderAnthropic       = "anthropic"
 	ProviderGemini          = "gemini"
+	DefaultOpenAICodexModel = "gpt-5.4"
 )
 
 type Message struct {
@@ -128,7 +129,7 @@ func ResolveConfig(config Config) (Config, error) {
 	}
 	config.Profile = strings.TrimSpace(config.Profile)
 	if strings.TrimSpace(config.Model) == "" && config.Provider == ProviderOpenAICodex {
-		config.Model = "gpt-5.4"
+		config.Model = DefaultOpenAICodexModel
 	}
 	config.Capability = ProviderCapability(config.Provider, config.Model)
 	config.ToolUse = config.Capability.NativeToolUse

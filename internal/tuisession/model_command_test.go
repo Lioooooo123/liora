@@ -106,3 +106,37 @@ func TestDaemonSubmitterModelProfilesListsAndSelectsConfiguredCatalog(t *testing
 		t.Fatalf("unexpected persisted catalog model config %#v", config)
 	}
 }
+
+func TestDaemonSubmitterSelectModelCreatesThreadWhenSessionIsFresh(t *testing.T) {
+	root := t.TempDir()
+	persistentStore := store.New(t.TempDir())
+	db, err := persistentStore.OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := taskpkg.NewRepository(db)
+	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo, Store: persistentStore}))
+	defer server.Close()
+	client, err := daemonclient.New(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submitter := NewDaemonSubmitter(client, root, true, "", true)
+
+	output, err := submitter.SelectModel(t.Context(), "openai-codex", "gpt-5.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := submitter.currentSessionID()
+	if threadID == "" || !strings.Contains(output, "Provider: openai-codex") || !strings.Contains(output, "Model: gpt-5.4") {
+		t.Fatalf("thread=%q output=%q", threadID, output)
+	}
+	config, err := client.GetThreadModelConfig(t.Context(), threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Provider != "openai-codex" || config.Model != "gpt-5.4" {
+		t.Fatalf("unexpected thread model %#v", config)
+	}
+}

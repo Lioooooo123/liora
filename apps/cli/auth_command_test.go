@@ -3,27 +3,54 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	authpkg "github.com/Lioooooo123/liora/internal/auth"
-	"github.com/Lioooooo123/liora/internal/tui"
 )
 
 type fakeCodexAuthenticator struct {
 	configured bool
 	method     string
 	loggedOut  bool
+	browserErr error
 }
 
-func (f *fakeCodexAuthenticator) LoginBrowser(_ context.Context, onURL func(string)) error {
+type fakeModelSelector struct {
+	provider string
+	model    string
+}
+
+func (f *fakeModelSelector) SelectModel(_ context.Context, provider string, model string) (string, error) {
+	f.provider = provider
+	f.model = model
+	return "model updated", nil
+}
+
+func (f *fakeCodexAuthenticator) LoginBrowser(_ context.Context, _ string, onURL func(string)) error {
 	f.method = "browser"
-	onURL("https://auth.example/authorize")
+	if f.browserErr != nil {
+		return f.browserErr
+	}
+	if onURL != nil {
+		onURL("https://auth.example/authorize")
+	}
 	f.configured = true
 	return nil
 }
 
-func (f *fakeCodexAuthenticator) LoginDevice(_ context.Context, onCode func(authpkg.DeviceCodeInfo)) error {
+func TestTUIAuthLoginReportsDeviceCodeFallbackWhenBrowserCannotOpen(t *testing.T) {
+	service := &fakeCodexAuthenticator{browserErr: errors.New("browser opener unavailable")}
+	handler := codexAuthCommand{service: service}
+
+	_, handled, err := handler.HandleCommand(t.Context(), "/login codex")
+	if !handled || err == nil || !strings.Contains(err.Error(), "liora auth login codex --device") {
+		t.Fatalf("handled=%t err=%v", handled, err)
+	}
+}
+
+func (f *fakeCodexAuthenticator) LoginDevice(_ context.Context, _ string, onCode func(authpkg.DeviceCodeInfo)) error {
 	f.method = "device"
 	onCode(authpkg.DeviceCodeInfo{UserCode: "ABCD-EFGH", VerificationURL: "https://auth.example/device"})
 	f.configured = true
@@ -67,19 +94,15 @@ func TestCLIAuthDeviceLoginStatusAndLogout(t *testing.T) {
 
 func TestTUIAuthLoginUsesBrowserAndSwitchesCurrentThreadToCodex(t *testing.T) {
 	service := &fakeCodexAuthenticator{}
-	modelCommand := ""
-	models := tui.CommandHandlerFunc(func(_ context.Context, line string) (string, bool, error) {
-		modelCommand = line
-		return "model updated", true, nil
-	})
+	models := &fakeModelSelector{}
 	handler := codexAuthCommand{service: service, models: models}
 
 	result, handled, err := handler.HandleCommand(t.Context(), "/login codex")
 	if err != nil || !handled {
 		t.Fatalf("handled=%t err=%v", handled, err)
 	}
-	if service.method != "browser" || modelCommand != "/model set openai-codex gpt-5.4" {
-		t.Fatalf("method=%q model_command=%q", service.method, modelCommand)
+	if service.method != "browser" || models.provider != "openai-codex" || models.model != "gpt-5.4" {
+		t.Fatalf("method=%q provider=%q model=%q", service.method, models.provider, models.model)
 	}
 	if !strings.Contains(result, "Logged in to OpenAI Codex") || !strings.Contains(result, "model updated") {
 		t.Fatalf("unexpected result %q", result)

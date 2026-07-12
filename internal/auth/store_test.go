@@ -100,6 +100,38 @@ type slowRefresher struct {
 	next  OAuthCredential
 }
 
+type fakeLoginProvider struct {
+	credential OAuthCredential
+}
+
+func (f *fakeLoginProvider) LoginBrowser(context.Context, func(string)) (OAuthCredential, error) {
+	return f.credential, nil
+}
+
+func (f *fakeLoginProvider) LoginDevice(context.Context, func(DeviceCodeInfo)) (OAuthCredential, error) {
+	return f.credential, nil
+}
+
+func (f *fakeLoginProvider) Refresh(context.Context, string) (OAuthCredential, error) {
+	return f.credential, nil
+}
+
+func TestServiceRegistersLoginProviderWithoutCodexHardCoding(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "auth.json"))
+	manager := NewManager(store, ManagerOptions{})
+	service := NewService(store, manager)
+	want := OAuthCredential{Access: "access", Refresh: "refresh", ExpiresAt: time.Unix(1_900_000_000, 0).UTC(), AccountID: "account"}
+	service.Register("future-provider", &fakeLoginProvider{credential: want})
+
+	if err := service.LoginBrowser(context.Background(), "future-provider", nil); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := store.Load("future-provider")
+	if err != nil || !ok || got != want {
+		t.Fatalf("generic provider was not persisted ok=%t got=%#v err=%v", ok, got, err)
+	}
+}
+
 func (s *slowRefresher) Refresh(_ context.Context, _ string) (OAuthCredential, error) {
 	s.calls.Add(1)
 	time.Sleep(75 * time.Millisecond)

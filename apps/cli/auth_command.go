@@ -7,14 +7,18 @@ import (
 	"strings"
 
 	authpkg "github.com/Lioooooo123/liora/internal/auth"
-	"github.com/Lioooooo123/liora/internal/tui"
+	"github.com/Lioooooo123/liora/internal/llm"
 )
 
 type codexAuthenticator interface {
-	LoginBrowser(context.Context, func(string)) error
-	LoginDevice(context.Context, func(authpkg.DeviceCodeInfo)) error
+	LoginBrowser(context.Context, string, func(string)) error
+	LoginDevice(context.Context, string, func(authpkg.DeviceCodeInfo)) error
 	Status(string) (authpkg.Status, error)
 	Logout(string) error
+}
+
+type modelSelector interface {
+	SelectModel(context.Context, string, string) (string, error)
 }
 
 func handleAuthCommand(ctx context.Context, args []string, service codexAuthenticator, output io.Writer) (bool, error) {
@@ -43,14 +47,14 @@ func handleAuthCommand(ctx context.Context, args []string, service codexAuthenti
 	case "login":
 		device := containsArg(args[3:], "--device")
 		if device {
-			err := service.LoginDevice(ctx, func(info authpkg.DeviceCodeInfo) {
+			err := service.LoginDevice(ctx, authpkg.ProviderOpenAICodex, func(info authpkg.DeviceCodeInfo) {
 				fmt.Fprintf(output, "Open %s and enter code %s\n", info.VerificationURL, info.UserCode)
 			})
 			if err != nil {
 				return true, err
 			}
 		} else {
-			err := service.LoginBrowser(ctx, func(url string) {
+			err := service.LoginBrowser(ctx, authpkg.ProviderOpenAICodex, func(url string) {
 				fmt.Fprintln(output, "Opening browser for OpenAI Codex login:")
 				fmt.Fprintln(output, url)
 			})
@@ -73,7 +77,7 @@ func handleAuthCommand(ctx context.Context, args []string, service codexAuthenti
 
 type codexAuthCommand struct {
 	service codexAuthenticator
-	models  tui.CommandHandler
+	models  modelSelector
 }
 
 func (c codexAuthCommand) HandleCommand(ctx context.Context, line string) (string, bool, error) {
@@ -88,16 +92,16 @@ func (c codexAuthCommand) HandleCommand(ctx context.Context, line string) (strin
 		}
 		return "Logged out of OpenAI Codex.", true, nil
 	case line == "/login" || line == "/login codex" || line == "/login openai-codex":
-		if err := c.service.LoginBrowser(ctx, func(string) {}); err != nil {
-			return "", true, err
+		if err := c.service.LoginBrowser(ctx, authpkg.ProviderOpenAICodex, nil); err != nil {
+			return "", true, fmt.Errorf("%w; for headless login run `liora auth login codex --device` in another terminal", err)
 		}
 		result := "Logged in to OpenAI Codex."
 		if c.models != nil {
-			modelResult, handled, err := c.models.HandleCommand(ctx, "/model set openai-codex gpt-5.4")
+			modelResult, err := c.models.SelectModel(ctx, llm.ProviderOpenAICodex, llm.DefaultOpenAICodexModel)
 			if err != nil {
 				return "", true, err
 			}
-			if handled && strings.TrimSpace(modelResult) != "" {
+			if strings.TrimSpace(modelResult) != "" {
 				result += "\n" + modelResult
 			}
 		}
@@ -117,17 +121,11 @@ func formatCodexAuthStatus(status authpkg.Status) string {
 	return "OpenAI Codex authentication: configured"
 }
 
-func codexAuthReport(status authpkg.Status, err error) string {
+func codexAuthReport(status authpkg.Status, err error) *authpkg.Status {
 	if err != nil {
-		return "unavailable"
+		return nil
 	}
-	if !status.Configured {
-		return "missing"
-	}
-	if status.Expired {
-		return "expired"
-	}
-	return "configured"
+	return &status
 }
 
 func isCodexProvider(provider string) bool {

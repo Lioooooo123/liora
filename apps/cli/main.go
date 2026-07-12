@@ -47,8 +47,8 @@ func main() {
 	}
 	codexOAuth := authpkg.NewCodexOAuth(authpkg.CodexOAuthOptions{})
 	authManager := authpkg.NewManager(authStore, authpkg.ManagerOptions{})
-	authManager.Register(authpkg.ProviderOpenAICodex, codexOAuth)
-	authService := authpkg.NewService(authStore, authManager, codexOAuth)
+	authService := authpkg.NewService(authStore, authManager)
+	authService.Register(authpkg.ProviderOpenAICodex, codexOAuth)
 	codexStatus, codexStatusErr := authService.Status(authpkg.ProviderOpenAICodex)
 
 	defaultProvider := getenvAny("LIORA_LLM_PROVIDER", "OPENAI_PROVIDER", "")
@@ -56,7 +56,7 @@ func main() {
 	defaultAPIKey := getenvAny("LIORA_LLM_API_KEY", "OPENAI_API_KEY", "")
 	if defaultProvider == "" && defaultModel == "" && defaultAPIKey == "" && codexStatusErr == nil && codexStatus.Configured {
 		defaultProvider = llm.ProviderOpenAICodex
-		defaultModel = "gpt-5.4"
+		defaultModel = llm.DefaultOpenAICodexModel
 	}
 
 	workspacePath := flag.String("workspace", ".", "workspace directory")
@@ -80,7 +80,7 @@ func main() {
 	versionFlag := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	seenFlags := parsedFlagNames()
-	if shouldIgnoreLegacyBaseURL(*llmProvider, seenFlags["llm-provider"], seenFlags["llm-base-url"]) {
+	if shouldIgnoreLegacyBaseURL(*llmProvider, seenFlags["llm-base-url"]) {
 		*llmBaseURL = ""
 	}
 	if *versionFlag {
@@ -560,14 +560,13 @@ func interactiveStartFresh(sessionID string, resumeLatest bool, forceNew bool) b
 	return !resumeLatest
 }
 
-func shouldIgnoreLegacyBaseURL(provider string, providerFlagSet bool, baseURLFlagSet bool) bool {
+func shouldIgnoreLegacyBaseURL(provider string, baseURLFlagSet bool) bool {
 	if baseURLFlagSet || strings.TrimSpace(os.Getenv("LIORA_LLM_BASE_URL")) != "" {
 		return false
 	}
 	if strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")) == "" {
 		return false
 	}
-	_ = providerFlagSet
 	return llm.NormalizeProvider(provider) != llm.ProviderOpenAIChat
 }
 
