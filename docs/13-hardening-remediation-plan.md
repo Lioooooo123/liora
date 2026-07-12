@@ -197,8 +197,9 @@ to `/` lets reads/writes/patches escape, contradicting README "防止路径穿�
 ### Task 2.2: Validate the task workspace path (H2)
 
 `Repository.Create` (`internal/task/store.go:73`) only rejects an empty workspace. Require an
-absolute, cleaned, existing directory; resolve symlinks on the root. (A configurable allowlist
-root is deferred — this closes accidental/relative escapes without breaking "any project dir".)
+absolute, cleaned, existing directory. `os.Stat` must follow and validate a workspace-root
+symlink, while the caller's cleaned spelling remains the shared workspace identity used by task,
+session, memory, and rule records. (A configurable allowlist root is deferred.)
 
 **Files:** Modify `internal/task/store.go:73-76`; Test `internal/task/store_test.go`
 
@@ -206,8 +207,9 @@ root is deferred — this closes accidental/relative escapes without breaking "a
   and `TestCreateRejectsMissingWorkspace` (nonexistent dir → error).
 - [x] **Step 2: Run** → FAIL.
 - [x] **Step 3: Implement** — require `filepath.IsAbs(workspace)`; `filepath.Clean`; `os.Stat`
-  must be a directory. Return a clear error otherwise. (Tests that pass `t.TempDir()` already
-  satisfy this; fix any that pass fake paths to use real temp dirs.)
+  must succeed and report a directory. Return a clear error otherwise. Preserve the cleaned
+  spelling so all persistence layers continue to use the same workspace identity. (Tests that
+  pass `t.TempDir()` already satisfy this; fix fake or missing fixture paths to use real dirs.)
 - [x] **Step 4: Run** `go test ./internal/task/ ./internal/daemon/` → PASS.
 - [x] **Step 5: Commit** `fix(task): require absolute existing workspace directory`.
 

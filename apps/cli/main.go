@@ -291,12 +291,21 @@ func main() {
 // protection. It deliberately leaves ReadTimeout/WriteTimeout unset: the daemon
 // serves long-lived SSE streams, and a write deadline would truncate them.
 func newDaemonHTTPServer(addr string, handler http.Handler) *http.Server {
-	return &http.Server{
+	serverCtx, cancelServer := context.WithCancel(context.Background())
+	server := &http.Server{
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
+		BaseContext: func(net.Listener) context.Context {
+			return serverCtx
+		},
 	}
+	// Shutdown does not cancel active request contexts by itself. Cancelling the
+	// base context lets long-lived SSE handlers exit so graceful shutdown can
+	// actually drain instead of timing out and forcing os.Exit.
+	server.RegisterOnShutdown(cancelServer)
+	return server
 }
 
 // runDaemon serves until the process receives SIGINT/SIGTERM, then drains

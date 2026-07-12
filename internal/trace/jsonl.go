@@ -16,6 +16,12 @@ func WriteJSONL(path string, events []Event) error {
 	if err != nil {
 		return err
 	}
+	// OpenFile's mode applies only when creating a file. Tighten an existing
+	// trace as well, including files produced by older versions with mode 0644.
+	if err := file.Chmod(0o600); err != nil {
+		file.Close()
+		return err
+	}
 	defer file.Close()
 
 	encoder := json.NewEncoder(file)

@@ -481,29 +481,40 @@ func (r *Repository) MarkExpiredTasksStale(ctx context.Context, now time.Time, r
 		if !ok || now.Before(expiresAt) {
 			continue
 		}
-		if err := r.markExpiredTaskStale(ctx, id, reason, expiresAt, now); err != nil {
+		changed, err := r.markExpiredTaskStale(ctx, id, reason, expiresAt, now)
+		if err != nil {
 			return marked, err
 		}
-		marked++
+		if changed {
+			marked++
+		}
 	}
 	return marked, nil
 }
 
-func (r *Repository) markExpiredTaskStale(ctx context.Context, id string, reason string, expiresAt time.Time, now time.Time) error {
+func (r *Repository) markExpiredTaskStale(ctx context.Context, id string, reason string, expiresAt time.Time, now time.Time) (bool, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		UPDATE tasks
 		SET status = ?, updated_at = ?, completed_at = COALESCE(?, completed_at)
-		WHERE id = ?
-	`, string(StatusStale), formatTime(now), formatTime(now), id); err != nil {
-		return err
+		WHERE id = ?`+terminalStatusGuard,
+		string(StatusStale), formatTime(now), formatTime(now), id)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if affected == 0 {
+		return false, nil
 	}
 	if err := r.resolveApprovalItemTx(ctx, tx, id, "expired", "system", now); err != nil {
-		return err
+		return false, err
 	}
 	if err := r.appendEventTx(ctx, tx, id, EventError, EventPayload{
 		Message:   reason,
@@ -512,13 +523,13 @@ func (r *Repository) markExpiredTaskStale(ctx context.Context, id string, reason
 		ExpiresAt: formatTime(expiresAt),
 		StaleAt:   formatTime(now),
 	}); err != nil {
-		return err
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return err
+		return false, err
 	}
 	r.notifyEventSubscribers(id)
-	return nil
+	return true, nil
 }
 
 func (r *Repository) latestExpiry(ctx context.Context, taskID string) (time.Time, bool, error) {

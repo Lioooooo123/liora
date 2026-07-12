@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,6 +29,62 @@ func TestNewDaemonHTTPServerSetsSSESafeTimeouts(t *testing.T) {
 	// The daemon streams SSE, so a write deadline would truncate long streams.
 	if server.WriteTimeout != 0 {
 		t.Fatalf("WriteTimeout must stay unset for SSE, got %v", server.WriteTimeout)
+	}
+}
+
+func TestDaemonHTTPServerShutdownCancelsStreamingHandlers(t *testing.T) {
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		close(started)
+		<-r.Context().Done()
+		close(stopped)
+	})
+	server := newDaemonHTTPServer("127.0.0.1:0", handler)
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	go func() { _ = server.Serve(listener) }()
+
+	response := make(chan *http.Response, 1)
+	requestErr := make(chan error, 1)
+	go func() {
+		resp, err := http.Get("http://" + listener.Addr().String())
+		if err != nil {
+			requestErr <- err
+			return
+		}
+		response <- resp
+	}()
+	select {
+	case <-started:
+	case err := <-requestErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("streaming handler did not start")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("Shutdown with active stream: %v", err)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("streaming handler context was not cancelled")
+	}
+	select {
+	case resp := <-response:
+		resp.Body.Close()
+	default:
 	}
 }
 

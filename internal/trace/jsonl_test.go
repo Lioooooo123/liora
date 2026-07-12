@@ -33,6 +33,26 @@ func TestWriteJSONLUsesOwnerOnlyPermissions(t *testing.T) {
 	}
 }
 
+func TestWriteJSONLTightensExistingFilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix file mode semantics differ on windows")
+	}
+	path := filepath.Join(t.TempDir(), "trace.jsonl")
+	if err := os.WriteFile(path, []byte("old secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteJSONL(path, []Event{{Tool: "read", Output: "new secret", Status: StatusOK}}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("rewritten trace mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
 func TestWriteJSONLStoresTraceEvents(t *testing.T) {
 	events := []Event{
 		{Tool: "read", Input: "app.txt", Output: "hello", Status: StatusOK},

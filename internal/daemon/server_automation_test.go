@@ -1237,6 +1237,14 @@ func TestServerRestartWorkbenchListsBackgroundTasksAndOutputs(t *testing.T) {
 	if err := repo.AppendEvent(t.Context(), completed.ID, taskpkg.EventArtifactReference, taskpkg.EventPayload{Tool: "run", Path: artifactURI, Message: "completed artifact output"}); err != nil {
 		t.Fatal(err)
 	}
+	for i := 0; i < 110; i++ {
+		if err := repo.AppendEvent(t.Context(), completed.ID, taskpkg.EventAssistantDelta, taskpkg.EventPayload{Message: "streaming"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.AppendEvent(t.Context(), completed.ID, taskpkg.EventToolResult, taskpkg.EventPayload{Tool: "run", Output: "completed output before restart", Status: "ok"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := repo.AppendEvent(t.Context(), lost.ID, taskpkg.EventToolResult, taskpkg.EventPayload{Tool: "run", Output: "lost output before restart", Status: "ok"}); err != nil {
 		t.Fatal(err)
 	}

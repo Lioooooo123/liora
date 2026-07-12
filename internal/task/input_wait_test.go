@@ -239,7 +239,7 @@ func TestTaskPromptRecordsPromptContextSnapshot(t *testing.T) {
 
 func TestPromptBudgetIncludesSystemUserWrapperAndContext(t *testing.T) {
 	root := t.TempDir()
-	workspace := root + "/repo"
+	workspace := newExistingWorkspace(t, root, "repo")
 	storeRoot := store.New(root)
 	if _, err := storeRoot.CreateMemoryWithOptions(store.CreateMemoryRequest{
 		Text:       "budget memory preference",

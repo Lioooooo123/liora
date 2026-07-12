@@ -144,46 +144,48 @@ func TestServerChildTaskScopeRequiresParentSubset(t *testing.T) {
 	repo := taskpkg.NewRepository(db)
 	server := httptest.NewServer(NewServer(Config{Repository: repo}))
 	defer server.Close()
+	workspace := t.TempDir()
+	src := filepath.Join(workspace, "src")
 
-	parent := postTaskForTest(t, server.URL, `{
-		"workspace":"/repo",
-		"prompt":"parent scope",
-		"scope":{
-			"paths":["/repo"],
+	parent := postTaskForTest(t, server.URL, fmt.Sprintf(`{
+			"workspace":%s,
+			"prompt":"parent scope",
+			"scope":{
+				"paths":[%s],
 			"network_hosts":["api.internal"],
 			"mcp_servers":["filesystem"],
 			"mcp_tools":["filesystem.read"],
 			"approval_actions":["apply_patch"]
 		}
-	}`)
+		}`, quote(workspace), quote(workspace)))
 	child := postTaskForTest(t, server.URL, fmt.Sprintf(`{
-		"workspace":"/repo",
+			"workspace":%s,
 		"prompt":"child scope",
 		"parent_task_id":%s,
 		"scope":{
-			"paths":["/repo/src"],
+				"paths":[%s],
 			"network_hosts":["api.internal"],
 			"mcp_servers":["filesystem"],
 			"mcp_tools":["filesystem.read"],
 			"approval_actions":["apply_patch"]
 		}
-	}`, quote(parent.Task.ID)))
+		}`, quote(workspace), quote(parent.Task.ID), quote(src)))
 	if child.Task.ParentTaskID != parent.Task.ID || !child.Task.InheritedScopeFromParent {
 		t.Fatalf("expected child to inherit bounded parent scope, got %#v", child.Task)
 	}
 	if len(child.Task.ApprovalGrants) != 0 {
 		t.Fatalf("child must not carry approval grants: %#v", child.Task.ApprovalGrants)
 	}
-	if got := child.Task.Scope.Paths; len(got) != 1 || got[0] != "/repo/src" {
+	if got := child.Task.Scope.Paths; len(got) != 1 || got[0] != src {
 		t.Fatalf("unexpected child scope %#v", child.Task.Scope)
 	}
 
 	resp, err := http.Post(server.URL+"/v1/tasks", "application/json", strings.NewReader(fmt.Sprintf(`{
-		"workspace":"/repo",
+			"workspace":%s,
 		"prompt":"escalate",
 		"parent_task_id":%s,
 		"scope":{"network_hosts":["public.example.com"]}
-	}`, quote(parent.Task.ID))))
+		}`, quote(workspace), quote(parent.Task.ID))))
 	if err != nil {
 		t.Fatal(err)
 	}

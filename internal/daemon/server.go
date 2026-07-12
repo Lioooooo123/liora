@@ -704,6 +704,14 @@ func (s *server) backgroundTaskOutput(ctx context.Context, task taskpkg.Task) (t
 		Title:     task.Title,
 		UpdatedAt: task.UpdatedAt,
 	}
+	if artifactEvent, ok, err := s.repo.LatestEventOfType(ctx, task.ID, taskpkg.EventArtifactReference); err != nil {
+		return taskpkg.BackgroundTaskOutput{}, err
+	} else if ok {
+		var payload taskpkg.EventPayload
+		if err := json.Unmarshal([]byte(artifactEvent.Payload), &payload); err == nil {
+			setArtifactReferenceIfMissing(&result, payload)
+		}
+	}
 	var lifecycleOutput string
 	for i := len(events) - 1; i >= 0; i-- {
 		var payload taskpkg.EventPayload
@@ -711,10 +719,7 @@ func (s *server) backgroundTaskOutput(ctx context.Context, task taskpkg.Task) (t
 			continue
 		}
 		if result.ArtifactURI == "" && events[i].Type == taskpkg.EventArtifactReference {
-			result.ArtifactURI = strings.TrimSpace(payload.Path)
-			if result.ArtifactURI != "" {
-				result.ArtifactTailHint = "/artifact " + result.ArtifactURI + " tail"
-			}
+			setArtifactReferenceIfMissing(&result, payload)
 		}
 		if result.Output == "" {
 			if output, lifecycle := backgroundOutputText(events[i].Type, payload); lifecycle {
@@ -730,6 +735,16 @@ func (s *server) backgroundTaskOutput(ctx context.Context, task taskpkg.Task) (t
 	result.Output = firstNonEmpty(result.Output, lifecycleOutput)
 	result.Output = truncateBackgroundOutput(result.Output)
 	return result, nil
+}
+
+func setArtifactReferenceIfMissing(result *taskpkg.BackgroundTaskOutput, payload taskpkg.EventPayload) {
+	if result.ArtifactURI != "" {
+		return
+	}
+	result.ArtifactURI = strings.TrimSpace(payload.Path)
+	if result.ArtifactURI != "" {
+		result.ArtifactTailHint = "/artifact " + result.ArtifactURI + " tail"
+	}
 }
 
 func backgroundOutputText(eventType taskpkg.EventType, payload taskpkg.EventPayload) (string, bool) {
@@ -1175,6 +1190,10 @@ func (s *server) handleTaskApproval(w http.ResponseWriter, r *http.Request, task
 			return
 		}
 		if err := s.repo.GrantApproval(r.Context(), taskID, request.DecidedBy); err != nil {
+			if errors.Is(err, taskpkg.ErrStatusTransitionRejected) {
+				writeError(w, http.StatusConflict, err)
+				return
+			}
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -1227,6 +1246,10 @@ func (s *server) handleTaskApproval(w http.ResponseWriter, r *http.Request, task
 			return
 		}
 		if err := s.repo.DenyApproval(r.Context(), taskID, request.Reason, request.DecidedBy); err != nil {
+			if errors.Is(err, taskpkg.ErrStatusTransitionRejected) {
+				writeError(w, http.StatusConflict, err)
+				return
+			}
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -1336,12 +1359,13 @@ func (s *server) startTaskAsync(taskID string) error {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				message := fmt.Sprintf("task runner panic: %v", recovered)
-				_ = s.repo.UpdateStatus(context.Background(), taskID, taskpkg.StatusFailed)
-				_ = s.repo.AppendEvent(context.Background(), taskID, taskpkg.EventError, taskpkg.EventPayload{
-					Message: message,
-					Status:  string(taskpkg.StatusFailed),
-					Reason:  "panic_recovered",
-				})
+				if err := s.repo.UpdateStatus(context.Background(), taskID, taskpkg.StatusFailed); err == nil {
+					_ = s.repo.AppendEvent(context.Background(), taskID, taskpkg.EventError, taskpkg.EventPayload{
+						Message: message,
+						Status:  string(taskpkg.StatusFailed),
+						Reason:  "panic_recovered",
+					})
+				}
 			}
 			s.unregisterRunning(taskID)
 			s.startNextQueuedAfter(taskID)

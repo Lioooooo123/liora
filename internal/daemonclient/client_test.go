@@ -131,12 +131,14 @@ func TestClientCreateTaskHonorsChildScopeBoundary(t *testing.T) {
 	server := httptest.NewServer(daemon.NewServer(daemon.Config{Repository: repo}))
 	defer server.Close()
 	client := newTestClient(t, server.URL)
+	workspace := t.TempDir()
+	src := filepath.Join(workspace, "src")
 
 	parent, err := client.CreateTask(t.Context(), task.CreateRequest{
-		Workspace: "/repo",
+		Workspace: workspace,
 		Prompt:    "parent scope",
 		Scope: task.TaskScope{
-			Paths:           []string{"/repo"},
+			Paths:           []string{workspace},
 			NetworkHosts:    []string{"api.internal"},
 			MCPServers:      []string{"filesystem"},
 			MCPTools:        []string{"filesystem.read"},
@@ -147,11 +149,11 @@ func TestClientCreateTaskHonorsChildScopeBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	child, err := client.CreateTask(t.Context(), task.CreateRequest{
-		Workspace:    "/repo",
+		Workspace:    workspace,
 		Prompt:       "child scope",
 		ParentTaskID: parent.Task.ID,
 		Scope: task.TaskScope{
-			Paths:        []string{"/repo/src"},
+			Paths:        []string{src},
 			NetworkHosts: []string{"api.internal"},
 		},
 	})
@@ -166,7 +168,7 @@ func TestClientCreateTaskHonorsChildScopeBoundary(t *testing.T) {
 	}
 
 	_, err = client.CreateTask(t.Context(), task.CreateRequest{
-		Workspace:    "/repo",
+		Workspace:    workspace,
 		Prompt:       "escalate",
 		ParentTaskID: parent.Task.ID,
 		Scope: task.TaskScope{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,15 @@ import (
 	"github.com/Lioooooo123/liora/internal/store"
 	"github.com/Lioooooo123/liora/internal/trust"
 )
+
+func newExistingWorkspace(t *testing.T, root string, name string) string {
+	t.Helper()
+	workspace := filepath.Join(root, name)
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return workspace
+}
 
 func TestCreateRejectsNonAbsoluteWorkspace(t *testing.T) {
 	db, err := store.New(t.TempDir()).OpenDB()
@@ -48,6 +58,42 @@ func TestCreateRejectsFileWorkspace(t *testing.T) {
 		Natural:   true,
 	}); err == nil {
 		t.Fatal("expected a file workspace to be rejected")
+	}
+}
+
+func TestCreateRejectsMissingWorkspace(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	missing := filepath.Join(t.TempDir(), "missing")
+	if _, err := repo.Create(t.Context(), CreateRequest{Workspace: missing, Prompt: "x"}); err == nil {
+		t.Fatal("expected a missing workspace to be rejected")
+	}
+}
+
+func TestCreateStoresCleanWorkspace(t *testing.T) {
+	db, err := store.New(t.TempDir()).OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	workspace := t.TempDir()
+	child := filepath.Join(workspace, "child")
+	if err := os.Mkdir(child, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	unclean := filepath.Join(child, "..")
+	created, err := repo.Create(t.Context(), CreateRequest{Workspace: unclean, Prompt: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Clean(unclean)
+	if created.Workspace != want {
+		t.Fatalf("workspace = %q, want clean %q", created.Workspace, want)
 	}
 }
 
@@ -1077,7 +1123,7 @@ func TestRepositoryContextEnvelopeBudgetBucketsRemainStableForEmptyAndTruncatedC
 
 func TestRepositoryContextEnvelopePacksRelevantSources(t *testing.T) {
 	root := t.TempDir()
-	workspace := root + "/repo-a"
+	workspace := newExistingWorkspace(t, root, "repo-a")
 	storeRoot := store.New(root)
 	for i := 0; i < 7; i++ {
 		if _, err := storeRoot.CreateMemoryWithOptions(store.CreateMemoryRequest{
@@ -1176,7 +1222,7 @@ func TestRepositoryContextEnvelopePacksRelevantSources(t *testing.T) {
 
 func TestContextPackerSelectsTaskRelevantMemoryAndTranscript(t *testing.T) {
 	root := t.TempDir()
-	workspace := root + "/repo-a"
+	workspace := newExistingWorkspace(t, root, "repo-a")
 	storeRoot := store.New(root)
 	for i := 0; i < maxContextMemories; i++ {
 		if _, err := storeRoot.CreateMemoryWithOptions(store.CreateMemoryRequest{
@@ -1241,7 +1287,7 @@ func TestContextPackerSelectsTaskRelevantMemoryAndTranscript(t *testing.T) {
 
 func TestRepositoryContextEnvelopePackerExcludesIrrelevantAndTruncatesBudget(t *testing.T) {
 	root := t.TempDir()
-	workspace := root + "/repo-a"
+	workspace := newExistingWorkspace(t, root, "repo-a")
 	storeRoot := store.New(root)
 	allowed, err := storeRoot.CreateMemoryWithOptions(store.CreateMemoryRequest{
 		Text:       strings.Repeat("allowed workspace memory ", 80),
@@ -1344,7 +1390,7 @@ func TestRepositoryContextEnvelopePackerExcludesIrrelevantAndTruncatesBudget(t *
 
 func TestRepositoryContextEnvelopeDiagnosticsExplainSelectedPromptSources(t *testing.T) {
 	root := t.TempDir()
-	workspace := root + "/repo-a"
+	workspace := newExistingWorkspace(t, root, "repo-a")
 	storeRoot := store.New(root)
 	memory, err := storeRoot.CreateMemoryWithOptions(store.CreateMemoryRequest{
 		Text:       "prefer concise diagnostics",
@@ -1467,7 +1513,7 @@ func TestContextEnvelopePreservesTrustSource(t *testing.T) {
 
 func TestRepositoryContextEnvelopeDiagnosticsExcludeOmittedContext(t *testing.T) {
 	root := t.TempDir()
-	workspace := root + "/repo-a"
+	workspace := newExistingWorkspace(t, root, "repo-a")
 	storeRoot := store.New(root)
 	disabled, err := storeRoot.CreateMemoryWithOptions(store.CreateMemoryRequest{Text: "disabled diagnostic leak", Kind: "preference", Workspace: workspace, Importance: 5})
 	if err != nil {
@@ -2237,8 +2283,8 @@ func TestUpdateStatusDoesNotOverwriteTerminalState(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A runner finishing after the cancel must not resurrect the task.
-	if err := repo.UpdateStatus(t.Context(), created.ID, StatusCompleted); err != nil {
-		t.Fatal(err)
+	if err := repo.UpdateStatus(t.Context(), created.ID, StatusCompleted); !errors.Is(err, ErrStatusTransitionRejected) {
+		t.Fatalf("UpdateStatus error = %v, want ErrStatusTransitionRejected", err)
 	}
 	got, err := repo.Get(t.Context(), created.ID)
 	if err != nil {
@@ -2246,6 +2292,56 @@ func TestUpdateStatusDoesNotOverwriteTerminalState(t *testing.T) {
 	}
 	if got.Status != StatusCancelled {
 		t.Fatalf("cancelled task overwritten to %s", got.Status)
+	}
+}
+
+func TestApprovalDecisionsDoNotOverwriteTerminalState(t *testing.T) {
+	tests := []struct {
+		name   string
+		decide func(*Repository, context.Context, string) error
+	}{
+		{
+			name: "grant after cancellation",
+			decide: func(repo *Repository, ctx context.Context, id string) error {
+				return repo.GrantApproval(ctx, id, "tester")
+			},
+		},
+		{
+			name: "deny after cancellation",
+			decide: func(repo *Repository, ctx context.Context, id string) error {
+				return repo.DenyApproval(ctx, id, "denied", "tester")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, err := store.New(t.TempDir()).OpenDB()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			repo := NewRepository(db)
+			created, err := repo.Create(t.Context(), CreateRequest{Workspace: t.TempDir(), Prompt: "approval race"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.UpdateStatus(t.Context(), created.ID, StatusWaitingUser); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.Cancel(t.Context(), created.ID, "cancel won"); err != nil {
+				t.Fatal(err)
+			}
+			if err := tt.decide(repo, t.Context(), created.ID); !errors.Is(err, ErrStatusTransitionRejected) {
+				t.Fatalf("decision error = %v, want ErrStatusTransitionRejected", err)
+			}
+			got, err := repo.Get(t.Context(), created.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != StatusCancelled {
+				t.Fatalf("cancelled task overwritten to %s", got.Status)
+			}
+		})
 	}
 }
 

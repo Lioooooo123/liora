@@ -75,15 +75,18 @@ func (r *Repository) Create(ctx context.Context, request CreateRequest) (Task, e
 	if workspace == "" {
 		return Task{}, fmt.Errorf("workspace is required")
 	}
-	// Require an absolute path so a workspace never resolves against the daemon's
-	// working directory, and reject a path that exists but is not a directory.
-	// Existence is not required here: the tools layer stats the workspace when a
-	// task actually runs. Confining tool I/O to this root (including symlink
-	// escapes) is enforced in internal/tools and internal/apply.
+	// Require one clean, existing directory. os.Stat follows a workspace-root
+	// symlink and rejects broken links while preserving the caller's path spelling,
+	// which is also used as the workspace identity by sessions and store records.
 	if !filepath.IsAbs(workspace) {
 		return Task{}, fmt.Errorf("workspace must be an absolute path: %s", workspace)
 	}
-	if info, statErr := os.Stat(workspace); statErr == nil && !info.IsDir() {
+	workspace = filepath.Clean(workspace)
+	info, err := os.Stat(workspace)
+	if err != nil {
+		return Task{}, fmt.Errorf("workspace is unavailable: %s: %w", workspace, err)
+	}
+	if !info.IsDir() {
 		return Task{}, fmt.Errorf("workspace is not a directory: %s", workspace)
 	}
 	origin, automation, err := NormalizeAutomationMetadata(request)
@@ -1920,18 +1923,32 @@ func (r *Repository) AppendMessage(ctx context.Context, sessionID string, role s
 // cancel-vs-finish races resolve to whichever terminal write lands first.
 const terminalStatusGuard = ` AND status NOT IN ('completed','failed','cancelled','stale')`
 
+// ErrStatusTransitionRejected means another writer already moved the task to
+// a state that cannot legally be overwritten by the requested transition.
+var ErrStatusTransitionRejected = errors.New("task status transition rejected")
+
 func (r *Repository) UpdateStatus(ctx context.Context, id string, status Status) error {
 	now := time.Now().UTC()
 	var completedAt any
 	if status == StatusCompleted || status == StatusFailed || status == StatusCancelled || status == StatusStale {
 		completedAt = formatTime(now)
 	}
-	_, err := r.db.ExecContext(ctx, `
+	result, err := r.db.ExecContext(ctx, `
 		UPDATE tasks
 		SET status = ?, updated_at = ?, completed_at = COALESCE(?, completed_at)
 		WHERE id = ?`+terminalStatusGuard,
 		string(status), formatTime(now), completedAt, id)
-	return err
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrStatusTransitionRejected
+	}
+	return nil
 }
 
 func (r *Repository) GrantApproval(ctx context.Context, id string, decidedBy ...string) error {
@@ -1941,13 +1958,20 @@ func (r *Repository) GrantApproval(ctx context.Context, id string, decidedBy ...
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		UPDATE tasks
 		SET status = ?, updated_at = ?, completed_at = NULL
-		WHERE id = ?
-	`, string(StatusDraft), formatTime(now), id)
+		WHERE id = ? AND status = ?
+	`, string(StatusDraft), formatTime(now), id, string(StatusWaitingUser))
 	if err != nil {
 		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrStatusTransitionRejected
 	}
 	if err := r.resolveApprovalItemTx(ctx, tx, id, "approved", firstNonEmpty(decidedBy...), now); err != nil {
 		return err
@@ -1966,13 +1990,20 @@ func (r *Repository) DenyApproval(ctx context.Context, id string, reason string,
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		UPDATE tasks
 		SET status = ?, updated_at = ?, completed_at = COALESCE(?, completed_at)
-		WHERE id = ?
-	`, string(StatusCancelled), formatTime(now), formatTime(now), id)
+		WHERE id = ? AND status = ?
+	`, string(StatusCancelled), formatTime(now), formatTime(now), id, string(StatusWaitingUser))
 	if err != nil {
 		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrStatusTransitionRejected
 	}
 	if err := r.resolveApprovalItemTx(ctx, tx, id, "denied", firstNonEmpty(decidedBy...), now); err != nil {
 		return err
@@ -2332,6 +2363,29 @@ func (r *Repository) LatestEvents(ctx context.Context, taskID string, limit int)
 		events[i], events[j] = events[j], events[i]
 	}
 	return events, nil
+}
+
+// LatestEventOfType returns the newest event of one type without relying on a
+// bounded mixed-event window. This is used for durable metadata such as an
+// artifact reference that may precede many streaming events.
+func (r *Repository) LatestEventOfType(ctx context.Context, taskID string, eventType EventType) (Event, bool, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT rowid, id, task_id, type, payload_json, created_at
+		FROM task_events
+		WHERE task_id = ? AND type = ?
+		ORDER BY rowid DESC
+		LIMIT 1
+	`, taskID, string(eventType))
+	var event Event
+	var createdAt string
+	if err := row.Scan(&event.Seq, &event.ID, &event.TaskID, &event.Type, &event.Payload, &createdAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Event{}, false, nil
+		}
+		return Event{}, false, err
+	}
+	event.CreatedAt = parseTime(createdAt)
+	return event, true, nil
 }
 
 func (r *Repository) eventsAfter(ctx context.Context, taskID string, afterSeq int64, limit int) ([]Event, error) {
