@@ -10,14 +10,20 @@ import (
 )
 
 func (c *Client) GenerateStream(ctx context.Context, messages []Message, onDelta DeltaHandler) (string, error) {
-	if strings.TrimSpace(c.config.APIKey) == "" {
-		return "", fmt.Errorf("LLM API key is required")
-	}
 	if strings.TrimSpace(c.config.Model) == "" {
 		return "", fmt.Errorf("LLM model is required")
 	}
 	switch NormalizeProvider(c.config.Provider) {
+	case ProviderOpenAICodex:
+		credential, err := c.resolveCredential(ctx)
+		if err != nil {
+			return "", err
+		}
+		return c.generateCodexResponses(ctx, messages, credential, onDelta)
 	case ProviderOpenAIChat, ProviderDeepSeek:
+		if strings.TrimSpace(c.config.APIKey) == "" {
+			return "", fmt.Errorf("LLM API key is required")
+		}
 		return c.generateOpenAIChatStream(ctx, messages, onDelta)
 	default:
 		text, err := c.Generate(ctx, messages)

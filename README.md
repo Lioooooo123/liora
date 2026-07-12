@@ -171,6 +171,33 @@ liora \
 
 自然语言模式通过 `internal/llm` 的统一 client 生成工具步骤。CLI 和未来客户端都复用同一个 `llm.Config -> llm.NewClient` 入口。
 
+### 使用 ChatGPT 订阅登录 Codex
+
+Liora 可以使用 ChatGPT/Codex 订阅认证，不需要手动复制 OpenAI API Key。默认浏览器登录会在本机 `localhost:1455` 接收 OAuth 回调：
+
+```sh
+liora auth login codex
+```
+
+无图形界面或 localhost 回调不可用时，可改用 device-code 登录：
+
+```sh
+liora auth login codex --device
+```
+
+查看状态或退出登录：
+
+```sh
+liora auth status
+liora auth logout codex
+```
+
+OAuth 凭据保存在 `~/.config/liora/auth.json`，目录权限为 `0700`、文件权限为 `0600`；access token 到期后会使用 refresh token 自动刷新。没有显式设置 `LIORA_LLM_*` 且已登录 Codex 时，Liora 默认选择 `openai-codex / gpt-5.4`。
+
+TUI 内也可以运行 `/login codex`、`/auth` 和 `/logout codex`。`/login codex` 成功后会把当前 thread 切换到 `openai-codex / gpt-5.4`。
+
+### 使用 API Key
+
 环境变量：
 
 ```sh
@@ -194,6 +221,7 @@ cp .env.example .env.local
 deepseek          DeepSeek OpenAI-compatible API
 openai-chat       OpenAI-compatible Chat Completions
 openai-responses  OpenAI Responses API
+openai-codex      ChatGPT/Codex subscription OAuth
 anthropic         Anthropic Messages API
 gemini            Google Gemini generateContent
 ```
@@ -259,6 +287,9 @@ liora > 帮我读取 app.txt，把 old 改成 new，并输出 diff
 /skills
 /skill <name>
 /mcp
+/auth
+/login [codex]
+/logout [codex]
 /doctor
 /workbench
 /spawn <request>

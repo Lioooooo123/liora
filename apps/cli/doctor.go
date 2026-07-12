@@ -31,6 +31,7 @@ type doctorReportContext struct {
 	Schema    *store.SchemaReport
 	Store     *store.Store
 	Runtime   *doctorRuntimeStatus
+	CodexAuth string
 }
 
 type doctorRuntimeStatus struct {
@@ -50,6 +51,8 @@ func doctorReport(config llm.Config, reportContext doctorReportContext) (string,
 	keyStatus := "missing"
 	if strings.TrimSpace(resolved.APIKey) != "" {
 		keyStatus = "configured"
+	} else if resolved.Provider == llm.ProviderOpenAICodex && (reportContext.CodexAuth == "configured" || reportContext.CodexAuth == "expired") {
+		keyStatus = "oauth"
 	}
 	capability := resolved.Capability
 	toolsStatus := "unsupported"
@@ -75,6 +78,7 @@ func doctorReport(config llm.Config, reportContext doctorReportContext) (string,
 		"base_url: "+redactDiagnosticURL(resolved.BaseURL),
 		"api_key: "+keyStatus,
 		"credential.api_key: "+keyStatus+" redacted=true",
+		"auth.openai-codex: "+emptyDiagnosticValue(reportContext.CodexAuth),
 		"tools: "+toolsStatus,
 	)
 	lines = append(lines, renderModelCapability(capability)...)

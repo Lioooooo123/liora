@@ -11,6 +11,7 @@ import (
 const (
 	ProviderOpenAIChat      = "openai-chat"
 	ProviderOpenAIResponses = "openai-responses"
+	ProviderOpenAICodex     = "openai-codex"
 	ProviderDeepSeek        = "deepseek"
 	ProviderAnthropic       = "anthropic"
 	ProviderGemini          = "gemini"
@@ -28,22 +29,30 @@ type Message struct {
 }
 
 type Config struct {
-	Provider    string
-	BaseURL     string
-	APIKey      string
-	Model       string
-	Profile     string
-	Capability  ModelCapability
-	Temperature float64
-	MaxTokens   int
-	Timeout     time.Duration
-	RetryPolicy string
-	TokenBudget int
-	ToolUse     bool
-	TraceLabels map[string]string
-	Metrics     MetricsRecorder
-	HTTPClient  *http.Client
+	Provider           string
+	BaseURL            string
+	APIKey             string
+	Model              string
+	Profile            string
+	Capability         ModelCapability
+	Temperature        float64
+	MaxTokens          int
+	Timeout            time.Duration
+	RetryPolicy        string
+	TokenBudget        int
+	ToolUse            bool
+	TraceLabels        map[string]string
+	Metrics            MetricsRecorder
+	HTTPClient         *http.Client
+	CredentialResolver CredentialResolver
 }
+
+type ProviderCredential struct {
+	AccessToken string
+	AccountID   string
+}
+
+type CredentialResolver func(context.Context, string) (ProviderCredential, error)
 
 type MetricsRecorder interface {
 	RecordLLMMetric(Metric)
@@ -118,6 +127,9 @@ func ResolveConfig(config Config) (Config, error) {
 		return Config{}, fmt.Errorf("unsupported LLM provider %q", config.Provider)
 	}
 	config.Profile = strings.TrimSpace(config.Profile)
+	if strings.TrimSpace(config.Model) == "" && config.Provider == ProviderOpenAICodex {
+		config.Model = "gpt-5.4"
+	}
 	config.Capability = ProviderCapability(config.Provider, config.Model)
 	config.ToolUse = config.Capability.NativeToolUse
 	config.TraceLabels = normalizeTraceLabels(config.TraceLabels)
@@ -156,6 +168,8 @@ func NormalizeProvider(provider string) string {
 		return ProviderOpenAIChat
 	case "responses", "openai-responses":
 		return ProviderOpenAIResponses
+	case "codex", "openai-codex", "chatgpt-codex":
+		return ProviderOpenAICodex
 	case "deepseek":
 		return ProviderDeepSeek
 	case "anthropic", "claude":
@@ -173,6 +187,8 @@ func ProviderDisplayName(provider string) string {
 		return "OpenAI Chat"
 	case ProviderOpenAIResponses:
 		return "OpenAI Responses"
+	case ProviderOpenAICodex:
+		return "OpenAI Codex"
 	case ProviderDeepSeek:
 		return "DeepSeek"
 	case ProviderAnthropic:
@@ -192,6 +208,8 @@ func defaultBaseURL(provider string, baseURL string) string {
 	switch NormalizeProvider(provider) {
 	case ProviderOpenAIChat, ProviderOpenAIResponses:
 		return "https://api.openai.com/v1"
+	case ProviderOpenAICodex:
+		return "https://chatgpt.com/backend-api"
 	case ProviderDeepSeek:
 		return "https://api.deepseek.com"
 	case ProviderAnthropic:

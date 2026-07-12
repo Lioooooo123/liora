@@ -45,11 +45,14 @@ type ToolStreamCaller interface {
 }
 
 func (c *Client) GenerateWithTools(ctx context.Context, messages []Message, tools []ToolSchema) (Completion, error) {
-	if strings.TrimSpace(c.config.APIKey) == "" {
-		return Completion{}, fmt.Errorf("LLM API key is required")
-	}
 	if strings.TrimSpace(c.config.Model) == "" {
 		return Completion{}, fmt.Errorf("LLM model is required")
+	}
+	if NormalizeProvider(c.config.Provider) == ProviderOpenAICodex {
+		return Completion{}, ErrToolsUnsupported
+	}
+	if strings.TrimSpace(c.config.APIKey) == "" {
+		return Completion{}, fmt.Errorf("LLM API key is required")
 	}
 	switch NormalizeProvider(c.config.Provider) {
 	case ProviderOpenAIChat, ProviderDeepSeek:
@@ -64,11 +67,14 @@ func (c *Client) GenerateWithTools(ctx context.Context, messages []Message, tool
 }
 
 func (c *Client) GenerateWithToolsStream(ctx context.Context, messages []Message, tools []ToolSchema, onDelta DeltaHandler) (Completion, error) {
-	if strings.TrimSpace(c.config.APIKey) == "" {
-		return Completion{}, fmt.Errorf("LLM API key is required")
-	}
 	if strings.TrimSpace(c.config.Model) == "" {
 		return Completion{}, fmt.Errorf("LLM model is required")
+	}
+	if NormalizeProvider(c.config.Provider) == ProviderOpenAICodex {
+		return Completion{}, ErrToolsUnsupported
+	}
+	if strings.TrimSpace(c.config.APIKey) == "" {
+		return Completion{}, fmt.Errorf("LLM API key is required")
 	}
 	switch NormalizeProvider(c.config.Provider) {
 	case ProviderOpenAIChat, ProviderDeepSeek:
