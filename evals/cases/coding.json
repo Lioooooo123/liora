@@ -1,0 +1,28 @@
+[
+  {
+    "name": "replace-file-content",
+    "input": "读取 app.txt，把其中的 old 精确替换为 new，保留其余内容不变。",
+    "files": {
+      "app.txt": "hello old agent\n"
+    },
+    "expected_files": {
+      "app.txt": "hello new agent\n"
+    },
+    "expected_tools": ["read"],
+    "allowed_changed_files": ["app.txt"]
+  },
+  {
+    "name": "create-two-files",
+    "input": "创建 config/settings.txt，内容为 enabled；再创建 docs/guide.txt，内容为 ready。两个文件都以换行结尾。",
+    "files": {},
+    "expected_files": {
+      "config/settings.txt": "enabled\n",
+      "docs/guide.txt": "ready\n"
+    },
+    "expected_tools": [],
+    "allowed_changed_files": [
+      "config/settings.txt",
+      "docs/guide.txt"
+    ]
+  }
+]

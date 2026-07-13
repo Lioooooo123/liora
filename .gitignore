@@ -15,3 +15,8 @@ packages/*/dist/
 .DS_Store
 /cli
 /liora-demo
+.deepeval/
+evals/.venv/
+evals/.pytest_cache/
+__pycache__/
+*.pyc

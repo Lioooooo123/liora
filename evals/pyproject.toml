@@ -1,0 +1,20 @@
+[project]
+name = "liora-evals"
+version = "0.1.0"
+description = "DeepEval regression suite for the Liora coding agent"
+requires-python = ">=3.11"
+dependencies = [
+  "deepeval>=3.7,<4",
+  "pytest>=8.3,<9",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+markers = [
+  "live: runs Liora against a configured real LLM provider",
+]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.uv]
+package = false
