@@ -431,21 +431,27 @@ func (s *server) latestWaitIsApproval(ctx context.Context, taskID string) bool {
 }
 
 func (s *server) latestWaitingRequest(ctx context.Context, taskID string) (taskpkg.EventType, taskpkg.EventPayload, error) {
-	events, err := s.repo.LatestEvents(ctx, taskID, 1000)
+	inputRequest, hasInputRequest, err := s.repo.LatestEventOfType(ctx, taskID, taskpkg.EventUserInputRequest)
 	if err != nil {
 		return "", taskpkg.EventPayload{}, err
 	}
-	for i := len(events) - 1; i >= 0; i-- {
-		switch events[i].Type {
-		case taskpkg.EventUserInputRequest, taskpkg.EventPermissionRequest:
-			var payload taskpkg.EventPayload
-			if err := json.Unmarshal([]byte(events[i].Payload), &payload); err != nil {
-				return "", taskpkg.EventPayload{}, err
-			}
-			return events[i].Type, payload, nil
-		}
+	permissionRequest, hasPermissionRequest, err := s.repo.LatestEventOfType(ctx, taskID, taskpkg.EventPermissionRequest)
+	if err != nil {
+		return "", taskpkg.EventPayload{}, err
 	}
-	return "", taskpkg.EventPayload{}, nil
+	if !hasInputRequest && !hasPermissionRequest {
+		return "", taskpkg.EventPayload{}, nil
+	}
+
+	latest := inputRequest
+	if !hasInputRequest || (hasPermissionRequest && permissionRequest.Seq > inputRequest.Seq) {
+		latest = permissionRequest
+	}
+	var payload taskpkg.EventPayload
+	if err := json.Unmarshal([]byte(latest.Payload), &payload); err != nil {
+		return "", taskpkg.EventPayload{}, err
+	}
+	return latest.Type, payload, nil
 }
 
 func (s *server) startNextQueuedAfter(taskID string) {
