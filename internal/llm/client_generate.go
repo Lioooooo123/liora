@@ -9,13 +9,20 @@ import (
 )
 
 func (c *Client) Generate(ctx context.Context, messages []Message) (string, error) {
-	if strings.TrimSpace(c.config.APIKey) == "" {
-		return "", fmt.Errorf("LLM API key is required")
-	}
 	if strings.TrimSpace(c.config.Model) == "" {
 		return "", fmt.Errorf("LLM model is required")
 	}
-	switch NormalizeProvider(c.config.Provider) {
+	provider := NormalizeProvider(c.config.Provider)
+	if provider != ProviderOpenAICodex && strings.TrimSpace(c.config.APIKey) == "" {
+		return "", fmt.Errorf("LLM API key is required")
+	}
+	switch provider {
+	case ProviderOpenAICodex:
+		credential, err := c.resolveCredential(ctx)
+		if err != nil {
+			return "", err
+		}
+		return c.generateCodexResponses(ctx, messages, credential, nil)
 	case ProviderOpenAIChat, ProviderDeepSeek:
 		return c.generateOpenAIChat(ctx, messages)
 	case ProviderOpenAIResponses:
@@ -27,6 +34,20 @@ func (c *Client) Generate(ctx context.Context, messages []Message) (string, erro
 	default:
 		return "", fmt.Errorf("unsupported LLM provider %q", c.config.Provider)
 	}
+}
+
+func (c *Client) resolveCredential(ctx context.Context) (ProviderCredential, error) {
+	if c.config.CredentialResolver == nil {
+		return ProviderCredential{}, fmt.Errorf("OpenAI Codex authentication is required; run `liora auth login codex`")
+	}
+	credential, err := c.config.CredentialResolver(ctx, NormalizeProvider(c.config.Provider))
+	if err != nil {
+		return ProviderCredential{}, err
+	}
+	if strings.TrimSpace(credential.AccessToken) == "" || strings.TrimSpace(credential.AccountID) == "" {
+		return ProviderCredential{}, fmt.Errorf("OpenAI Codex authentication is incomplete; run `liora auth login codex`")
+	}
+	return credential, nil
 }
 
 func (c *Client) generateOpenAIChat(ctx context.Context, messages []Message) (string, error) {

@@ -18,6 +18,9 @@ func ProviderCapability(provider string, model string) ModelCapability {
 	case ProviderOpenAIResponses:
 		capability.Vision = true
 		capability.LongContext = true
+	case ProviderOpenAICodex:
+		capability.Vision = true
+		capability.LongContext = true
 	case ProviderDeepSeek:
 		capability.NativeToolUse = true
 		capability.LongContext = modelHasAny(normalizedModel, "r1", "v3", "128k")

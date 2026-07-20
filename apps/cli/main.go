@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Lioooooo123/liora/internal/agent"
+	authpkg "github.com/Lioooooo123/liora/internal/auth"
 	"github.com/Lioooooo123/liora/internal/config"
 	"github.com/Lioooooo123/liora/internal/daemon"
 	"github.com/Lioooooo123/liora/internal/daemonclient"
@@ -39,6 +40,24 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
+	authStore, err := authpkg.DefaultStore()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	codexOAuth := authpkg.NewCodexOAuth(authpkg.CodexOAuthOptions{})
+	authManager := authpkg.NewManager(authStore, authpkg.ManagerOptions{})
+	authService := authpkg.NewService(authStore, authManager)
+	authService.Register(authpkg.ProviderOpenAICodex, codexOAuth)
+	codexStatus, codexStatusErr := authService.Status(authpkg.ProviderOpenAICodex)
+
+	defaultProvider := getenvAny("LIORA_LLM_PROVIDER", "OPENAI_PROVIDER", "")
+	defaultModel := getenvAny("LIORA_LLM_MODEL", "OPENAI_MODEL", "")
+	defaultAPIKey := getenvAny("LIORA_LLM_API_KEY", "OPENAI_API_KEY", "")
+	if defaultProvider == "" && defaultModel == "" && defaultAPIKey == "" && codexStatusErr == nil && codexStatus.Configured {
+		defaultProvider = llm.ProviderOpenAICodex
+		defaultModel = llm.DefaultOpenAICodexModel
+	}
 
 	workspacePath := flag.String("workspace", ".", "workspace directory")
 	prompt := flag.String("prompt", "", "newline-separated agent steps")
@@ -53,15 +72,15 @@ func main() {
 	forceNewSession := flag.Bool("new-session", false, "start a fresh interactive session; overrides -resume-latest")
 	doctor := flag.Bool("doctor", false, "print resolved LLM provider configuration and exit without calling the API")
 	diagnosticsOut := flag.String("diagnostics-out", "", "write a redacted diagnostics JSON bundle and exit without calling the API")
-	llmProvider := flag.String("llm-provider", getenvAny("LIORA_LLM_PROVIDER", "OPENAI_PROVIDER", ""), "LLM provider: openai-chat, openai-responses, deepseek, anthropic, gemini")
+	llmProvider := flag.String("llm-provider", defaultProvider, "LLM provider: openai-chat, openai-responses, openai-codex, deepseek, anthropic, gemini")
 	llmBaseURL := flag.String("llm-base-url", defaultLLMBaseURL(), "LLM API base URL")
-	llmAPIKey := flag.String("llm-api-key", getenvAny("LIORA_LLM_API_KEY", "OPENAI_API_KEY", ""), "LLM API key")
-	llmModel := flag.String("llm-model", getenvAny("LIORA_LLM_MODEL", "OPENAI_MODEL", ""), "LLM model name")
+	llmAPIKey := flag.String("llm-api-key", defaultAPIKey, "LLM API key")
+	llmModel := flag.String("llm-model", defaultModel, "LLM model name")
 	traceOut := flag.String("trace-out", "", "write trace events to a JSONL file")
 	versionFlag := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	seenFlags := parsedFlagNames()
-	if shouldIgnoreLegacyBaseURL(*llmProvider, seenFlags["llm-provider"], seenFlags["llm-base-url"]) {
+	if shouldIgnoreLegacyBaseURL(*llmProvider, seenFlags["llm-base-url"]) {
 		*llmBaseURL = ""
 	}
 	if *versionFlag {
@@ -69,6 +88,13 @@ func main() {
 		return
 	}
 	if handled, err := handleUpdateCommand(context.Background(), flag.Args(), version, os.Stdout, os.Stderr); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if handled, err := handleAuthCommand(context.Background(), flag.Args(), authService, os.Stdout); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -87,13 +113,20 @@ func main() {
 		BaseURL:  *llmBaseURL,
 		APIKey:   *llmAPIKey,
 		Model:    *llmModel,
+		CredentialResolver: func(ctx context.Context, provider string) (llm.ProviderCredential, error) {
+			credential, err := authService.Resolve(ctx, provider)
+			if err != nil {
+				return llm.ProviderCredential{}, err
+			}
+			return llm.ProviderCredential{AccessToken: credential.Access, AccountID: credential.AccountID}, nil
+		},
 	}
 	persistentStore := store.New("")
 	sandboxExecutor := sandbox.FromEnv()
 	patchMode := boolEnvDefault("LIORA_PATCH_MODE", true)
 	runtimeStatus := doctorRuntimeStatusFrom(patchMode, sandboxExecutor, permissionPolicy(patchMode), daemonAuthStatus(*daemonToken))
 	if *doctor {
-		if err := printDoctor(llmConfig, doctorReportContext{Store: persistentStore, Runtime: runtimeStatus}); err != nil {
+		if err := printDoctor(llmConfig, doctorReportContext{Store: persistentStore, Runtime: runtimeStatus, CodexAuth: codexAuthReport(codexStatus, codexStatusErr)}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
@@ -195,8 +228,10 @@ func main() {
 			Safety:    safetyLabel(patchMode),
 			Width:     terminalWidth(os.Stdout.Fd()),
 			Commands: tui.CommandChain{
+				codexAuthCommand{service: authService, models: daemonSession},
 				doctorCommand{
 					config: llmConfig,
+					auth:   authService,
 					report: doctorReportContext{
 						Workspace: workspace.Root(),
 						Core:      coreLabel,
@@ -204,6 +239,7 @@ func main() {
 						Schema:    loadSchemaReport(persistentStore),
 						Store:     persistentStore,
 						Runtime:   doctorRuntimeStatusFrom(patchMode, sandboxExecutor, permissionPolicy(patchMode), daemonAuth),
+						CodexAuth: codexAuthReport(codexStatus, codexStatusErr),
 					},
 				},
 				daemonSession,
@@ -524,15 +560,11 @@ func interactiveStartFresh(sessionID string, resumeLatest bool, forceNew bool) b
 	return !resumeLatest
 }
 
-func shouldIgnoreLegacyBaseURL(provider string, providerFlagSet bool, baseURLFlagSet bool) bool {
+func shouldIgnoreLegacyBaseURL(provider string, baseURLFlagSet bool) bool {
 	if baseURLFlagSet || strings.TrimSpace(os.Getenv("LIORA_LLM_BASE_URL")) != "" {
 		return false
 	}
 	if strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")) == "" {
-		return false
-	}
-	namespacedProviderSet := strings.TrimSpace(os.Getenv("LIORA_LLM_PROVIDER")) != ""
-	if !providerFlagSet && !namespacedProviderSet {
 		return false
 	}
 	return llm.NormalizeProvider(provider) != llm.ProviderOpenAIChat
