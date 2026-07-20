@@ -72,7 +72,7 @@ func main() {
 	forceNewSession := flag.Bool("new-session", false, "start a fresh interactive session; overrides -resume-latest")
 	doctor := flag.Bool("doctor", false, "print resolved LLM provider configuration and exit without calling the API")
 	diagnosticsOut := flag.String("diagnostics-out", "", "write a redacted diagnostics JSON bundle and exit without calling the API")
-	llmProvider := flag.String("llm-provider", defaultProvider, "LLM provider: openai-chat, openai-responses, openai-codex, deepseek, anthropic, gemini")
+	llmProvider := flag.String("llm-provider", defaultProvider, "LLM provider: "+strings.Join(llm.ProviderIDs(), ", "))
 	llmBaseURL := flag.String("llm-base-url", defaultLLMBaseURL(), "LLM API base URL")
 	llmAPIKey := flag.String("llm-api-key", defaultAPIKey, "LLM API key")
 	llmModel := flag.String("llm-model", defaultModel, "LLM model name")
@@ -126,7 +126,7 @@ func main() {
 	patchMode := boolEnvDefault("LIORA_PATCH_MODE", true)
 	runtimeStatus := doctorRuntimeStatusFrom(patchMode, sandboxExecutor, permissionPolicy(patchMode), daemonAuthStatus(*daemonToken))
 	if *doctor {
-		if err := printDoctor(llmConfig, doctorReportContext{Store: persistentStore, Runtime: runtimeStatus, CodexAuth: codexAuthReport(codexStatus, codexStatusErr)}); err != nil {
+		if err := printDoctor(llmConfig, doctorReportContext{Store: persistentStore, Runtime: runtimeStatus, Auth: providerAuthReport(authpkg.ProviderOpenAICodex, codexStatus, codexStatusErr)}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
@@ -239,7 +239,7 @@ func main() {
 						Schema:    loadSchemaReport(persistentStore),
 						Store:     persistentStore,
 						Runtime:   doctorRuntimeStatusFrom(patchMode, sandboxExecutor, permissionPolicy(patchMode), daemonAuth),
-						CodexAuth: codexAuthReport(codexStatus, codexStatusErr),
+						Auth:      providerAuthReport(authpkg.ProviderOpenAICodex, codexStatus, codexStatusErr),
 					},
 				},
 				daemonSession,

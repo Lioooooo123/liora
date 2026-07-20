@@ -7,16 +7,16 @@ import (
 	"strings"
 )
 
-func (c *Client) generateOpenAIChatTools(ctx context.Context, messages []Message, tools []ToolSchema) (Completion, error) {
+func (a *openAIChatAdapter) generateTools(ctx context.Context, messages []Message, tools []ToolSchema) (Completion, error) {
 	body := map[string]any{
-		"model":       c.config.Model,
+		"model":       a.client.config.Model,
 		"messages":    openAIChatMessages(messages),
-		"temperature": c.config.Temperature,
+		"temperature": a.client.config.Temperature,
 	}
 	if len(tools) > 0 {
 		body["tools"] = openAIChatTools(tools)
 	}
-	data, err := c.postJSON(ctx, c.config.BaseURL+"/chat/completions", body, bearerHeaders(c.config.APIKey))
+	data, err := a.client.postJSON(ctx, a.client.config.BaseURL+"/chat/completions", body, bearerHeaders(a.client.config.APIKey))
 	if err != nil {
 		return Completion{}, err
 	}

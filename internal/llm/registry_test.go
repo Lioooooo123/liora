@@ -149,6 +149,13 @@ func TestRegistryResolvesProviderModelCapabilities(t *testing.T) {
 	if responses.NativeToolUse || !responses.Streaming || !responses.Vision || !responses.LongContext || !responses.JSONSchema {
 		t.Fatalf("responses adapter should be queryable but not routed to native tool-use yet: %#v", responses)
 	}
+	codex, err := registry.Capability(Config{Provider: ProviderOpenAICodex, Model: "gpt-5.4"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !codex.NativeToolUse || !codex.Streaming || !codex.Vision || !codex.LongContext {
+		t.Fatalf("unexpected Codex adapter capability %#v", codex)
+	}
 	if _, err := registry.Capability(Config{Provider: "unknown-provider", Model: "mystery"}); err == nil {
 		t.Fatal("expected unknown provider capability lookup to fail closed")
 	}

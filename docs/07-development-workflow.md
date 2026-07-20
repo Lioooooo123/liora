@@ -27,7 +27,7 @@ pnpm install --frozen-lockfile
 - `internal/store`：SQLite schema、迁移、session、timeline、memory 和 artifact。
 - `internal/tui`：Go 原生 TUI 渲染、输入、命令、Markdown 和 viewport。
 - `internal/tuisession`：TUI 命令到 daemon API 的 session 级适配层。
-- `internal/llm`：provider registry、planner、streaming、tool schema 和能力描述。
+- `internal/llm`：统一 provider adapter seam、provider registry、planner、streaming、tool schema 和能力描述；provider 专属逻辑集中在 `adapter_<provider>.go` 及其协议文件。
 - `internal/capabilities`：内建工具的 access、schema 和 registry。
 - `internal/sandbox`：local / Docker shell executor 和 patch mode workspace。
 - `packages/protocol`：daemon API / SSE event 的 TypeScript 契约包。

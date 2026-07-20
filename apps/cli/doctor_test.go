@@ -5,9 +5,33 @@ import (
 	"strings"
 	"testing"
 
+	authpkg "github.com/Lioooooo123/liora/internal/auth"
 	"github.com/Lioooooo123/liora/internal/llm"
 	"github.com/Lioooooo123/liora/internal/store"
 )
+
+func TestDoctorReportUsesOAuthStatusForMatchingProviderOnly(t *testing.T) {
+	configured := &authpkg.Status{Configured: true}
+	reportContext := doctorReportContext{Auth: map[string]*authpkg.Status{
+		llm.ProviderOpenAICodex: configured,
+	}}
+
+	codexReport, err := doctorReport(llm.Config{Provider: "codex"}, reportContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(codexReport, "api_key: oauth") {
+		t.Fatalf("expected matching Codex OAuth status, got:\n%s", codexReport)
+	}
+
+	apiKeyReport, err := doctorReport(llm.Config{Provider: "anthropic", Model: "claude-test"}, reportContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiKeyReport, "api_key: missing") {
+		t.Fatalf("Codex OAuth must not satisfy another provider, got:\n%s", apiKeyReport)
+	}
+}
 
 func TestDoctorReportIncludesSchemaState(t *testing.T) {
 	// Given

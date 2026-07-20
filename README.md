@@ -226,6 +226,8 @@ anthropic         Anthropic Messages API
 gemini            Google Gemini generateContent
 ```
 
+每个 provider 都通过独立 adapter 接入统一的模型回合接口；认证方式、默认地址、模型能力、请求编码、流解析和工具调用协议由 adapter 自己负责。Agent、Planner 和 CLI 不包含 provider 请求分支。`openai-codex` 使用原生 Responses 工具调用，并在多轮工具执行之间不透明地保留 reasoning continuation。
+
 为了兼容旧配置，`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 仍然可用；新的 `LIORA_LLM_*` 优先级更高。
 
 接入新 API 前可以先做本地诊断；该命令只解析配置，不会请求供应商接口，也不会打印密钥明文：

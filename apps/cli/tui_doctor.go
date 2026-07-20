@@ -18,8 +18,8 @@ func (c doctorCommand) HandleCommand(_ context.Context, line string) (string, bo
 	case "/doctor", "/config":
 		reportContext := c.report
 		if c.auth != nil {
-			status, err := c.auth.Status("openai-codex")
-			reportContext.CodexAuth = codexAuthReport(status, err)
+			status, err := c.auth.Status(llm.ProviderOpenAICodex)
+			reportContext.Auth = providerAuthReport(llm.ProviderOpenAICodex, status, err)
 		}
 		report, err := doctorReport(c.config, reportContext)
 		return report, true, err

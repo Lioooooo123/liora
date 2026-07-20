@@ -128,6 +128,14 @@ func codexAuthReport(status authpkg.Status, err error) *authpkg.Status {
 	return &status
 }
 
+func providerAuthReport(provider string, status authpkg.Status, err error) map[string]*authpkg.Status {
+	report := codexAuthReport(status, err)
+	if report == nil {
+		return nil
+	}
+	return map[string]*authpkg.Status{llm.NormalizeProvider(provider): report}
+}
+
 func isCodexProvider(provider string) bool {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	return provider == "codex" || provider == authpkg.ProviderOpenAICodex

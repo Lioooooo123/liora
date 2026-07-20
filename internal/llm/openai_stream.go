@@ -13,63 +13,46 @@ func (c *Client) GenerateStream(ctx context.Context, messages []Message, onDelta
 	if strings.TrimSpace(c.config.Model) == "" {
 		return "", fmt.Errorf("LLM model is required")
 	}
-	provider := NormalizeProvider(c.config.Provider)
-	if provider != ProviderOpenAICodex && strings.TrimSpace(c.config.APIKey) == "" {
-		return "", fmt.Errorf("LLM API key is required")
+	if c.adapter == nil {
+		return "", fmt.Errorf("unsupported LLM provider %q", c.config.Provider)
 	}
-	switch provider {
-	case ProviderOpenAICodex:
-		credential, err := c.resolveCredential(ctx)
-		if err != nil {
-			return "", err
-		}
-		return c.generateCodexResponses(ctx, messages, credential, onDelta)
-	case ProviderOpenAIChat, ProviderDeepSeek:
-		return c.generateOpenAIChatStream(ctx, messages, onDelta)
-	default:
-		text, err := c.Generate(ctx, messages)
-		if err != nil {
-			return "", err
-		}
-		if strings.TrimSpace(text) != "" && onDelta != nil {
-			if err := onDelta(text); err != nil {
-				return "", err
-			}
-		}
-		return text, nil
-	}
-}
-
-func (c *Client) generateOpenAIChatStream(ctx context.Context, messages []Message, onDelta DeltaHandler) (string, error) {
-	body := map[string]any{
-		"model":       c.config.Model,
-		"messages":    messages,
-		"temperature": c.config.Temperature,
-		"stream":      true,
-	}
-	completion, err := c.streamOpenAIChat(ctx, body, onDelta)
+	completion, err := c.adapter.Complete(ctx, providerRequest{Messages: messages, Stream: true, OnDelta: onDelta})
 	if err != nil {
 		return "", err
 	}
 	return completion.Content, nil
 }
 
-func (c *Client) generateOpenAIChatToolsStream(ctx context.Context, messages []Message, tools []ToolSchema, onDelta DeltaHandler) (Completion, error) {
+func (a *openAIChatAdapter) generateStream(ctx context.Context, messages []Message, onDelta DeltaHandler) (string, error) {
 	body := map[string]any{
-		"model":       c.config.Model,
+		"model":       a.client.config.Model,
+		"messages":    messages,
+		"temperature": a.client.config.Temperature,
+		"stream":      true,
+	}
+	completion, err := a.stream(ctx, body, onDelta)
+	if err != nil {
+		return "", err
+	}
+	return completion.Content, nil
+}
+
+func (a *openAIChatAdapter) generateToolsStream(ctx context.Context, messages []Message, tools []ToolSchema, onDelta DeltaHandler) (Completion, error) {
+	body := map[string]any{
+		"model":       a.client.config.Model,
 		"messages":    openAIChatMessages(messages),
-		"temperature": c.config.Temperature,
+		"temperature": a.client.config.Temperature,
 		"stream":      true,
 	}
 	if len(tools) > 0 {
 		body["tools"] = openAIChatTools(tools)
 	}
-	return c.streamOpenAIChat(ctx, body, onDelta)
+	return a.stream(ctx, body, onDelta)
 }
 
-func (c *Client) streamOpenAIChat(ctx context.Context, body map[string]any, onDelta DeltaHandler) (Completion, error) {
+func (a *openAIChatAdapter) stream(ctx context.Context, body map[string]any, onDelta DeltaHandler) (Completion, error) {
 	accumulator := newOpenAIStreamAccumulator(onDelta)
-	err := c.postJSONStream(ctx, c.config.BaseURL+"/chat/completions", body, bearerHeaders(c.config.APIKey), accumulator.consume)
+	err := a.client.postJSONStream(ctx, a.client.config.BaseURL+"/chat/completions", body, bearerHeaders(a.client.config.APIKey), accumulator.consume)
 	if err != nil {
 		return Completion{}, err
 	}

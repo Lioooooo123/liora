@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -27,6 +28,14 @@ type Message struct {
 	ToolCalls  []ToolCall `json:"-"`
 	ToolCallID string     `json:"-"`
 	ToolError  bool       `json:"-"`
+	// ProviderState is opaque to the agent loop. The adapter that produced it
+	// owns its schema and may use it to continue provider-specific reasoning.
+	ProviderState *ProviderState `json:"-"`
+}
+
+type ProviderState struct {
+	Provider string
+	Data     json.RawMessage
 }
 
 type Config struct {
@@ -95,6 +104,7 @@ type StreamGenerator interface {
 type Client struct {
 	config     Config
 	httpClient *http.Client
+	adapter    providerAdapter
 }
 
 func NewClient(config Config) (*Client, error) {
@@ -111,6 +121,10 @@ func ResolveConfig(config Config) (Config, error) {
 	if config.Provider == "" {
 		config.Provider = ProviderOpenAIChat
 	}
+	definition, ok := lookupProvider(config.Provider)
+	if !ok {
+		return Config{}, fmt.Errorf("unsupported LLM provider %q", config.Provider)
+	}
 	if config.MaxTokens == 0 {
 		config.MaxTokens = 4096
 	}
@@ -124,12 +138,9 @@ func ResolveConfig(config Config) (Config, error) {
 		config.TokenBudget = config.MaxTokens
 	}
 	config.BaseURL = defaultBaseURL(config.Provider, config.BaseURL)
-	if config.BaseURL == "" {
-		return Config{}, fmt.Errorf("unsupported LLM provider %q", config.Provider)
-	}
 	config.Profile = strings.TrimSpace(config.Profile)
-	if strings.TrimSpace(config.Model) == "" && config.Provider == ProviderOpenAICodex {
-		config.Model = DefaultOpenAICodexModel
+	if strings.TrimSpace(config.Model) == "" && definition.DefaultModel != "" {
+		config.Model = definition.DefaultModel
 	}
 	config.Capability = ProviderCapability(config.Provider, config.Model)
 	config.ToolUse = config.Capability.NativeToolUse
@@ -146,7 +157,11 @@ func newClient(config Config) *Client {
 		}
 		httpClient = &http.Client{Timeout: timeout}
 	}
-	return &Client{config: config, httpClient: httpClient}
+	client := &Client{config: config, httpClient: httpClient}
+	if definition, ok := lookupProvider(config.Provider); ok {
+		client.adapter = definition.NewAdapter(client)
+	}
+	return client
 }
 
 func NewOpenAICompatibleClient(config Config) *Client {
@@ -164,41 +179,18 @@ func NewOpenAICompatibleClient(config Config) *Client {
 }
 
 func NormalizeProvider(provider string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "", "openai", "openai-compatible", "chat-completions", "chat":
-		return ProviderOpenAIChat
-	case "responses", "openai-responses":
-		return ProviderOpenAIResponses
-	case "codex", "openai-codex", "chatgpt-codex":
-		return ProviderOpenAICodex
-	case "deepseek":
-		return ProviderDeepSeek
-	case "anthropic", "claude":
-		return ProviderAnthropic
-	case "gemini", "google", "google-gemini":
-		return ProviderGemini
-	default:
-		return strings.ToLower(strings.TrimSpace(provider))
+	normalized := strings.ToLower(strings.TrimSpace(provider))
+	if definition, ok := lookupProvider(normalized); ok {
+		return definition.ID
 	}
+	return normalized
 }
 
 func ProviderDisplayName(provider string) string {
-	switch NormalizeProvider(provider) {
-	case ProviderOpenAIChat:
-		return "OpenAI Chat"
-	case ProviderOpenAIResponses:
-		return "OpenAI Responses"
-	case ProviderOpenAICodex:
-		return "OpenAI Codex"
-	case ProviderDeepSeek:
-		return "DeepSeek"
-	case ProviderAnthropic:
-		return "Anthropic"
-	case ProviderGemini:
-		return "Gemini"
-	default:
-		return provider
+	if definition, ok := lookupProvider(provider); ok {
+		return definition.DisplayName
 	}
+	return provider
 }
 
 func defaultBaseURL(provider string, baseURL string) string {
@@ -206,20 +198,10 @@ func defaultBaseURL(provider string, baseURL string) string {
 	if baseURL != "" {
 		return baseURL
 	}
-	switch NormalizeProvider(provider) {
-	case ProviderOpenAIChat, ProviderOpenAIResponses:
-		return "https://api.openai.com/v1"
-	case ProviderOpenAICodex:
-		return "https://chatgpt.com/backend-api"
-	case ProviderDeepSeek:
-		return "https://api.deepseek.com"
-	case ProviderAnthropic:
-		return "https://api.anthropic.com/v1"
-	case ProviderGemini:
-		return "https://generativelanguage.googleapis.com"
-	default:
-		return ""
+	if definition, ok := lookupProvider(provider); ok {
+		return definition.DefaultBaseURL
 	}
+	return ""
 }
 
 func bearerHeaders(apiKey string) map[string]string {
