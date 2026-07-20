@@ -221,7 +221,11 @@ func responsesInput(messages []Message) any {
 	if len(messages) == 1 && messages[0].Role == "user" {
 		return messages[0].Content
 	}
-	var input []map[string]string
+	return responsesMessageInput(messages)
+}
+
+func responsesMessageInput(messages []Message) []map[string]string {
+	input := make([]map[string]string, 0, len(messages))
 	for _, message := range messages {
 		role := message.Role
 		if role == "" {

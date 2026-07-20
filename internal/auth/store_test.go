@@ -10,6 +10,18 @@ import (
 	"time"
 )
 
+func TestDefaultStoreUsesLioraHome(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LIORA_HOME", root)
+	store, err := DefaultStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(root, "auth.json"); store.path != want {
+		t.Fatalf("default auth path=%q want=%q", store.path, want)
+	}
+}
+
 type fakeRefresher struct {
 	calls int
 	got   string

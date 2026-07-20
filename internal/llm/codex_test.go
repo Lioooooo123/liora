@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -59,5 +60,37 @@ func TestCodexProviderUsesOAuthCredentialAndResponsesStream(t *testing.T) {
 	}
 	if gotBody["model"] != "gpt-5.4" || gotBody["stream"] != true || gotBody["store"] != false || gotBody["instructions"] != "Return a planner answer." {
 		t.Fatalf("unexpected Codex body %#v", gotBody)
+	}
+	input, ok := gotBody["input"].([]any)
+	if !ok {
+		t.Fatalf("Codex input must be a list, got %T (%#v)", gotBody["input"], gotBody["input"])
+	}
+	if len(input) != 1 {
+		t.Fatalf("unexpected Codex input %#v", input)
+	}
+	message, ok := input[0].(map[string]any)
+	if !ok || message["role"] != "user" || message["content"] != "hello" {
+		t.Fatalf("unexpected Codex input message %#v", input[0])
+	}
+}
+
+func TestCodexStreamParsesSSEWithoutContentType(t *testing.T) {
+	stream := strings.Join([]string{
+		"event: response.created",
+		`data: {"type":"response.created","response":{"id":"resp_1"}}`,
+		"",
+		"event: response.output_text.delta",
+		`data: {"type":"response.output_text.delta","delta":"connected"}`,
+		"",
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"status":"completed"}}`,
+		"",
+	}, "\n")
+	accumulator := &codexStreamAccumulator{}
+	if _, err := accumulator.consume(strings.NewReader(stream), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := accumulator.content.String(); got != "connected" {
+		t.Fatalf("unexpected Codex stream content %q", got)
 	}
 }
