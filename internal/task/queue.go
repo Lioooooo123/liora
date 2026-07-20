@@ -105,22 +105,19 @@ func (r *Repository) ReceiveUserInput(ctx context.Context, id string, message st
 }
 
 func (r *Repository) LatestUserInput(ctx context.Context, id string) (string, bool, error) {
-	events, err := r.LatestEvents(ctx, id, 1000)
+	event, ok, err := r.LatestEventOfType(ctx, id, EventUserInputReceived)
 	if err != nil {
 		return "", false, err
 	}
-	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Type != EventUserInputReceived {
-			continue
-		}
-		payload, err := parseEventPayload(events[i])
-		if err != nil {
-			return "", false, err
-		}
-		message := strings.TrimSpace(payload.Message)
-		return message, message != "", nil
+	if !ok {
+		return "", false, nil
 	}
-	return "", false, nil
+	payload, err := parseEventPayload(event)
+	if err != nil {
+		return "", false, err
+	}
+	message := strings.TrimSpace(payload.Message)
+	return message, message != "", nil
 }
 
 func parseEventPayload(event Event) (EventPayload, error) {
