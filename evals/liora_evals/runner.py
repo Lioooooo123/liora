@@ -18,9 +18,22 @@ TERMINAL_STATUSES = {"completed", "failed", "cancelled", "lost", "stale"}
 
 
 class LioraDaemon:
-    def __init__(self, repo_root: Path, timeout: float = 120.0):
+    def __init__(
+        self,
+        repo_root: Path,
+        timeout: float = 120.0,
+        *,
+        llm_base_url: str | None = None,
+        llm_api_key: str | None = None,
+        llm_model: str | None = None,
+        llm_provider: str | None = None,
+    ):
         self.repo_root = repo_root.resolve()
         self.timeout = timeout
+        self.llm_base_url = llm_base_url
+        self.llm_api_key = llm_api_key
+        self.llm_model = llm_model
+        self.llm_provider = llm_provider
         self._tempdir: tempfile.TemporaryDirectory[str] | None = None
         self._process: subprocess.Popen[str] | None = None
         self._base_url = ""
@@ -49,10 +62,25 @@ class LioraDaemon:
                 "LIORA_HOME": str(temp_root / "home"),
                 "LIORA_PATCH_MODE": "0",
                 "LIORA_PERMISSION": "auto",
+                "PYTHONDONTWRITEBYTECODE": "1",
             }
         )
+        command = [
+            str(self._binary),
+            "-daemon",
+            "-daemon-addr",
+            f"127.0.0.1:{port}",
+        ]
+        for flag, value in (
+            ("-llm-provider", self.llm_provider),
+            ("-llm-base-url", self.llm_base_url),
+            ("-llm-api-key", self.llm_api_key),
+            ("-llm-model", self.llm_model),
+        ):
+            if value:
+                command.extend([flag, value])
         self._process = subprocess.Popen(
-            [str(self._binary), "-daemon", "-daemon-addr", f"127.0.0.1:{port}"],
+            command,
             cwd=self.repo_root,
             env=env,
             stdout=subprocess.PIPE,
@@ -83,6 +111,7 @@ class LioraDaemon:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
         before = _snapshot(workspace)
+        started_at = time.monotonic()
 
         created = self._request(
             "POST",
@@ -117,11 +146,28 @@ class LioraDaemon:
                 if event.get("type") == "tool.call" and payload.get("tool")
             }
         )
+        successful_tools = sorted(
+            {
+                payload.get("tool")
+                for event, payload in zip(events, payloads)
+                if event.get("type") == "tool.result"
+                and payload.get("status") == "ok"
+                and payload.get("tool")
+            }
+        )
         after = _snapshot(workspace)
         result = {
             "status": task["status"],
             "files": after,
             "tools_called": tools_called,
+            "successful_tools": successful_tools,
+            "event_types": sorted(
+                {event.get("type") for event in events if event.get("type")}
+            ),
+            "tool_call_count": sum(
+                1 for event in events if event.get("type") == "tool.call"
+            ),
+            "duration_ms": round((time.monotonic() - started_at) * 1000),
             "changed_files": sorted(
                 path for path in set(before) | set(after) if before.get(path) != after.get(path)
             ),
@@ -155,8 +201,9 @@ class LioraDaemon:
                 time.sleep(0.1)
         raise TimeoutError("Liora daemon did not become healthy within 20s")
 
-    @staticmethod
-    def _require_live_config() -> None:
+    def _require_live_config(self) -> None:
+        if self.llm_api_key and self.llm_model:
+            return
         missing = [
             name
             for name in ("LIORA_LLM_API_KEY", "LIORA_LLM_MODEL")

@@ -19,7 +19,7 @@ def test_live_coding_agent():
     repo_root = Path(__file__).resolve().parents[2]
     timeout = float(os.environ.get("LIORA_DEEPEVAL_TIMEOUT", "120"))
     with LioraDaemon(repo_root, timeout=timeout) as daemon:
-        for case in load_cases():
+        for case in load_cases(profile="live"):
             test_case = LLMTestCase(
                 input=case.input,
                 actual_output=daemon.run_case(case),

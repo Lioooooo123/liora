@@ -549,7 +549,7 @@ LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scr
 ./scripts/v0.1-exit-audit.sh "$PWD"
 ```
 
-`coding-eval.sh` 是无外部依赖的确定性端到端 smoke；`deepeval.sh` 是 DeepEval 质量门禁，默认离线运行。配置 `LIORA_LLM_API_KEY`、`LIORA_LLM_MODEL` 后，可用 `LIORA_DEEPEVAL_LIVE=1 ./scripts/deepeval.sh live` 对真实模型执行 coding cases。用例、指标和扩展方式见 [`evals/README.md`](evals/README.md)。
+`coding-eval.sh` 是无外部依赖的确定性端到端 smoke；`deepeval.sh` 默认启动真实 Liora daemon，并通过本地脚本化模型执行 12 个确定性 coding benchmark，不需要模型密钥。配置 `LIORA_LLM_API_KEY`、`LIORA_LLM_MODEL` 后，可用 `./scripts/deepeval.sh live` 对 4 个核心任务执行真实模型评测；只验证数据集和评分器时使用 `./scripts/deepeval.sh contract`。用例、指标和扩展方式见 [`evals/README.md`](evals/README.md)。
 
 `v0.1-exit-audit.sh` 是当前长期目标的最终收敛验收入口；开发中可用 `--skip-git-clean` 跳过工作区干净检查，真正结束目标时必须在已推送的干净 `main` 上直接运行通过。
 

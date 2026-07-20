@@ -64,7 +64,7 @@ jobs:
         run: pnpm test:protocol
 
   deepeval:
-    name: DeepEval contracts
+    name: DeepEval deterministic benchmark
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -75,5 +75,10 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Run offline evals
-        run: ./scripts/deepeval.sh
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run deterministic benchmark
+        run: ./scripts/deepeval.sh deterministic
