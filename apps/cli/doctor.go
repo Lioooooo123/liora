@@ -32,7 +32,7 @@ type doctorReportContext struct {
 	Schema    *store.SchemaReport
 	Store     *store.Store
 	Runtime   *doctorRuntimeStatus
-	CodexAuth *authpkg.Status
+	Auth      map[string]*authpkg.Status
 }
 
 type doctorRuntimeStatus struct {
@@ -52,7 +52,7 @@ func doctorReport(config llm.Config, reportContext doctorReportContext) (string,
 	keyStatus := "missing"
 	if strings.TrimSpace(resolved.APIKey) != "" {
 		keyStatus = "configured"
-	} else if resolved.Provider == llm.ProviderOpenAICodex && reportContext.CodexAuth != nil && reportContext.CodexAuth.Configured {
+	} else if status := reportContext.authStatus(resolved.Provider); llm.ProviderAuthentication(resolved.Provider) == llm.ProviderAuthOAuth && status != nil && status.Configured {
 		keyStatus = "oauth"
 	}
 	capability := resolved.Capability
@@ -79,7 +79,7 @@ func doctorReport(config llm.Config, reportContext doctorReportContext) (string,
 		"base_url: "+redactDiagnosticURL(resolved.BaseURL),
 		"api_key: "+keyStatus,
 		"credential.api_key: "+keyStatus+" redacted=true",
-		"auth.openai-codex: "+codexAuthDiagnosticState(reportContext.CodexAuth),
+		"auth.openai-codex: "+codexAuthDiagnosticState(reportContext.authStatus(llm.ProviderOpenAICodex)),
 		"tools: "+toolsStatus,
 	)
 	lines = append(lines, renderModelCapability(capability)...)
@@ -92,6 +92,13 @@ func doctorReport(config llm.Config, reportContext doctorReportContext) (string,
 		lines = append(lines, renderSchemaReport(*reportContext.Schema)...)
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+func (c doctorReportContext) authStatus(provider string) *authpkg.Status {
+	if len(c.Auth) == 0 {
+		return nil
+	}
+	return c.Auth[llm.NormalizeProvider(provider)]
 }
 
 func codexAuthDiagnosticState(status *authpkg.Status) string {

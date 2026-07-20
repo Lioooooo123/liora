@@ -204,6 +204,13 @@ func TestClientSupportsToolsFollowsResolvedCapability(t *testing.T) {
 	if responses.SupportsTools() {
 		t.Fatal("expected responses adapter to fall back until native tool loop is implemented")
 	}
+	codex, err := NewClient(Config{Provider: ProviderOpenAICodex, Model: "gpt-5.4"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !codex.SupportsTools() {
+		t.Fatal("expected Codex adapter to enable native Responses tool-use")
+	}
 }
 
 func TestGenerateWithToolsUnsupportedProvider(t *testing.T) {
@@ -217,13 +224,5 @@ func TestGenerateWithToolsUnsupportedProvider(t *testing.T) {
 	}
 	if client.SupportsTools() {
 		t.Fatal("gemini should not support tools")
-	}
-	codex, err := NewClient(Config{Provider: ProviderOpenAICodex, Model: "gpt-5.4"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = codex.GenerateWithTools(t.Context(), []Message{{Role: "user", Content: "hi"}}, nil)
-	if !errors.Is(err, ErrToolsUnsupported) {
-		t.Fatalf("Codex auth provider should use the planner fallback until native Responses tools are implemented, got %v", err)
 	}
 }

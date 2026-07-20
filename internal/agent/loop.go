@@ -100,9 +100,10 @@ func (l *ToolLoop) Run(ctx context.Context, prompt string) (Result, error) {
 			return Result{Status: StatusFailed, Diff: l.currentDiff()}, err
 		}
 		messages = append(messages, llm.Message{
-			Role:      "assistant",
-			Content:   completion.Content,
-			ToolCalls: completion.ToolCalls,
+			Role:          "assistant",
+			Content:       completion.Content,
+			ToolCalls:     completion.ToolCalls,
+			ProviderState: completion.ProviderState,
 		})
 
 		if len(completion.ToolCalls) == 0 {

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -208,6 +209,31 @@ func TestToolLoopRunsObserveActUntilNoToolCalls(t *testing.T) {
 	events := a.recorder.(*trace.MemoryRecorder).Events()
 	if len(events) != 1 || events[0].Tool != "read" || events[0].Status != trace.StatusOK {
 		t.Fatalf("unexpected events %#v", events)
+	}
+}
+
+func TestToolLoopRoundTripsOpaqueProviderState(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := newLoopAgent(t, root)
+	state := &llm.ProviderState{Provider: llm.ProviderOpenAICodex, Data: json.RawMessage(`{"opaque":"reasoning"}`)}
+	caller := &fakeToolCaller{completions: []llm.Completion{
+		{ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "read", Arguments: `{"path":"README.md"}`}}, ProviderState: state},
+		{Content: "done"},
+	}}
+
+	loop := NewToolLoop(a, caller, LoopOptions{})
+	if _, err := loop.Run(t.Context(), "read the file"); err != nil {
+		t.Fatal(err)
+	}
+	if len(caller.transcripts) != 2 || len(caller.transcripts[1]) < 3 {
+		t.Fatalf("unexpected transcripts %#v", caller.transcripts)
+	}
+	assistant := caller.transcripts[1][2]
+	if assistant.ProviderState == nil || assistant.ProviderState.Provider != llm.ProviderOpenAICodex || string(assistant.ProviderState.Data) != `{"opaque":"reasoning"}` {
+		t.Fatalf("provider state was not round-tripped %#v", assistant.ProviderState)
 	}
 }
 

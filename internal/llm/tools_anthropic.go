@@ -6,13 +6,13 @@ import (
 	"strings"
 )
 
-func (c *Client) generateAnthropicTools(ctx context.Context, messages []Message, tools []ToolSchema) (Completion, error) {
+func (a *anthropicAdapter) generateTools(ctx context.Context, messages []Message, tools []ToolSchema) (Completion, error) {
 	system, rest := splitSystemMessages(messages)
 	body := map[string]any{
-		"model":       c.config.Model,
+		"model":       a.client.config.Model,
 		"messages":    anthropicToolMessages(rest),
-		"max_tokens":  c.config.MaxTokens,
-		"temperature": c.config.Temperature,
+		"max_tokens":  a.client.config.MaxTokens,
+		"temperature": a.client.config.Temperature,
 	}
 	if system != "" {
 		body["system"] = system
@@ -21,10 +21,10 @@ func (c *Client) generateAnthropicTools(ctx context.Context, messages []Message,
 		body["tools"] = anthropicTools(tools)
 	}
 	headers := map[string]string{
-		"x-api-key":         c.config.APIKey,
+		"x-api-key":         a.client.config.APIKey,
 		"anthropic-version": "2023-06-01",
 	}
-	data, err := c.postJSON(ctx, c.config.BaseURL+"/messages", body, headers)
+	data, err := a.client.postJSON(ctx, a.client.config.BaseURL+"/messages", body, headers)
 	if err != nil {
 		return Completion{}, err
 	}
