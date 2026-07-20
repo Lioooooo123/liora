@@ -545,8 +545,11 @@ GOTOOLCHAIN=local go test -count=1 ./...
 LIORA_HOME=$(mktemp -d) LIORA_DAEMON_ADDR=127.0.0.1:19089 ./scripts/daemon-smoke.sh "$PWD"
 LIORA_TUI_SMOKE_DAEMON_ADDR=127.0.0.1:19090 LIORA_TUI_SMOKE_LLM_ADDR=127.0.0.1:19091 ./scripts/tui-smoke.sh "$PWD"
 LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scripts/coding-eval.sh
+./scripts/deepeval.sh
 ./scripts/v0.1-exit-audit.sh "$PWD"
 ```
+
+`coding-eval.sh` 是无外部依赖的确定性端到端 smoke；`deepeval.sh` 默认启动真实 Liora daemon，并通过本地脚本化模型执行 12 个确定性 coding benchmark，不需要模型密钥。配置 `LIORA_LLM_API_KEY`、`LIORA_LLM_MODEL` 后，可用 `./scripts/deepeval.sh live` 对 4 个核心任务执行真实模型评测；只验证数据集和评分器时使用 `./scripts/deepeval.sh contract`。用例、指标和扩展方式见 [`evals/README.md`](evals/README.md)。
 
 `v0.1-exit-audit.sh` 是当前长期目标的最终收敛验收入口；开发中可用 `--skip-git-clean` 跳过工作区干净检查，真正结束目标时必须在已推送的干净 `main` 上直接运行通过。
 
@@ -554,6 +557,7 @@ LIORA_EVAL_DAEMON_ADDR=127.0.0.1:19092 LIORA_EVAL_LLM_ADDR=127.0.0.1:19093 ./scr
 
 - `apps/cli`：当前 Go CLI/TUI/daemon 入口，负责参数、配置加载和模式选择。
 - `packages`：未来跨 app 复用的协议、UI 和 eval 包。
+- `evals`：DeepEval 数据集、自定义质量指标和真实模型黑盒 runner。
 - `internal/daemon`：本地 HTTP API 和 SSE 事件流。
 - `internal/task`：任务模型、SQLite 仓储和任务 runner。
 - `internal/sandbox`：Shell executor 抽象，支持 local 和 Docker。

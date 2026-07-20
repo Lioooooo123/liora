@@ -1,0 +1,269 @@
+[
+  {
+    "name": "replace-file-content",
+    "input": "读取 app.txt，把其中的 old 精确替换为 new，保留其余内容不变。",
+    "files": {
+      "app.txt": "hello old agent\n",
+      "notes.txt": "do not change\n"
+    },
+    "expected_files": {
+      "app.txt": "hello new agent\n",
+      "notes.txt": "do not change\n"
+    },
+    "expected_tools": ["read", "replace"],
+    "forbidden_tools": ["delete"],
+    "allowed_changed_files": ["app.txt"],
+    "required_successful_tools": ["replace"],
+    "max_tool_calls": 3,
+    "profiles": ["deterministic", "live"],
+    "scripted_steps": [
+      {"tool": "read", "arguments": {"path": "app.txt"}},
+      {"tool": "replace", "arguments": {"path": "app.txt", "old_text": "old", "new_text": "new"}}
+    ]
+  },
+  {
+    "name": "create-two-files",
+    "input": "先查看工作区，然后创建 config/settings.txt，内容为 enabled；再创建 docs/guide.txt，内容为 ready。两个文件都以换行结尾。",
+    "files": {},
+    "expected_files": {
+      "config/settings.txt": "enabled\n",
+      "docs/guide.txt": "ready\n"
+    },
+    "expected_tools": ["list", "write"],
+    "forbidden_tools": ["delete"],
+    "allowed_changed_files": ["config/settings.txt", "docs/guide.txt"],
+    "required_successful_tools": ["write"],
+    "max_tool_calls": 4,
+    "profiles": ["deterministic", "live"],
+    "scripted_steps": [
+      {"tool": "list", "arguments": {"path": "."}},
+      {"tool": "write", "arguments": {"path": "config/settings.txt", "content": "enabled\n"}},
+      {"tool": "write", "arguments": {"path": "docs/guide.txt", "content": "ready\n"}}
+    ]
+  },
+  {
+    "name": "search-and-update-nested-config",
+    "input": "搜索 api_timeout 的定义，把 config/runtime.yaml 中的值从 30 改为 45，不要修改其他配置。",
+    "files": {
+      "config/runtime.yaml": "api_timeout: 30\nretry_limit: 3\n",
+      "docs/config.md": "api_timeout controls request timeout.\n"
+    },
+    "expected_files": {
+      "config/runtime.yaml": "api_timeout: 45\nretry_limit: 3\n",
+      "docs/config.md": "api_timeout controls request timeout.\n"
+    },
+    "expected_tools": ["search", "read", "replace"],
+    "forbidden_tools": ["delete", "write"],
+    "allowed_changed_files": ["config/runtime.yaml"],
+    "required_successful_tools": ["replace"],
+    "max_tool_calls": 4,
+    "profiles": ["deterministic", "live"],
+    "scripted_steps": [
+      {"tool": "search", "arguments": {"query": "api_timeout"}},
+      {"tool": "read", "arguments": {"path": "config/runtime.yaml"}},
+      {"tool": "replace", "arguments": {"path": "config/runtime.yaml", "old_text": "api_timeout: 30", "new_text": "api_timeout: 45"}}
+    ]
+  },
+  {
+    "name": "test-failure-recovery",
+    "input": "运行 Python 单元测试，定位失败原因并修复 calc.py，然后重新运行测试确认通过。",
+    "files": {
+      "calc.py": "def add(a, b):\n    return a - b\n",
+      "test_calc.py": "import unittest\nfrom calc import add\n\nclass CalcTest(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n\nif __name__ == '__main__':\n    unittest.main()\n"
+    },
+    "expected_files": {
+      "calc.py": "def add(a, b):\n    return a + b\n",
+      "test_calc.py": "import unittest\nfrom calc import add\n\nclass CalcTest(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n\nif __name__ == '__main__':\n    unittest.main()\n"
+    },
+    "expected_tools": ["run", "read", "replace"],
+    "forbidden_tools": ["delete"],
+    "allowed_changed_files": ["calc.py"],
+    "required_successful_tools": ["run", "replace"],
+    "required_event_types": ["task.replanning"],
+    "max_tool_calls": 5,
+    "profiles": ["deterministic", "live"],
+    "scripted_steps": [
+      {"tool": "run", "arguments": {"command": "python3 -m unittest -q"}},
+      {"tool": "read", "arguments": {"path": "calc.py"}},
+      {"tool": "replace", "arguments": {"path": "calc.py", "old_text": "return a - b", "new_text": "return a + b"}},
+      {"tool": "run", "arguments": {"command": "python3 -m unittest -q"}}
+    ]
+  },
+  {
+    "name": "preserve-unrelated-files",
+    "input": "读取 src/service.py，把环境名 dev 改为 prod；不要改动 README.md。",
+    "files": {
+      "src/service.py": "ENV = 'dev'\nPORT = 8080\n",
+      "README.md": "service documentation\n"
+    },
+    "expected_files": {
+      "src/service.py": "ENV = 'prod'\nPORT = 8080\n",
+      "README.md": "service documentation\n"
+    },
+    "expected_tools": ["read", "edit"],
+    "forbidden_tools": ["delete", "write"],
+    "allowed_changed_files": ["src/service.py"],
+    "required_successful_tools": ["edit"],
+    "max_tool_calls": 3,
+    "profiles": ["deterministic"],
+    "scripted_steps": [
+      {"tool": "read", "arguments": {"path": "src/service.py"}},
+      {"tool": "edit", "arguments": {"path": "src/service.py", "old_text": "ENV = 'dev'", "new_text": "ENV = 'prod'"}}
+    ]
+  },
+  {
+    "name": "delete-generated-artifact",
+    "input": "查看 build 目录并删除生成文件 build/output.tmp，保留源码不变。",
+    "files": {
+      "build/output.tmp": "generated\n",
+      "src/main.txt": "source\n"
+    },
+    "expected_files": {
+      "src/main.txt": "source\n"
+    },
+    "expected_absent_files": ["build/output.tmp"],
+    "expected_tools": ["list", "delete"],
+    "forbidden_tools": ["write", "replace"],
+    "allowed_changed_files": ["build/output.tmp"],
+    "required_successful_tools": ["delete"],
+    "max_tool_calls": 3,
+    "profiles": ["deterministic"],
+    "scripted_steps": [
+      {"tool": "list", "arguments": {"path": "build"}},
+      {"tool": "delete", "arguments": {"path": "build/output.tmp"}}
+    ]
+  },
+  {
+    "name": "append-changelog-entry",
+    "input": "读取 CHANGELOG.md，在末尾追加一行 - Added benchmark coverage，保留已有内容。",
+    "files": {
+      "CHANGELOG.md": "# Changelog\n\n- Initial release\n"
+    },
+    "expected_files": {
+      "CHANGELOG.md": "# Changelog\n\n- Initial release\n- Added benchmark coverage\n"
+    },
+    "expected_tools": ["read", "append"],
+    "forbidden_tools": ["delete", "write"],
+    "allowed_changed_files": ["CHANGELOG.md"],
+    "required_successful_tools": ["append"],
+    "max_tool_calls": 3,
+    "profiles": ["deterministic"],
+    "scripted_steps": [
+      {"tool": "read", "arguments": {"path": "CHANGELOG.md"}},
+      {"tool": "append", "arguments": {"path": "CHANGELOG.md", "content": "- Added benchmark coverage\n"}}
+    ]
+  },
+  {
+    "name": "update-json-config-preserving-keys",
+    "input": "读取 config.json，只把 enabled 从 false 改成 true，保留 name 和 retries。",
+    "files": {
+      "config.json": "{\n  \"name\": \"liora\",\n  \"enabled\": false,\n  \"retries\": 2\n}\n"
+    },
+    "expected_files": {
+      "config.json": "{\n  \"name\": \"liora\",\n  \"enabled\": true,\n  \"retries\": 2\n}\n"
+    },
+    "expected_tools": ["read", "replace"],
+    "forbidden_tools": ["delete", "write"],
+    "allowed_changed_files": ["config.json"],
+    "required_successful_tools": ["replace"],
+    "max_tool_calls": 3,
+    "profiles": ["deterministic"],
+    "scripted_steps": [
+      {"tool": "read", "arguments": {"path": "config.json"}},
+      {"tool": "replace", "arguments": {"path": "config.json", "old_text": "\"enabled\": false", "new_text": "\"enabled\": true"}}
+    ]
+  },
+  {
+    "name": "repair-readme-link",
+    "input": "搜索 old-guide.md 的引用，只把 README.md 中的链接改为 docs/guide.md。",
+    "files": {
+      "README.md": "See [guide](old-guide.md).\n",
+      "docs/guide.md": "# Guide\n"
+    },
+    "expected_files": {
+      "README.md": "See [guide](docs/guide.md).\n",
+      "docs/guide.md": "# Guide\n"
+    },
+    "expected_tools": ["search", "read", "replace"],
+    "forbidden_tools": ["delete", "write"],
+    "allowed_changed_files": ["README.md"],
+    "required_successful_tools": ["replace"],
+    "max_tool_calls": 4,
+    "profiles": ["deterministic"],
+    "scripted_steps": [
+      {"tool": "search", "arguments": {"query": "old-guide.md"}},
+      {"tool": "read", "arguments": {"path": "README.md"}},
+      {"tool": "replace", "arguments": {"path": "README.md", "old_text": "old-guide.md", "new_text": "docs/guide.md"}}
+    ]
+  },
+  {
+    "name": "glob-selective-update",
+    "input": "找出 package 下所有 .txt 文件，把 alpha 改为 beta；不要修改 Markdown 文件。",
+    "files": {
+      "package/a.txt": "alpha one\n",
+      "package/b.md": "alpha docs\n",
+      "package/c.txt": "alpha two\n"
+    },
+    "expected_files": {
+      "package/a.txt": "beta one\n",
+      "package/b.md": "alpha docs\n",
+      "package/c.txt": "beta two\n"
+    },
+    "expected_tools": ["glob", "read", "replace"],
+    "forbidden_tools": ["delete", "write"],
+    "allowed_changed_files": ["package/a.txt", "package/c.txt"],
+    "required_successful_tools": ["replace"],
+    "max_tool_calls": 6,
+    "profiles": ["deterministic"],
+    "scripted_steps": [
+      {"tool": "glob", "arguments": {"pattern": "*.txt", "path": "package"}},
+      {"tool": "read", "arguments": {"path": "package/a.txt"}},
+      {"tool": "read", "arguments": {"path": "package/c.txt"}},
+      {"tool": "replace", "arguments": {"path": "package/a.txt", "old_text": "alpha", "new_text": "beta"}},
+      {"tool": "replace", "arguments": {"path": "package/c.txt", "old_text": "alpha", "new_text": "beta"}}
+    ]
+  },
+  {
+    "name": "create-test-fixture",
+    "input": "读取 src/formatter.py，然后创建 tests/fixtures/formatter_cases.json，内容严格为指定的两条样例 JSON。",
+    "files": {
+      "src/formatter.py": "def upper(value):\n    return value.upper()\n"
+    },
+    "expected_files": {
+      "src/formatter.py": "def upper(value):\n    return value.upper()\n",
+      "tests/fixtures/formatter_cases.json": "[{\"input\":\"a\",\"output\":\"A\"},{\"input\":\"liora\",\"output\":\"LIORA\"}]\n"
+    },
+    "expected_tools": ["read", "write"],
+    "forbidden_tools": ["delete"],
+    "allowed_changed_files": ["tests/fixtures/formatter_cases.json"],
+    "required_successful_tools": ["write"],
+    "max_tool_calls": 3,
+    "profiles": ["deterministic"],
+    "scripted_steps": [
+      {"tool": "read", "arguments": {"path": "src/formatter.py"}},
+      {"tool": "write", "arguments": {"path": "tests/fixtures/formatter_cases.json", "content": "[{\"input\":\"a\",\"output\":\"A\"},{\"input\":\"liora\",\"output\":\"LIORA\"}]\n"}}
+    ]
+  },
+  {
+    "name": "recover-from-missing-path",
+    "input": "尝试读取 missing.txt；如果不存在，就查看工作区并读取 README.md，最后不要修改任何文件。",
+    "files": {
+      "README.md": "recovery target\n"
+    },
+    "expected_files": {
+      "README.md": "recovery target\n"
+    },
+    "expected_tools": ["read", "list"],
+    "forbidden_tools": ["write", "delete", "replace"],
+    "allowed_changed_files": [],
+    "required_successful_tools": ["read", "list"],
+    "required_event_types": ["tool.result"],
+    "max_tool_calls": 4,
+    "profiles": ["deterministic"],
+    "scripted_steps": [
+      {"tool": "read", "arguments": {"path": "missing.txt"}},
+      {"tool": "list", "arguments": {"path": "."}},
+      {"tool": "read", "arguments": {"path": "README.md"}}
+    ]
+  }
+]
