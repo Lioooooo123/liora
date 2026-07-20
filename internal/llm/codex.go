@@ -12,7 +12,7 @@ func (c *Client) generateCodexResponses(ctx context.Context, messages []Message,
 	instructions, inputMessages := splitSystemMessages(messages)
 	body := map[string]any{
 		"model":  c.config.Model,
-		"input":  responsesInput(inputMessages),
+		"input":  responsesMessageInput(inputMessages),
 		"store":  false,
 		"stream": true,
 	}
@@ -52,14 +52,7 @@ type codexStreamAccumulator struct {
 	content strings.Builder
 }
 
-func (a *codexStreamAccumulator) consume(reader io.Reader, contentType string) (int, error) {
-	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
-		data, err := io.ReadAll(reader)
-		if err != nil {
-			return 0, err
-		}
-		return len(data), a.consumeJSON(data)
-	}
+func (a *codexStreamAccumulator) consume(reader io.Reader, _ string) (int, error) {
 	return parseSSE(reader, func(data string) error {
 		return a.consumeJSON([]byte(data))
 	})

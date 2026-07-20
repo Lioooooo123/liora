@@ -35,6 +35,12 @@ func NewStore(path string) *Store {
 }
 
 func DefaultStore() (*Store, error) {
+	if root := strings.TrimSpace(os.Getenv("LIORA_HOME")); root != "" {
+		return NewStore(filepath.Join(root, "auth.json")), nil
+	}
+	if configHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); configHome != "" {
+		return NewStore(filepath.Join(configHome, "liora", "auth.json")), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
